@@ -17,8 +17,10 @@ def start_image_build(
     ecr_registry: str,
     ecr_repo: str,
     image_tag: str,
+    extra_env: dict[str, str] | None = None,
 ) -> str:
-    """Start a docker build from a source zip on S3. Returns the build id."""
+    """Start a docker build from a source zip on S3. Returns the build id. ``extra_env``
+    (N17-obs465) adds the buildspec's optional switches (LAUNCHPAD_CN_TRACE_LAYER, …)."""
     build = client.start_build(
         projectName=project,
         sourceTypeOverride="S3",
@@ -28,6 +30,8 @@ def start_image_build(
             {"name": "ECR_REGISTRY", "value": ecr_registry, "type": "PLAINTEXT"},
             {"name": "ECR_REPO", "value": ecr_repo, "type": "PLAINTEXT"},
             {"name": "IMAGE_TAG", "value": image_tag, "type": "PLAINTEXT"},
+            *({"name": k, "value": v, "type": "PLAINTEXT"}
+              for k, v in sorted((extra_env or {}).items())),
         ],
     )["build"]
     return build["id"]

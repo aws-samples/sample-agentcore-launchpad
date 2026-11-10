@@ -1,12 +1,12 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { api, errorMessage, type ObsDashboard, type V2Range } from "../../../lib/api";
-import { fmtBucket, fmtCompact } from "../../../pages/observability/format";
+import { api, type ObsDashboard, type V2Range } from "../../../lib/api";
+import { fmtBucket, fmtCompact } from "./format";
 import { fmtDuration, fmtNumber } from "../../format";
-import { useLoad, useV2Toast } from "../../hooks";
+import { cacheHint, tokenSplit } from "../../judgeTokens";
+import { useLoad } from "../../hooks";
 import { Alert, Card, Kpi, LinkButton, Spin } from "../../ui";
-import { approxCost, useReportCache } from "./common";
+import { useReportCache } from "./common";
 
 function Legend({ items }: { items: { color: string; label: string }[] }) {
   return (
@@ -109,65 +109,40 @@ function LatencyChart({ data }: { data: ObsDashboard }) {
   );
 }
 
-function TokensByModel({ data, onPricesRefreshed }: { data: ObsDashboard; onPricesRefreshed: () => void }) {
+function TokensByModel({ data }: { data: ObsDashboard }) {
   const { t } = useTranslation();
-  const toast = useV2Toast();
-  const [busy, setBusy] = useState(false);
   const rows = data.tokens_by_model;
   const grand = Math.max(1, ...rows.map((r) => r.total));
 
-  const refreshPrices = () => {
-    setBusy(true);
-    api
-      .obsRefreshPrices()
-      .then((res) => {
-        toast("success", t("obs.prices.refreshed", { updated: res.meta.updated.length, added: res.meta.added.length }));
-        onPricesRefreshed();
-      })
-      .catch((err: unknown) => toast("error", t("obs.loadFailed", { msg: errorMessage(err) })))
-      .finally(() => setBusy(false));
-  };
-
   return (
-    <Card
-      title={t("v2.observability.chart.tokens")}
-      sub={t("v2.observability.chart.tokensSub")}
-      end={
-        <LinkButton disabled={busy} onClick={refreshPrices} testId="v2-obs-refresh-prices">
-          {busy ? t("v2.observability.chart.pricesUpdating") : t("v2.observability.chart.pricesUpdate")}
-        </LinkButton>
-      }
-      testId="v2-obs-tokens"
-    >
+    <Card title={t("v2.observability.chart.tokens")} sub={t("v2.observability.chart.tokensSub")} testId="v2-obs-tokens">
       {rows.length === 0 ? (
         <Empty text={t("v2.observability.chart.noTokens")} />
       ) : (
         <>
-          {rows.map((r) => (
-            <div className="v2-observability-hbar" key={r.model}>
-              <div className="l">
-                <span title={r.model}>{r.model}</span>
-                <b>
-                  {fmtCompact(r.total)} · {approxCost(r.est_cost_usd)}
-                </b>
+          {rows.map((r) => {
+            // N17-obs439: the input bar is the whole prompt (cache reads / writes included)
+            const split = tokenSplit(r);
+            const hint = cacheHint(t, split, fmtNumber);
+            return (
+              <div className="v2-observability-hbar" key={r.model}>
+                <div className="l">
+                  <span title={r.model}>{r.model}</span>
+                  <b>{fmtCompact(r.total)}</b>
+                </div>
+                <div className="track" title={[t("v2.observability.chart.inOut", { input: fmtNumber(split.prompt), output: fmtNumber(split.output) }), hint].filter(Boolean).join("\n")}>
+                  <div className="seg" style={{ width: `${(split.prompt / grand) * 100}%`, background: "var(--v2-primary)" }} />
+                  <div className="seg" style={{ width: `${(split.output / grand) * 100}%`, background: "#14c9c9" }} />
+                </div>
               </div>
-              <div className="track" title={t("v2.observability.chart.inOut", { input: fmtNumber(r.input), output: fmtNumber(r.output) })}>
-                <div className="seg" style={{ width: `${(r.input / grand) * 100}%`, background: "var(--v2-primary)" }} />
-                <div className="seg" style={{ width: `${(r.output / grand) * 100}%`, background: "#14c9c9" }} />
-              </div>
-            </div>
-          ))}
+            );
+          })}
           <Legend
             items={[
               { color: "var(--v2-primary)", label: t("v2.observability.chart.input") },
               { color: "#14c9c9", label: t("v2.observability.chart.output") },
             ]}
           />
-          <div className="v2-observability-note">
-            {t("obs.charts.priceNote")}
-            {data.prices_meta?.updated_at != null &&
-              ` · ${t("obs.prices.updatedAt", { date: data.prices_meta.updated_at.slice(0, 10) })}`}
-          </div>
         </>
       )}
     </Card>
@@ -215,12 +190,10 @@ export function Dashboard({
   range,
   force,
   onCacheHint,
-  onForce,
 }: {
   range: V2Range;
   force: number;
   onCacheHint: (hint: string | null) => void;
-  onForce: () => void;
 }) {
   const { t } = useTranslation();
   const { data, loading, error, reload } = useLoad(() => api.obsDashboard(range, force > 0), `obs-dash:${range}:${force}`);
@@ -271,11 +244,14 @@ export function Dashboard({
         <Kpi
           label={t("v2.observability.kpi.tokens")}
           value={fmtCompact(tiles.tokens.total)}
-          sub={t("v2.observability.kpi.tokensSub", {
-            input: fmtCompact(tiles.tokens.input),
-            output: fmtCompact(tiles.tokens.output),
-            cost: approxCost(tiles.tokens.est_cost_usd),
-          })}
+          sub={
+            <span title={cacheHint(t, tokenSplit(tiles.tokens), fmtNumber)} data-testid="v2-obs-tokens-sub">
+              {t("v2.observability.kpi.tokensSub", {
+                input: fmtCompact(tokenSplit(tiles.tokens).prompt),
+                output: fmtCompact(tiles.tokens.output),
+              })}
+            </span>
+          }
         />
       </div>
       <div className="v2-grid-2 v2-observability-charts">
@@ -283,7 +259,7 @@ export function Dashboard({
         <LatencyChart data={data} />
       </div>
       <div className="v2-grid-2 v2-observability-charts">
-        <TokensByModel data={data} onPricesRefreshed={onForce} />
+        <TokensByModel data={data} />
         <TopTools data={data} />
       </div>
     </>

@@ -43,6 +43,24 @@
 .v2 .v2-governance-chip.on { border-color: var(--v2-primary); background: var(--v2-primary-soft); color: var(--v2-primary); }
 
 /* decisions */
+.v2 .v2-decision-table { overflow-x: auto; border-radius: var(--v2-radius); }
+.v2 .v2-decision-table:focus-visible { outline: 2px solid var(--v2-primary); outline-offset: 2px; }
+.v2 .v2-decision-table > .v2-table-wrap { overflow: visible; }
+.v2 .v2-decision-table td { vertical-align: top; }
+.v2 .v2-decision-table .v2-decision-outcome { min-width: 88px; }
+.v2 .v2-decision-table .v2-decision-resource { min-width: 200px; }
+.v2 .v2-decision-table .v2-decision-principal { min-width: 112px; }
+.v2 .v2-decision-table .v2-decision-identity { min-width: 192px; }
+.v2 .v2-decision-table .v2-decision-inputs { min-width: 160px; }
+.v2 .v2-decision-table .v2-governance-link { overflow-wrap: anywhere; }
+/* Keep complete ordinary policy IDs on one line, with one chip per policy.
+   Unusually long imported IDs retain their full text in the DOM and tooltip. */
+.v2 .v2-decision-policies {
+  width: max-content; min-width: 208px; max-width: 320px; flex-direction: column; align-items: flex-start;
+}
+.v2 .v2-decision-policies .v2-tag > .mono {
+  min-width: 0; white-space: nowrap; word-break: normal; overflow: hidden; text-overflow: ellipsis;
+}
 .v2 .v2-governance-agg { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; align-items: start; }
 .v2 .v2-governance-agg-group { border: 1px solid var(--v2-line); border-radius: var(--v2-radius); padding: 12px 14px; min-width: 0; }
 .v2 .v2-governance-agg-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--v2-line-2); }
@@ -82,3 +100,16 @@
   .v2 .v2-governance-readout .ok { text-align: left; }
 }
 .v2 .v2-governance-note { font-size: 12.5px; margin: -8px 0 12px; }
+
+/* ── Policy (D20) ── */
+.v2 .v2-policy-issues { margin: 6px 0 0 16px; padding: 0; font-size: 12px; }
+.v2 .v2-policy-issues li { margin: 2px 0; overflow-wrap: anywhere; }
+.v2 .v2-policy-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; align-items: start; }
+.v2 .v2-policy-coverage { font-size: 12.5px; color: var(--v2-ink-3); }
+.v2 .v2-policy-coverage code { font-size: 11.5px; }
+.v2 .v2-policy-prefills { display: flex; flex-wrap: wrap; gap: 8px; }
+.v2 .v2-policy-versions { font-size: 12.5px; }
+.v2 .v2-policy-versions .v2-row { padding: 6px 0; border-bottom: 1px dashed var(--v2-line-2); }
+.v2 .v2-policy-versions .v2-row:last-child { border-bottom: 0; }
+.v2 .v2-policy-outcome { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.v2 .v2-policy-outcome .v2-tag { font-size: 13px; padding: 4px 10px; }

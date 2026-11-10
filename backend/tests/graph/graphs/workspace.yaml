@@ -1,0 +1,484 @@
+# Lifecycle graph — Workspace (E19): registration, the staged bootstrap job stage by stage,
+# the validate-only probe, failure + resume, detach / purge. Round 17, channel A, r17-ws
+# (N17-obs117: no layer covered the bootstrap job before N17-obs112 was found by a user).
+#
+# The entity is one `workspaces` row plus its bootstrap jobs. The `s_<stage>` nodes are the
+# job INTERRUPTED right after that stage succeeded (the next stage `running`, the row
+# `bootstrapping`) — the shape a backend restart leaves — so every stage is one edge and the
+# resume path is walked between every pair of stages (executor: `WorkspaceWorld`,
+# tests/graph/test_graph_workspace.py).
+graph: workspace
+module: E19
+entity: one workspace row (`workspaces`) and its `bootstrap_workspace` jobs
+initial: absent
+
+contracts:
+  ARCH_WS_ROW:
+    doc: docs/architecture.md
+    section: "Workspaces — multi-account/multi-region environments"
+    quote: >-
+      Every environment the console manages is a **workspace**: one `(account_id, region)` pair
+      (UNIQUE-constrained) carrying its own AgentCore resource map on a ledger row (`workspaces`
+      table). … all other workspaces are row-authoritative and are provisioned by a console-driven,
+      resumable **bootstrap job**
+  ARCH_WS_STAGES:
+    doc: docs/architecture.md
+    section: "Workspaces — multi-account/multi-region environments"
+    quote: >-
+      twelve idempotent stages in the CN build: validate-access → iam → model-credential → storage →
+      codebuild → gateway → registry → memory → skill-lab → observability → policy → finalize — no
+      Cognito stage; `model-credential` places the Global Bedrock API key as an AgentCore Identity
+      provider in the workspace's region and the key material is never written to the row or the
+      job log, `gateway` creates the shared MCP gateway with IAM inbound auth and no demo targets …
+      `registry` records the local Registry identifier `local-<workspace_id>` and imports the
+      default records best-effort, `memory` inherits the hub's self-hosted substrate only for a
+      hub-colocated workspace and records `memory_unavailable_reason` anywhere else, `skill-lab` /
+      `observability` / `policy` degrade with a reason instead of failing
+  ARCH_WS_VALIDATE:
+    doc: docs/architecture.md
+    section: "Workspaces — multi-account/multi-region environments"
+    quote: >-
+      `validate-access` probes, with the hub's credentials, every service the later stages depend
+      on in the WORKSPACE's region (AgentCore control plane, S3, ECR, CodeBuild, IAM) — ECR,
+      CodeBuild and IAM by NAME, against the exact repository, project and regional execution role
+      the later stages create, a not-found answer counting as usable, so the hub's resource-scoped
+      ops policy can grant every probe (N17-obs130) — and fails the job before anything is created
+      when one of them refuses — the detail names the service, the operation, the region and the
+      error code — or when a service has no endpoint there (region not supported); a probe that
+      gets no usable answer (a transport timeout, a throttle, a 5xx) is retried once and then fails
+      the stage as transient — retry, naming the service, the operation and the redacted cause,
+      never as a region or permission verdict (N17-obs132)
+  ARCH_WS_RECORDS:
+    doc: docs/architecture.md
+    section: "Workspaces — multi-account/multi-region environments"
+    quote: >-
+      Every stage records the identifiers it produced on the workspace row as it goes, so a stage
+      that fails leaves the job `failed` with the stage's detail, the workspace `failed`, and the
+      resource map exactly as the previous stage left it
+  ARCH_WS_RESUME:
+    doc: docs/architecture.md
+    section: "Workspaces — multi-account/multi-region environments"
+    quote: >-
+      the next `POST /api/workspaces/{id}/bootstrap` is a resume — the stages the previous full job
+      completed are carried forward as `succeeded` and the run continues from the first one that did
+      not
+  ARCH_WS_INTERRUPTED:
+    doc: docs/architecture.md
+    section: "Workspaces — multi-account/multi-region environments"
+    quote: >-
+      A job interrupted mid-run (a backend restart) is left `running` with its stage `running`;
+      `resume_pending_jobs()` adopts it on startup and continues from the first stage that has not
+      succeeded, reading the identifiers the interrupted run already recorded, so no resource is
+      provisioned twice
+  ARCH_WS_CONFLICT:
+    doc: docs/architecture.md
+    section: "Workspaces — multi-account/multi-region environments"
+    quote: >-
+      While a job owns the workspace (`bootstrapping`) and once it is `ready`, another bootstrap is
+      refused with `409 workspace.bootstrap_conflict`
+  ARCH_WS_VALIDATE_ONLY:
+    doc: docs/architecture.md
+    section: "Workspaces — multi-account/multi-region environments"
+    quote: >-
+      With the body `{"validate_only": true}` the route runs the `validate-access` stage alone: a
+      validate-only run provisions nothing, hands the workspace back the status it had when it
+      ends, and is never carried forward by a later full run
+  ARCH_WS_DETACH:
+    doc: docs/architecture.md
+    section: "Workspaces — multi-account/multi-region environments › Removal"
+    quote: >-
+      `DELETE /api/workspaces/{id}` is a detach — the row and its grants go, AWS is untouched — and
+      it is refused while any scoped row still names the workspace. That guard also traps a *failed*
+      registration: the one job row its bootstrap left behind blocks the detach
+  ARCH_WS_PURGE:
+    doc: docs/architecture.md
+    section: "Workspaces — multi-account/multi-region environments › Removal"
+    quote: >-
+      `POST /api/workspaces/{id}/purge` (admin; `?dry_run=true` previews the row counts) deletes the
+      scoped rows, the grants and the row in one transaction, and is admissible only for a workspace
+      that never became usable: `registered` or `failed`, agent-free, never `default`. Whatever a
+      failed run had already provisioned stays in the target account — the response's
+      `resource_keys` says which resource kinds that is.
+  API_WS_BOOTSTRAP:
+    doc: docs/api.md
+    section: "Console Workspaces API — bootstrap"
+    quote: >-
+      `202 {job_id, workspace_id, bootstrap_status, mode: "full", stages[]}` — queues the FULL staged
+      job … a retry after a failure is a resume (the stages the previous full job completed are
+      carried forward as `succeeded` with the detail `already provisioned by an earlier run`). `400
+      workspace.default_not_bootstrappable` for `default`; `409 workspace.bootstrap_conflict
+      {workspace_id, bootstrap_status}` while the workspace is `bootstrapping` or `ready`; `404
+      workspace.not_found`
+  API_WS_VALIDATE_ONLY:
+    doc: docs/api.md
+    section: "Console Workspaces API — bootstrap"
+    quote: >-
+      `202 {…, mode: "validate-only", stages: [validate-access]}` — runs the `validate-access` stage
+      ALONE: the hub's credentials are probed for every service the bootstrap needs in the
+      workspace's region, nothing is provisioned, and when the job ends the workspace row is handed
+      back the `bootstrap_status` it had (`registered` or `failed` — never `bootstrapping`, `ready`
+      or a new `failed`). The job's terminal status is the verdict: `succeeded` with the stage detail
+      `<region> usable · 5 services probed`, or `failed` with the stage's own sentence (`<service>
+      <Operation> failed in <region>: <Code> — the hub's credentials must be able to provision this
+      workspace` … A validate-only job is never carried forward by a later full run. … Any other
+      `stages` subset is `422 workspace.bootstrap_stages_unsupported {stages, supported}`
+  API_WS_LATEST:
+    doc: docs/api.md
+    section: "Console Workspaces API — bootstrap"
+    quote: >-
+      `{workspace_id, bootstrap_status, job: {id, status, mode, stages[]} \| null}` — the latest run
+      of either mode, so a browser that did not start it can find and watch it
+  E19_ROUTES:
+    doc: docs/cn/acceptance/E19-workspaces.md
+    section: "1. Scope and roles › Routes"
+    quote: >-
+      `POST /api/workspaces`, `GET …/hub-identity`, `POST …/preflight`, `PATCH/DELETE …/{id}`, `POST
+      …/{id}/purge`, `POST/GET …/{id}/bootstrap`, `GET/PUT …/{id}/grants`
+  E19_NOT_READY:
+    doc: docs/cn/acceptance/E19-workspaces.md
+    section: "1. Scope and roles › Workspace resolution"
+    quote: >-
+      A workspace whose `bootstrap_status != ready` serves reads only (`409 workspace.not_ready` on
+      writes) — except `default`, which is never gated.
+  E19_REGISTER:
+    doc: docs/cn/acceptance/E19-workspaces.md
+    section: "2. Capabilities › AC-E19-09"
+    quote: >-
+      `POST /api/workspaces {id "hr-spoke", name, account_id, region "cn-north-1"}` 201
+      `bootstrap_status "registered"`
+  E19_PURGE_REFUSED:
+    doc: docs/cn/acceptance/E19-workspaces.md
+    section: "3. Negative › NC-E19-08"
+    quote: >-
+      `POST …/purge` on `default` / on a `ready` or `bootstrapping` workspace / with a live agent /
+      racing another purge | `400 workspace.purge_refused {reason "default"}` / `409 … {reason
+      <bootstrap_status>}`
+  E19_IN_USE:
+    doc: docs/cn/acceptance/E19-workspaces.md
+    section: "3. Negative › NC-E19-07"
+    quote: >-
+      `DELETE` a workspace that still owns rows in any scoped table | `400 workspace.reserved_id` /
+      `409 workspace.in_use {rows:{table: count}}` naming what remains
+
+nodes:
+  - id: absent
+  - id: registered
+  - id: probed
+  - id: s_validate
+  - id: s_iam
+  - id: s_model_credential
+  - id: s_storage
+  - id: s_codebuild
+  - id: s_gateway
+  - id: s_registry
+  - id: s_memory
+  - id: s_skill_lab
+  - id: s_observability
+  - id: s_policy
+  - id: ready
+  - id: failed_early
+  - id: failed_mid
+  - id: detached
+    terminal: true
+  - id: purged
+    terminal: true
+
+edges:
+  # ── registration ───────────────────────────────────────────────────────────────────
+  - id: register
+    from: absent
+    to: registered
+    via: "POST /api/workspaces (administrator, same account as the hub, the hub's OTHER region)"
+    expect: {status: 201, bootstrap_status: registered, resources: {}}
+    cites: [ARCH_WS_ROW, E19_REGISTER]
+    ui: {page: /v2/workspaces, view: new, controls: [v2-ws-submit]}
+
+  # ── the validate-only probe ─────────────────────────────────────────────────────────
+  - id: validate_only
+    from: registered
+    to: probed
+    via: "POST /api/workspaces/{id}/bootstrap {\"validate_only\": true}, the job run to its end"
+    expect: {status: 202, mode: validate-only, job: succeeded, bootstrap_status: registered, resources: {}}
+    cites: [API_WS_VALIDATE_ONLY, ARCH_WS_VALIDATE_ONLY]
+    ui: {page: /v2/workspaces, view: detail, controls: [v2-ws-validate-access, v2-confirm-ok]}
+  - id: validate_only_again
+    from: probed
+    to: probed
+    via: "a second validate-only run (another job row; the row still `registered`)"
+    expect: {status: 202, job: succeeded, bootstrap_status: registered}
+    cites: [API_WS_VALIDATE_ONLY, API_WS_LATEST]
+    ui: {page: /v2/workspaces, view: detail, controls: [v2-ws-validate-access, v2-confirm-ok]}
+
+  # ── the full job, one stage per edge (interrupted at the next stage) ────────────────
+  - id: run_validate
+    from: registered
+    to: s_validate
+    via: "POST /api/workspaces/{id}/bootstrap (full), the job run until `iam` starts"
+    expect: {status: 202, mode: full, stage: validate-access, stage_status: succeeded, bootstrap_status: bootstrapping}
+    cites: [API_WS_BOOTSTRAP, ARCH_WS_VALIDATE]
+    ui: {page: /v2/workspaces, view: detail, controls: [v2-ws-bootstrap, v2-confirm-ok]}
+  - id: run_validate_from_probed
+    from: probed
+    to: s_validate
+    via: "the full job after a validate-only run — validate-access runs AGAIN (the probe is not carried forward)"
+    expect: {status: 202, stage: validate-access, stage_status: succeeded, carried_forward: false}
+    cites: [ARCH_WS_VALIDATE_ONLY, API_WS_BOOTSTRAP]
+    ui: {page: /v2/workspaces, view: detail, controls: [v2-ws-bootstrap, v2-confirm-ok]}
+  - id: run_iam
+    from: s_validate
+    to: s_iam
+    via: "the interrupted job resumed (execute_bootstrap_job) through `iam`, interrupted at `model-credential`"
+    expect: {stage: iam, recorded: [execution_role_arn, gateway_role_arn], roles_created: 2}
+    cites: [ARCH_WS_INTERRUPTED, ARCH_WS_RECORDS]
+    ui: null
+  - id: run_model_credential
+    from: s_iam
+    to: s_model_credential
+    via: "resumed through `model-credential`"
+    expect: {stage: model-credential, recorded: [model_credential_arn], key_material_in_log: false}
+    cites: [ARCH_WS_STAGES, ARCH_WS_RECORDS]
+    ui: null
+  - id: run_storage
+    from: s_model_credential
+    to: s_storage
+    via: "resumed through `storage`"
+    expect: {stage: storage, recorded: [artifacts_bucket, ecr_repo, ecr_repo_uri]}
+    cites: [ARCH_WS_RECORDS, ARCH_WS_INTERRUPTED]
+    ui: null
+  - id: run_codebuild
+    from: s_storage
+    to: s_codebuild
+    via: "resumed through `codebuild`"
+    expect: {stage: codebuild, recorded: [codebuild_project]}
+    cites: [ARCH_WS_RECORDS, ARCH_WS_INTERRUPTED]
+    ui: null
+  - id: run_gateway
+    from: s_codebuild
+    to: s_gateway
+    via: "resumed through `gateway`"
+    expect: {stage: gateway, recorded: [gateway_id, gateway_arn, gateway_url], demo_targets: 0}
+    cites: [ARCH_WS_STAGES, ARCH_WS_RECORDS]
+    ui: null
+  - id: run_registry
+    from: s_gateway
+    to: s_registry
+    via: "resumed through `registry`"
+    expect: {stage: registry, recorded: [registry_id], registry_id: "local-<workspace_id>"}
+    cites: [ARCH_WS_STAGES, ARCH_WS_RECORDS]
+    ui: null
+  - id: run_memory
+    from: s_registry
+    to: s_memory
+    via: "resumed through `memory` (a non-hub-colocated workspace)"
+    expect: {stage: memory, recorded: [memory_unavailable_reason], detail: "unavailable · hub substrate only"}
+    cites: [ARCH_WS_STAGES]
+    ui: null
+  - id: run_skill_lab
+    from: s_memory
+    to: s_skill_lab
+    via: "resumed through `skill-lab`"
+    expect: {stage: skill-lab, recorded: [skill_lab_worker_runtime_arn]}
+    cites: [ARCH_WS_STAGES, ARCH_WS_RECORDS]
+    ui: null
+  - id: run_observability
+    from: s_skill_lab
+    to: s_observability
+    via: "resumed through `observability`"
+    expect: {stage: observability, detail: "transaction search active"}
+    cites: [ARCH_WS_STAGES]
+    ui: null
+  - id: run_policy
+    from: s_observability
+    to: s_policy
+    via: "resumed through `policy`"
+    expect: {stage: policy, recorded: [policy_log_group]}
+    cites: [ARCH_WS_STAGES, ARCH_WS_RECORDS]
+    ui: null
+  - id: finalize
+    from: s_policy
+    to: ready
+    via: "resumed through `finalize`"
+    expect: {stage: finalize, job: succeeded, bootstrap_status: ready}
+    cites: [ARCH_WS_STAGES, ARCH_WS_INTERRUPTED]
+    ui: null
+
+  # ── failures and the resume ─────────────────────────────────────────────────────────
+  - id: validate_fails_denied
+    from: registered
+    to: failed_early
+    via: "the full job with ECR refusing DescribeRepositories (the N17-obs112 shape)"
+    expect: {job: failed, stage: validate-access, stage_status: failed, bootstrap_status: failed, resources: {}}
+    cites: [ARCH_WS_VALIDATE, ARCH_WS_RECORDS]
+    ui: {page: /v2/workspaces, view: detail, controls: [v2-ws-bootstrap, v2-confirm-ok]}
+  - id: storage_fails_foreign_bucket
+    from: s_model_credential
+    to: failed_mid
+    via: "resumed through `storage` with S3 answering BucketAlreadyExists (another account owns the name)"
+    expect: {job: failed, stage: storage, stage_status: failed, bootstrap_status: failed, map_unchanged: true}
+    cites: [ARCH_WS_RECORDS]
+    ui: null
+  - id: resume_from_early
+    from: failed_early
+    to: s_validate
+    via: "POST /api/workspaces/{id}/bootstrap again, ECR healed, run until `iam` starts"
+    expect: {status: 202, carried_forward: [], stage: validate-access, stage_status: succeeded}
+    cites: [ARCH_WS_RESUME, API_WS_BOOTSTRAP]
+    ui: {page: /v2/workspaces, view: detail, controls: [v2-ws-bootstrap, v2-confirm-ok]}
+  - id: resume_from_mid
+    from: failed_mid
+    to: s_storage
+    via: "POST /api/workspaces/{id}/bootstrap again, S3 healed, run until `codebuild` starts"
+    expect: {status: 202, carried_forward: [validate-access, iam, model-credential], stage: storage, stage_status: succeeded, roles_created: 2}
+    cites: [ARCH_WS_RESUME, API_WS_BOOTSTRAP]
+    ui: {page: /v2/workspaces, view: detail, controls: [v2-ws-bootstrap, v2-confirm-ok]}
+
+  # ── removal ─────────────────────────────────────────────────────────────────────────
+  - id: detach_registered
+    from: registered
+    to: detached
+    via: "DELETE /api/workspaces/{id} (no job row yet)"
+    expect: {status: 200, row_gone: true}
+    cites: [ARCH_WS_DETACH]
+    ui: {page: /v2/workspaces, view: detail, controls: [v2-ws-detach, v2-confirm-ok]}
+  - id: purge_registered
+    from: registered
+    to: purged
+    via: "POST /api/workspaces/{id}/purge"
+    expect: {status: 200, purged: true, resource_keys: []}
+    cites: [ARCH_WS_PURGE]
+    ui: {page: /v2/workspaces, view: detail, controls: [v2-ws-purge, v2-confirm-ok]}
+  - id: purge_probed
+    from: probed
+    to: purged
+    via: "POST /api/workspaces/{id}/purge (the probe's job rows go with it)"
+    expect: {status: 200, purged: true, rows_jobs: ">= 1", resource_keys: []}
+    cites: [ARCH_WS_PURGE]
+    ui: {page: /v2/workspaces, view: detail, controls: [v2-ws-purge, v2-confirm-ok]}
+  - id: purge_failed_early
+    from: failed_early
+    to: purged
+    via: "POST /api/workspaces/{id}/purge"
+    expect: {status: 200, purged: true, resource_keys: []}
+    cites: [ARCH_WS_PURGE]
+    ui: {page: /v2/workspaces, view: detail, controls: [v2-ws-purge, v2-confirm-ok]}
+  - id: purge_failed_mid
+    from: failed_mid
+    to: purged
+    via: "POST /api/workspaces/{id}/purge"
+    expect: {status: 200, purged: true, resource_keys: [execution_role_arn, gateway_role_arn, model_credential_arn, "…"]}
+    cites: [ARCH_WS_PURGE]
+    ui: {page: /v2/workspaces, view: detail, controls: [v2-ws-purge, v2-confirm-ok]}
+
+  # ── refusals ────────────────────────────────────────────────────────────────────────
+  - id: bootstrap_conflict_running
+    from: s_storage
+    to: s_storage
+    kind: refusal
+    via: "POST /api/workspaces/{id}/bootstrap while the job owns the workspace"
+    expect: {status: 409, code: workspace.bootstrap_conflict, bootstrap_status: bootstrapping}
+    cites: [ARCH_WS_CONFLICT, API_WS_BOOTSTRAP]
+    ui: null
+  - id: bootstrap_conflict_ready
+    from: ready
+    to: ready
+    kind: refusal
+    via: "POST /api/workspaces/{id}/bootstrap on a READY workspace"
+    expect: {status: 409, code: workspace.bootstrap_conflict, bootstrap_status: ready}
+    cites: [ARCH_WS_CONFLICT, API_WS_BOOTSTRAP]
+    ui: null
+  - id: validate_only_conflict_ready
+    from: ready
+    to: ready
+    kind: refusal
+    via: "POST /api/workspaces/{id}/bootstrap {\"validate_only\": true} on a READY workspace"
+    expect: {status: 409, code: workspace.bootstrap_conflict}
+    cites: [API_WS_VALIDATE_ONLY, ARCH_WS_CONFLICT]
+    ui: null
+  - id: unsupported_stages
+    from: registered
+    to: registered
+    kind: refusal
+    via: "POST /api/workspaces/{id}/bootstrap {\"stages\": [\"iam\"]}"
+    expect: {status: 422, code: workspace.bootstrap_stages_unsupported, bootstrap_status: registered}
+    cites: [API_WS_VALIDATE_ONLY]
+    ui: null
+  - id: member_cannot_bootstrap
+    from: registered
+    to: registered
+    kind: refusal
+    via: "a member's POST /api/workspaces/{id}/bootstrap (full and validate-only)"
+    expect: {status: 403}
+    cites: [E19_ROUTES]
+    ui: null
+  - id: write_refused_registered
+    from: registered
+    to: registered
+    kind: refusal
+    via: "POST /api/agents with X-Workspace naming the registered workspace"
+    expect: {status: 409, code: workspace.not_ready}
+    cites: [E19_NOT_READY]
+    ui: null
+  - id: write_refused_failed
+    from: failed_early
+    to: failed_early
+    kind: refusal
+    via: "POST /api/agents with X-Workspace naming the failed workspace"
+    expect: {status: 409, code: workspace.not_ready}
+    cites: [E19_NOT_READY]
+    ui: null
+  - id: purge_refused_bootstrapping
+    from: s_storage
+    to: s_storage
+    kind: refusal
+    via: "POST /api/workspaces/{id}/purge while the job owns the workspace"
+    expect: {status: 409, code: workspace.purge_refused, reason: bootstrapping}
+    cites: [E19_PURGE_REFUSED, ARCH_WS_PURGE]
+    ui: null
+  - id: purge_refused_ready
+    from: ready
+    to: ready
+    kind: refusal
+    via: "POST /api/workspaces/{id}/purge on a READY workspace"
+    expect: {status: 409, code: workspace.purge_refused, reason: ready}
+    cites: [E19_PURGE_REFUSED, ARCH_WS_PURGE]
+    ui: null
+  - id: detach_in_use_probed
+    from: probed
+    to: probed
+    kind: refusal
+    via: "DELETE /api/workspaces/{id} while the probe's job row names the workspace"
+    expect: {status: 409, code: workspace.in_use, rows_jobs: ">= 1"}
+    cites: [ARCH_WS_DETACH, E19_IN_USE]
+    ui: null
+  - id: detach_in_use_failed
+    from: failed_mid
+    to: failed_mid
+    kind: refusal
+    via: "DELETE /api/workspaces/{id} while the failed job's row names the workspace"
+    expect: {status: 409, code: workspace.in_use, rows_jobs: ">= 1"}
+    cites: [ARCH_WS_DETACH, E19_IN_USE]
+    ui: null
+  - id: detach_in_use_ready
+    from: ready
+    to: ready
+    kind: refusal
+    via: "DELETE /api/workspaces/{id} on a READY workspace (its job rows remain)"
+    expect: {status: 409, code: workspace.in_use}
+    cites: [ARCH_WS_DETACH, E19_IN_USE]
+    ui: null
+  - id: bootstrap_after_detach
+    from: detached
+    to: detached
+    kind: refusal
+    via: "POST /api/workspaces/{id}/bootstrap on the detached id"
+    expect: {status: 404, code: workspace.not_found}
+    cites: [API_WS_BOOTSTRAP]
+    ui: null
+  - id: bootstrap_after_purge
+    from: purged
+    to: purged
+    kind: refusal
+    via: "POST /api/workspaces/{id}/bootstrap on the purged id"
+    expect: {status: 404, code: workspace.not_found}
+    cites: [API_WS_BOOTSTRAP]
+    ui: null

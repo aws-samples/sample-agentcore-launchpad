@@ -1,8 +1,7 @@
 """Connections (`/api/identity/connections`), Connection-bound Gateway targets
 (`/api/identity/gateway-targets`), the as_user (3LO) consent legs and grants
 (`/api/identity/oauth/complete`, `/api/identity/grants`) and the gateway's
-Consent Portal (`/api/identity/consent-portal`), and the workspace's
-inbound-auth default (`/api/identity/inbound-auth/default`, P3).
+Consent Portal (`/api/identity/consent-portal`).
 
 Thin HTTP shell over `services.identity_providers` and
 `services.identity_gateway_targets`. The secret fields (`client_secret`,
@@ -17,22 +16,22 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.models.ledger import Agent, Workspace
+from app.core.errors import AppError
+from app.models.ledger import Agent
 from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import CONNECTION_NAME_RE
-from app.schemas.inbound_auth import InboundAuth
-from app.services import consent_portals, inbound_auth, oauth_sessions, policy_identity
+from app.services import agent_access, consent_portals, oauth_sessions
 from app.services import identity_gateway_targets as gateway_targets
 from app.services import identity_providers as connections
 from app.services.agentcore.client import control_client, data_client
+from app.services.creators import Creator
+from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/identity", tags=["identity"])
 
 Vendor = Literal[
     "CustomOauth2",
-    "GoogleOauth2",
-    "GithubOauth2",
     "SlackOauth2",
     "SalesforceOauth2",
     "MicrosoftOauth2",
@@ -95,7 +94,13 @@ class CreateTargetRequest(BaseModel):
 
 
 def _caller(request: Request) -> str:
+    """The signed-in username — the 3LO user id the grants / consent sessions are keyed on."""
     return getattr(require_identity(request), "username", "") or ""
+
+
+def _creator(request: Request) -> Creator:
+    """The Connection's creator (`services.creators`): recorded on its audit row."""
+    return Creator.of_request(request)
 
 
 def _resources(ws: WorkspaceScope) -> dict[str, Any]:
@@ -105,14 +110,42 @@ def _resources(ws: WorkspaceScope) -> dict[str, Any]:
 # ── Connections ──────────────────────────────────────────────────────────────
 
 
+def _mask_refs(item: dict[str, Any], hidden: set[str]) -> dict[str, Any]:
+    """Drop the agents workspace isolation hides from the caller out of a
+    Connection's ``referenced_by`` (gateway targets stay)."""
+    if hidden and isinstance(item.get("referenced_by"), list):
+        before = len(item["referenced_by"])
+        item["referenced_by"] = [
+            r for r in item["referenced_by"]
+            if not (r.get("type") == "agent" and r.get("id") in hidden)
+        ]
+        if "total" in item:
+            # `identity.in_use` (N13-obs22a, rev-r11 nit): the counts follow the masked list —
+            # a member must not learn how many hidden agents pin the credential. The list is
+            # already bounded, so `total` is what the caller may see of it, never more.
+            # Residual (rev-r11, accepted at this scale): only hidden ids INSIDE the bounded
+            # list are subtracted; with more than the listed referrers a member may still
+            # infer that hidden ones exist from `total` — a count, never an id or a name.
+            dropped = before - len(item["referenced_by"])
+            item["total"] = max(0, int(item.get("total") or 0) - dropped)
+            item["truncated"] = item["total"] > len(item["referenced_by"])
+    return item
+
+
 @router.get("/connections")
 def list_connections(
-    db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace)
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     control = control_client(ws.context)
     bound = gateway_targets.bound_targets_safe(control, _resources(ws))
+    hidden = agent_access.hidden_agent_ids(db, viewer, ws.id)
     return {
-        "connections": connections.list_connections(control, db, ws.id, bound_targets=bound)
+        "connections": [
+            _mask_refs(item, hidden)
+            for item in connections.list_connections(control, db, ws.id, bound_targets=bound)
+        ]
     }
 
 
@@ -137,10 +170,14 @@ def get_connection(
     name: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     control = control_client(ws.context)
     bound = gateway_targets.bound_targets_safe(control, _resources(ws))
-    return connections.get_connection(control, db, ws.id, kind, name, bound_targets=bound)
+    return _mask_refs(
+        connections.get_connection(control, db, ws.id, kind, name, bound_targets=bound),
+        agent_access.hidden_agent_ids(db, viewer, ws.id),
+    )
 
 
 @router.post("/connections/oauth2", status_code=201)
@@ -166,7 +203,7 @@ def create_oauth2(
         scopes=[s for s in (x.strip() for x in req.scopes) if s],
         template=template,
         description=req.description or None,
-        created_by=_caller(request),
+        creator=_creator(request),
         obo=req.obo.model_dump() if req.obo else None,
     )
 
@@ -185,7 +222,7 @@ def create_api_key(
         name=req.name,
         api_key=req.api_key,
         description=req.description or None,
-        created_by=_caller(request),
+        creator=_creator(request),
     )
 
 
@@ -195,12 +232,20 @@ def delete_connection(
     name: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     control = control_client(ws.context)
     # not the `_safe` variant: a gateway read failure must refuse the delete
     # rather than skip the target-reference check
     bound = gateway_targets.list_targets(control, _resources(ws))
-    connections.delete_connection(control, db, ws.id, kind, name, bound_targets=bound)
+    try:
+        connections.delete_connection(control, db, ws.id, kind, name, bound_targets=bound)
+    except AppError as exc:
+        # the reference guard counts every agent; the 409 names only visible ones
+        if (exc.code in ("identity.connection_referenced", "identity.in_use")
+                and isinstance(exc.detail, dict)):
+            _mask_refs(exc.detail, agent_access.hidden_agent_ids(db, viewer, ws.id))
+        raise
     return {"deleted": True}
 
 
@@ -264,25 +309,12 @@ def complete_consent(
 ) -> dict[str, Any]:
     """Leg 3 of 3LO: bind the consented token to the user recorded for this
     session. The caller must be that user (oauth_sessions.complete)."""
-    identity = require_identity(request)
-
-    def user_token(kind: str) -> str | None:
-        # A JWT-inbound ask is completed with the caller's own user JWT — the
-        # subject the runtime saw. An ask over the shared M2M subject is never
-        # completable (oauth_sessions refuses it before asking for a token).
-        if kind != oauth_sessions.CALLER_USER_JWT:
-            return None
-        return policy_identity.gateway_user_token(
-            ws.context, identity.username, identity.role, identity.email,
-        )
-
     result = oauth_sessions.complete(
         db,
         ws.id,
         req.session_id,
         caller=_caller(request),
         data_client=data_client(ws.context),
-        user_token=user_token,
     )
     agent = db.get(Agent, result["agent_id"]) if result["agent_id"] else None
     return {**result, "agent_name": agent.name if agent is not None else None}
@@ -372,56 +404,3 @@ def create_consent_portal(
 def delete_consent_portal(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
     consent_portals.delete(control_client(ws.context), _resources(ws))
     return {"deleted": True}
-
-
-# ── inbound auth (P3) ────────────────────────────────────────────────────────
-
-
-def _default_out(ws: WorkspaceScope) -> dict[str, Any]:
-    stored = inbound_auth.workspace_default(ws.row)
-    return {
-        "workspace_id": ws.id,
-        "default": (stored or InboundAuth(mode="iam")).model_dump(),
-        # a workspace with no stored blob is implicitly IAM; the UI shows that
-        "configured": stored is not None,
-        # bootstrap wiring the console/M2M path needs: what a ready-to-use
-        # Cognito default would look like for this workspace
-        "cognito": inbound_auth.suggested_cognito_default(ws.context),
-        # the issuer of every token the console, /v1 and evaluation present; a
-        # JWT config on another issuer is unreachable from them (the UI warns)
-        "cognito_issuer": inbound_auth.workspace_cognito_issuer(ws.context),
-    }
-
-
-@router.get("/inbound-auth/default")
-def get_inbound_default(ws: WorkspaceScope = Depends(require_workspace)) -> dict[str, Any]:
-    return _default_out(ws)
-
-
-@router.put("/inbound-auth/default")
-def put_inbound_default(
-    auth: InboundAuth,
-    db: Session = Depends(get_db),
-    ws: WorkspaceScope = Depends(require_workspace),
-) -> dict[str, Any]:
-    """Set the workspace's inbound-auth default.
-
-    Probes the discovery document before persisting a JWT config, so a typo'd
-    URL fails here with the reason instead of 403ing every future deploy's
-    callers. Deployed agents keep their current authorizer until redeployed.
-    """
-    inbound_auth.validate_inbound_auth(auth)
-    # ws.row is detached (resolved in a closed session) — write via this
-    # request's session and echo the stored value from the same row.
-    row = db.get(Workspace, ws.id)
-    inbound_auth.set_workspace_default(db, row, auth)
-    stored = inbound_auth.workspace_default(row)
-    return {
-        "workspace_id": ws.id,
-        "default": (stored or InboundAuth(mode="iam")).model_dump(),
-        "configured": stored is not None,
-        "cognito": inbound_auth.suggested_cognito_default(ws.context),
-        # the issuer of every token the console, /v1 and evaluation present; a
-        # JWT config on another issuer is unreachable from them (the UI warns)
-        "cognito_issuer": inbound_auth.workspace_cognito_issuer(ws.context),
-    }

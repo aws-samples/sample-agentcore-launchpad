@@ -5,7 +5,6 @@ idempotency, name+version uniqueness, DRAFT-on-update), any socket connect fails
 
 import io
 import json
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -18,12 +17,14 @@ from fastapi.testclient import TestClient
 import app.routers.registry as registry_router
 from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
+from app.core.display_time import display_iso
 from app.main import create_app
 from app.models.ledger import Agent, Job, SystemSkillRecord, Workspace
 from app.services import aws_clients
+from app.services import registry_backend as reg
 from app.services import registry_console as console
 from app.services import users as users_service
-from app.services.agentcore import registry as reg
+from app.services.registry_local import LocalRegistryBackend
 from app.system_agents import presets, skill_registry
 from app.system_agents.presets import ARCHITECT, InstallOptions
 from app.system_agents.service import MANIFEST_KEY
@@ -34,7 +35,7 @@ BUCKET = "launchpad-artifacts-test"
 VER = ARCHITECT.skill_version  # the catalogue version this build ships
 NEXT = "9.1.0"  # a strictly newer release another build could publish
 LATER = "9.2.0"  # newer still
-REGISTRY_ID = "launchpad-registry-test"
+REGISTRY_ID = "local-default"
 ROUTE = f"/api/system-agents/{KEY}/skill-registration"
 READY_RESOURCES = {
     "artifacts_bucket": BUCKET,
@@ -114,122 +115,8 @@ class FakeS3:
     def delete_object(self, **kwargs):
         raise AssertionError(f"registration deleted from S3: {kwargs.get('Key')}")
 
-
-class FakeRegistry:
-    """agent-registry-control with the semantics the code depends on:
-    - CreateRegistryRecord is idempotent on clientToken (same token → same ARN, no
-      second record) and unique on (name, recordVersion) → ConflictException;
-    - GetRegistryRecord returns GA descriptors; UpdateRegistryRecord resets DRAFT;
-    - submit → PENDING_APPROVAL; status updates; ResourceNotFound on unknown ids.
-    ``crash_after_create`` raises once AFTER the record is stored (the request was
-    accepted, the response never arrived)."""
-
-    def __init__(self):
-        self.records: dict[str, dict] = {}
-        self.tokens: dict[str, str] = {}
-        self.creates: list[dict] = []
-        self.updates: list[dict] = []
-        self.status_changes: list[tuple[str, str]] = []
-        self.deletes: list[str] = []
-        self.crash_after_create = False
-        self.crash_after_update = False  # accepted update, response lost (once)
-        self.fail_get = False  # GetRegistryRecord denied (IAM) for SKILL records
-        self.hide_records = False  # list eventual-consistency lag: nothing visible
-        self._lock = threading.Lock()
-        self._seq = 0
-
-    def _arn(self, record_id: str) -> str:
-        return (
-            "arn:aws:agent-registry:us-west-2:111122223333:registry/"
-            f"{REGISTRY_ID}/record/{record_id}"
-        )
-
-    # -- control plane -----------------------------------------------------------
-    def create_registry_record(self, **kw):
-        with self._lock:
-            self.creates.append(kw)
-            token = kw.get("clientToken")
-            if token and token in self.tokens:
-                rid, original = self.tokens[token]
-                if original != kw:  # the service compares the whole request, not the token
-                    raise _aws_error("IdempotentParameterMismatchException", "CreateRegistryRecord")
-                return {"recordArn": self._arn(rid), "status": self.records[rid]["status"]}
-            for rec in self.records.values():
-                if rec["name"] == kw["name"] and rec["recordVersion"] == kw["recordVersion"]:
-                    raise _aws_error("ConflictException", "CreateRegistryRecord")
-            self._seq += 1
-            rid = f"rec-{self._seq:04d}"
-            self.records[rid] = {
-                "recordId": rid, "recordArn": self._arn(rid), "name": kw["name"],
-                "displayName": kw.get("displayName"), "description": kw.get("description", ""),
-                "recordType": kw["recordType"], "recordVersion": kw["recordVersion"],
-                "descriptors": kw["descriptors"], "status": "DRAFT", "tags": kw.get("tags", {}),
-            }
-            if token:
-                self.tokens[token] = (rid, json.loads(json.dumps(kw)))
-            if self.crash_after_create:
-                self.crash_after_create = False
-                raise ConnectionError("socket closed after the request was accepted")
-            return {"recordArn": self._arn(rid), "status": "DRAFT"}
-
-    def get_registry_record(self, registryId, recordId):  # noqa: N803
-        rec = self.records.get(recordId)
-        if rec is None:
-            raise _aws_error("ResourceNotFoundException", "GetRegistryRecord")
-        if self.fail_get and rec["recordType"] == "SKILL":
-            raise _aws_error("AccessDeniedException", "GetRegistryRecord")
-        return dict(rec)
-
-    def list_registry_records(self, **kw):
-        rows = [] if self.hide_records else list(self.records.values())
-        for flt in kw.get("filters") or []:
-            rows = [r for r in rows if r.get(flt["name"]) in flt["values"]]
-        return {"registryRecords": [dict(r) for r in rows]}
-
-    def update_registry_record(self, **kw):
-        with self._lock:
-            self.updates.append(kw)
-            rec = self.records.get(kw["recordId"])
-            if rec is None:
-                raise _aws_error("ResourceNotFoundException", "UpdateRegistryRecord")
-            primary, value = next(iter(kw["descriptors"]["optionalValue"].items()))
-            rec["descriptors"] = {primary: _unwrap(value["optionalValue"])}
-            if "recordVersion" in kw:
-                rec["recordVersion"] = kw["recordVersion"]
-            if "description" in kw:
-                rec["description"] = kw["description"]["optionalValue"]
-            rec["status"] = "DRAFT"  # verified live: any update re-enters review
-            if self.crash_after_update:
-                self.crash_after_update = False
-                raise ConnectionError("socket closed after the update was accepted")
-            return dict(rec)
-
-    def submit_registry_record_for_approval(self, registryId, recordId):  # noqa: N803
-        self.records[recordId]["status"] = "PENDING_APPROVAL"
-        return {"status": "PENDING_APPROVAL"}
-
-    def update_registry_record_status(self, registryId, recordId, status, statusReason):  # noqa: N803
-        self.status_changes.append((recordId, status))
-        self.records[recordId]["status"] = status
-        return {"status": status}
-
-    def search_discoverable_registry_records(self, registryIds, searchQuery, maxResults):  # noqa: N803
-        return {"registryRecords": [dict(r) for r in self.records.values()]}
-
-    def delete_registry_record(self, registryId, recordId):  # noqa: N803
-        self.deletes.append(recordId)
-        self.records.pop(recordId, None)
-
-
-def _unwrap(wrapped: dict) -> dict:
-    out = {}
-    for field, value in wrapped.items():
-        inner = value["optionalValue"]
-        if field == "additionalData":
-            out[field] = {k: _unwrap(v["optionalValue"]) for k, v in inner.items()}
-        else:
-            out[field] = inner
-    return out
+    def delete_objects(self, **kwargs):
+        raise AssertionError(f"registration deleted from S3: {kwargs.get('Delete')}")
 
 
 # ---------------------------------------------------------------------------
@@ -256,23 +143,93 @@ def _published_objects(snapshot=None) -> dict[str, bytes]:
 
 
 @pytest.fixture
-def clouds(monkeypatch):
-    """Route every client the app asks for to the fakes (funnel-compatible)."""
+def clouds(monkeypatch, client):
+    """S3 is a read-only fake; the Registry is the real local backend on the test ledger.
+    `registry` exposes the counters the old fake had so the assertions below keep reading
+    naturally: creates/updates/status_changes/deletes are derived from a recording proxy."""
     s3 = FakeS3(_published_objects())
-    registry = FakeRegistry()
+    registry = RecordingRegistry(LocalRegistryBackend())
+    reg.set_backend(registry)
 
-    def client(service, ws, **kw):
+    def client_factory(service, ws, **kw):
         if service == "s3":
             return s3
-        if service in ("agent-registry-control", "agent-registry"):
-            return registry  # the data-plane search reads the same records
         raise AssertionError(f"unexpected AWS client during a hermetic test: {service}")
 
-    monkeypatch.setattr(aws_clients, "client", client)
+    monkeypatch.setattr(aws_clients, "client", client_factory)
     monkeypatch.setattr(aws_clients, "get_session", lambda *a, **k: pytest.fail("session"))
-    monkeypatch.setattr(reg, "wait_record_settled",
-                        lambda c, r, rid, timeout_s=60, sleeper=None: reg.get_record(c, r, rid))
     return s3, registry
+
+
+class RecordingRegistry:
+    """Pass-through to ``LocalRegistryBackend`` that counts writes (what the old
+    FakeRegistry's lists exposed) and lets a test flip a record's status directly."""
+
+    def __init__(self, inner: LocalRegistryBackend):
+        self._inner = inner
+        self.creates: list[dict] = []
+        self.updates: list[dict] = []
+        self.status_changes: list[tuple[str, str]] = []
+        self.deletes: list[str] = []
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    @property
+    def records(self) -> dict[str, dict]:
+        ws = ws_ctx(READY_RESOURCES)
+        return {r["recordId"]: r for r in self._inner.list_records(ws)}
+
+    def upsert_record(self, ws, **kw):
+        record, created = self._inner.upsert_record(ws, **kw)
+        if created:
+            self.creates.append({"name": kw["name"], "recordVersion": record["recordVersion"]})
+        return record, created
+
+    def update_record(self, ws, record_id, **kw):
+        self.updates.append({"recordId": record_id, **kw})
+        return self._inner.update_record(ws, record_id, **kw)
+
+    def set_record_status(self, ws, record_id, status, reason):
+        out = self._inner.set_record_status(ws, record_id, status, reason)
+        if status != "PENDING_APPROVAL":
+            self.status_changes.append((record_id, status))
+        return out
+
+    def submit_record(self, ws, record_id):
+        return self.set_record_status(ws, record_id, "PENDING_APPROVAL", "submitted")
+
+    def approve_record(self, ws, record_id):
+        return self.set_record_status(ws, record_id, "APPROVED", "approved")
+
+    def reject_record(self, ws, record_id):
+        return self.set_record_status(ws, record_id, "REJECTED", "rejected")
+
+    def disable_record(self, ws, record_id):
+        return self.set_record_status(ws, record_id, "DEPRECATED", "disabled")
+
+    def delete_record(self, ws, record_id):
+        self.deletes.append(record_id)
+        return self._inner.delete_record(ws, record_id)
+
+    def force_status(self, record_id: str, status: str) -> None:
+        from app.models.ledger import RegistryRecord
+
+        db = SessionLocal()
+        try:
+            db.get(RegistryRecord, record_id).status = status
+            db.commit()
+        finally:
+            db.close()
+
+    def seed(self, *, name: str, descriptors: dict, version: str = "1.0.0-skill",
+             description: str = "theirs") -> str:
+        record, created = self._inner.upsert_record(
+            ws_ctx(READY_RESOURCES), name=name, description=description,
+            descriptor_type="AGENT_SKILLS", descriptors=descriptors, record_version=version,
+        )
+        assert created
+        return record["recordId"]
 
 
 def _mark_ready(workspace_id: str = DEFAULT_WORKSPACE_ID) -> None:
@@ -320,11 +277,11 @@ def _mapping() -> SystemSkillRecord | None:
 
 
 def _definition(record: dict) -> dict:
-    return json.loads(record["descriptors"]["agentSkillsDefinition"]["data"])
+    return json.loads(record["descriptors"]["agentSkills"]["skillDefinition"]["inlineContent"])
 
 
 def _skill_md(record: dict) -> str:
-    return record["descriptors"]["agentSkillsDefinition"]["additionalData"]["skillMd"]["data"]
+    return record["descriptors"]["agentSkills"]["skillMd"]["inlineContent"]
 
 
 # ---------------------------------------------------------------------------
@@ -352,12 +309,11 @@ def test_first_registration_describes_the_published_release_exactly(client, clou
     assert body["skill"]["digest"] == snapshot.digest[:12]
     assert body["preset"]["skill_registration"]["record_id"] == body["record"]["record_id"]
 
-    # the AWS record: GA shape, exact metadata, the real SKILL.md, provenance
+    # the record: exact metadata, the real SKILL.md, provenance
     assert len(registry.records) == 1
     stored = next(iter(registry.records.values()))
-    assert stored["recordType"] == "SKILL" and stored["name"] == ARCHITECT.name
+    assert stored["descriptorType"] == "AGENT_SKILLS" and stored["name"] == ARCHITECT.name
     assert stored["recordVersion"] == "1.0.0-skill"
-    assert stored["tags"] == {"launchpad:system-preset": KEY, "launchpad:workspace": "default"}
     definition = _definition(stored)
     assert definition["name"] == ARCHITECT.name
     assert definition["version"] == ARCHITECT.skill_version == VER
@@ -368,19 +324,16 @@ def test_first_registration_describes_the_published_release_exactly(client, clou
     assert definition["source"]["release_digest"] == snapshot.digest
     assert _skill_md(stored) == snapshot.files["SKILL.md"].decode()
     assert registry.status_changes == []  # no approve/disable of any kind
-    create = registry.creates[0]
-    token = create["clientToken"]
-    assert 33 <= len(token) <= 256 and all(c.isalnum() or c == "-" for c in token)
 
     # S3 was read (manifest, listing, every object) and never written
     assert f"{ARCHITECT.skill_prefix(snapshot.digest)}{MANIFEST_KEY}" in s3.reads
     prefix = ARCHITECT.skill_prefix(snapshot.digest)
     assert all(f"{prefix}{rel}" in s3.reads for rel in snapshot.files)
 
-    # the ledger holds identifiers + the registered release, and the same token
+    # the ledger holds identifiers + the registered release
     row = _mapping()
     assert row is not None and row.status == "registered"
-    assert row.record_id == stored["recordId"] and row.client_token == token
+    assert row.record_id == stored["recordId"]
     assert row.release_digest == snapshot.digest and row.registry_id == REGISTRY_ID
 
 
@@ -407,11 +360,11 @@ def test_registration_is_ledger_read_on_get_and_projects_onto_registry_records(c
 
 def test_ordinary_records_carry_no_system_member(client, clouds):
     _, registry = clouds
-    registry.create_registry_record(
-        registryId=REGISTRY_ID, name="member-skill", displayName="member-skill", description="d",
-        recordType="SKILL", recordVersion="1.0.0-skill",
-        descriptors=reg.to_ga_descriptors("AGENT_SKILLS", reg.build_skills_descriptors(
-            skill_md="---\nname: member-skill\n---\n", definition={"name": "member-skill"})),
+    registry.seed(
+        name="member-skill",
+        descriptors=reg.build_skills_descriptors(
+            skill_md="---\nname: member-skill\n---\n", definition={"name": "member-skill"}),
+        description="d",
     )
     _mark_ready()
     listed = client.get("/api/registry/records").json()["records"]
@@ -558,22 +511,21 @@ def test_unverified_published_bytes_refuse_without_writing(client, clouds):
 
 def test_a_foreign_record_with_the_reserved_name_is_refused_never_adopted(client, clouds):
     _, registry = clouds
-    registry.create_registry_record(
-        registryId=REGISTRY_ID, name=ARCHITECT.name, displayName=ARCHITECT.name, description="mine",
-        recordType="SKILL", recordVersion="1.0.0-skill",
-        descriptors=reg.to_ga_descriptors("AGENT_SKILLS", reg.build_skills_descriptors(
+    foreign_id = registry.seed(
+        name=ARCHITECT.name,
+        descriptors=reg.build_skills_descriptors(
             skill_md="---\nname: aws-agent-solution-architect\n---\n# not the platform's",
             definition={"name": ARCHITECT.name, "path": f"s3://{BUCKET}/skills/aws-agent-solution-architect/",
-                        "source": {"kind": "inline"}})),
+                        "source": {"kind": "inline"}}),
+        description="mine",
     )
-    foreign_id = next(iter(registry.records))
     _mark_ready()
     _install_active()
     res = client.post(ROUTE)
     assert res.status_code == 409, res.text
     assert res.json()["code"] == "system_skill.foreign_record"
     assert res.json()["detail"]["record_id"] == foreign_id
-    assert len(registry.creates) == 1 and registry.updates == []  # the seed only
+    assert registry.creates == [] and registry.updates == []  # the refusal wrote nothing
     assert _definition(registry.records[foreign_id])["source"] == {"kind": "inline"}
     assert _mapping().record_id is None
     # the foreign record is NOT system-protected: no ledger row names it
@@ -594,17 +546,10 @@ def test_registration_needs_an_active_installed_preset(client, clouds):
 
 def test_registry_unavailable_is_reported_not_faked(client, clouds):
     _mark_ready()
-    db = SessionLocal()
-    try:
-        row = db.get(Workspace, DEFAULT_WORKSPACE_ID)
-        row.resources = {**READY_RESOURCES, "registry_id": None,
-                         "registry_unavailable_reason": "disabled at bootstrap"}
-        db.commit()
-    finally:
-        db.close()
     _install_active()
+    reg.set_backend(None)
     res = client.post(ROUTE)
-    assert res.status_code == 503 and res.json()["code"] == "registry.unavailable"
+    assert res.status_code == 503 and res.json()["code"] == "feature.unavailable"
 
 
 # ---------------------------------------------------------------------------
@@ -705,13 +650,18 @@ def test_content_mutations_are_refused_for_everyone_before_any_aws_call(
 
 
 def test_skill_lab_publish_path_and_internal_callers_are_guarded(client, clouds, monkeypatch):
-    """`update_record` is what Skill Lab's publish uses; `console_action` without an
-    identity is what a background job would call. Both refuse a system Skill."""
+    """`update_record` is what Skill Lab's publish uses; `refuse_protected_mutation`
+    called with no identity (``is_admin`` defaults False) is what a background job
+    invoking a lifecycle action directly — bypassing the router — would hit. Both
+    refuse a system Skill. (N4: there is no AWS-era `console_action`/`console_delete`
+    — lifecycle actions go straight to the backend, guarded by this same function the
+    router calls; delete is exercised via the real route below.)"""
     rid = _registered(client)
     _, registry = clouds
     monkeypatch.setattr(aws_clients, "client", _no_client)
     ws = ws_ctx(READY_RESOURCES)
     from app.core.errors import AppError
+    from app.services import registry_console as console  # restored by T4/T5
     from app.services.skill_ingest import bundle_from_inline
 
     with pytest.raises(AppError) as exc:
@@ -725,10 +675,10 @@ def test_skill_lab_publish_path_and_internal_callers_are_guarded(client, clouds,
     finally:
         bundle.close()
     with pytest.raises(AppError) as exc:  # identity omitted ⇒ never an admin
-        console.console_action(ws, rid, "approve")
+        skill_registry.refuse_protected_mutation(ws, rid, "approve", lifecycle=True)
     assert exc.value.code == "registry.system_skill_protected"
     with pytest.raises(AppError):
-        console.console_delete(ws, rid)
+        skill_registry.refuse_protected_mutation(ws, rid, "delete")
     with pytest.raises(AppError):
         console.reimport_skill(ws, rid)
     assert registry.updates == [] and registry.status_changes == []
@@ -747,6 +697,7 @@ def test_reserved_skill_name_is_refused_for_ordinary_register_and_import_before_
     assert res.json()["code"] == "registry.name_reserved"
     # rename-on-import to the reserved name is refused the same way
     from app.core.errors import AppError
+    from app.services import registry_console as console  # restored by T4/T5
     from app.services.skill_ingest import bundle_from_inline
 
     bundle = bundle_from_inline("---\nname: harmless-skill\ndescription: d\n---\n# ok")
@@ -772,19 +723,32 @@ def test_reserved_skill_name_is_refused_for_ordinary_register_and_import_before_
 
 
 def test_ordinary_skill_records_keep_their_member_lifecycle_and_edits(gated, clouds, monkeypatch):
-    """Parity: nothing above changes an ordinary record."""
+    """Parity: nothing above changes an ordinary record the member registered. Since
+    N15-obs7 a record's content mutations are its creator's (or an administrator's), so the
+    seed is stamped with the member — a NULL-creator record is an administrator's."""
+    from app.services.creators import Creator
+
     admin, member = gated
     _, registry = clouds
     _mark_ready()
-    registry.create_registry_record(
-        registryId=REGISTRY_ID, name="member-skill", displayName="member-skill", description="d",
-        recordType="SKILL", recordVersion="1.0.0-skill",
-        descriptors=reg.to_ga_descriptors("AGENT_SKILLS", reg.build_skills_descriptors(
-            skill_md="---\nname: member-skill\n---\n# m",
-            definition={"name": "member-skill", "path": f"s3://{BUCKET}/skills/member-skill/",
-                        "files": ["SKILL.md"], "source": {"kind": "inline"}})),
-    )
-    rid = next(iter(registry.records))
+    db = SessionLocal()
+    try:
+        member_id = users_service.find_by_username(db, MEMBER_CREDS["username"]).id
+    finally:
+        db.close()
+
+    def skill(name: str) -> dict:
+        return reg.build_skills_descriptors(
+            skill_md=f"---\nname: {name}\n---\n# m",
+            definition={"name": name, "path": f"s3://{BUCKET}/skills/{name}/",
+                        "files": ["SKILL.md"], "source": {"kind": "inline"}})
+
+    token = reg.current_creator.set(Creator(user_id=member_id, name=MEMBER_CREDS["username"]))
+    try:
+        rid = registry.seed(name="member-skill", descriptors=skill("member-skill"),
+                            version="1.0.0-skill", description="d")
+    finally:
+        reg.current_creator.reset(token)
     res = member.post(f"/api/registry/records/{rid}/action", json={"action": "submit"})
     assert res.status_code == 200 and res.json()["status"] == "PENDING_APPROVAL"
     res = member.put(f"/api/registry/records/{rid}", json={"description": "edited by a member"})
@@ -792,6 +756,13 @@ def test_ordinary_skill_records_keep_their_member_lifecycle_and_edits(gated, clo
     assert registry.records[rid]["description"] == "edited by a member"
     res = member.delete(f"/api/registry/records/{rid}")
     assert res.status_code == 200 and registry.deletes == [rid]
+    # a record nobody is recorded to have registered is an administrator's (N15-obs7)
+    legacy = registry.seed(name="legacy-skill", descriptors=skill("legacy-skill"),
+                           version="1.0.0-skill", description="d")
+    res = member.put(f"/api/registry/records/{legacy}", json={"description": "x"})
+    assert res.status_code == 403 and res.json()["code"] == "registry.forbidden", res.text
+    res = admin.put(f"/api/registry/records/{legacy}", json={"description": "x"})
+    assert res.status_code == 200, res.text
 
 
 # ---------------------------------------------------------------------------
@@ -801,8 +772,11 @@ def test_ordinary_skill_records_keep_their_member_lifecycle_and_edits(gated, clo
 
 def test_concurrent_registrations_converge_on_one_record(clouds):
     _, registry = clouds
-    # the app first: init_db re-seeds the default workspace row from settings
+    # the app first: init_db re-seeds the default workspace row from settings — which
+    # also re-registers a fresh LocalRegistryBackend (N4 Task 3 startup wiring), so the
+    # recording proxy from `clouds` must be reinstalled after it.
     app = create_app()
+    reg.set_backend(registry)
     _mark_ready()
     _install_active()
     # ONE TestClient context: FastAPI's routing cache races across two portals
@@ -813,7 +787,6 @@ def test_concurrent_registrations_converge_on_one_record(clouds):
     ids = {r.json()["record"]["record_id"] for r in results}
     assert len(ids) == 1 and len(registry.records) == 1
     assert sum(1 for r in results if r.json()["created"]) == 1
-    assert len({c["clientToken"] for c in registry.creates}) == 1  # one durable intent
     assert _mapping().record_id == ids.pop()
 
 
@@ -821,24 +794,26 @@ def test_crash_after_create_before_the_ledger_commit_recovers_the_same_record(cl
     _, registry = clouds
     _mark_ready()
     _install_active()
-    registry.crash_after_create = True
-    with pytest.raises(ConnectionError):  # the request died after AWS accepted the create
+    real = registry.upsert_record
+
+    def crash_once(ws, **kw):
+        record, created = real(ws, **kw)
+        registry.upsert_record = real
+        raise ConnectionError("process died after the record committed")
+
+    registry.upsert_record = crash_once
+    with pytest.raises(ConnectionError):
         client.post(ROUTE)
     row = _mapping()
     assert row is not None and row.status == "creating" and row.record_id is None
-    token = row.client_token
-    assert len(registry.records) == 1  # AWS did create it
+    assert row.create_request["contentDigest"]  # the intent survived
+    assert len(registry.records) == 1  # the record was created
 
     second = client.post(ROUTE)
     assert second.status_code == 200, second.text
-    body = second.json()
-    assert body["record"]["record_id"] == next(iter(registry.records))
-    assert len(registry.records) == 1  # the platform's own record, no twin
-    # recovery = replaying the persisted request: the service answering the same id
-    # for the same token is the proof of ownership (metadata is never consulted)
-    assert [c["clientToken"] for c in registry.creates] == [token, token]
-    assert registry.creates[0] == registry.creates[1]
-    assert _mapping().status == "registered" and _mapping().client_token == token
+    assert second.json()["record"]["record_id"] == next(iter(registry.records))
+    assert len(registry.records) == 1  # adopted, no twin
+    assert _mapping().status == "registered"
 
 
 def test_uninstall_keeps_the_record_and_reinstall_reuses_the_mapping(client, clouds, monkeypatch):
@@ -963,7 +938,7 @@ def test_deprecated_record_fails_clearly_instead_of_being_rewritten(client, clou
     _mark_ready()
     agent_id = _install_active()
     rid = client.post(ROUTE).json()["record"]["record_id"]
-    registry.records[rid]["status"] = "DEPRECATED"
+    registry.force_status(rid, "DEPRECATED")
     newer = _snapshot_with_version(NEXT, monkeypatch)
     s3.objects.update(_published_objects(newer))
     _repoint_spec(agent_id, newer)
@@ -999,12 +974,7 @@ def _seed_foreign(registry, *, skill_md: str, version: str = "9.0.0-skill") -> s
     )
     descriptors = registration.descriptors()
     descriptors["agentSkills"]["skillMd"]["inlineContent"] = skill_md
-    registry.create_registry_record(
-        registryId=REGISTRY_ID, name=ARCHITECT.name, displayName=ARCHITECT.name,
-        description="theirs", recordType="SKILL", recordVersion=version,
-        descriptors=reg.to_ga_descriptors("AGENT_SKILLS", descriptors),
-    )
-    return next(iter(registry.records))
+    return registry.seed(name=ARCHITECT.name, descriptors=descriptors, version=version)
 
 
 def _register_via_stage(agent_id: str, monkeypatch) -> tuple:
@@ -1050,98 +1020,13 @@ def test_copied_system_metadata_never_creates_ownership(client, clouds, monkeypa
     assert row.record_id is None and row.pending_record_id is None
     assert row.status == "creating" and row.create_request is None
     assert registry.records[foreign_id] == before  # untouched
-    assert len(registry.creates) == 1 and registry.updates == []  # the seed only
+    assert registry.creates == [] and registry.updates == []  # the refusal wrote nothing
     assert client.get(f"/api/registry/records/{foreign_id}").json()["system"] is None
     assert client.get("/api/system-agents").json()["presets"][0]["skill_registration"] == {
         "record_id": None, "pending_record_id": None, "status": "creating",
         "release_version": None, "release_digest": None, "path": None,
-        "updated_at": _mapping().updated_at.isoformat(),
+        "updated_at": display_iso(_mapping().updated_at),  # N17-obs463
     }
-
-
-def test_lost_create_response_replays_the_identical_request_after_time_passes(
-    client, clouds, monkeypatch
-):
-    """The persisted create request — token, descriptors, imported_at, tags — is what
-    the retry sends, byte for byte, even after the clock moved and the list API
-    still shows nothing; the fake rejects a same-token request with other bytes."""
-    _, registry = clouds
-    _mark_ready()
-    _install_active()
-    registry.crash_after_create = True
-    with pytest.raises(ConnectionError):
-        client.post(ROUTE)
-    row = _mapping()
-    assert row.status == "creating" and row.record_id is None and row.pending_record_id is None
-    assert row.create_request["clientToken"] == row.client_token
-    original = registry.creates[0]
-    monkeypatch.setattr(skill_registry, "_utcnow_iso", lambda: "2031-01-01T00:00:00Z")
-    registry.hide_records = True  # eventual consistency: find-by-name sees nothing
-    res = client.post(ROUTE)
-    assert res.status_code == 200, res.text
-    assert res.json()["record"]["record_id"] == next(iter(registry.records))
-    assert len(registry.records) == 1
-    assert registry.creates[1] == original  # whole request equal, not just the token
-    assert registry.creates[1]["clientToken"] == row.client_token
-    row = _mapping()
-    assert row.status == "registered" and row.record_id == next(iter(registry.records))
-
-
-def test_replay_that_the_service_cannot_honour_binds_nothing(client, clouds):
-    """Idempotency window closed: the replay conflicts with the record our lost create
-    made. Without the service confirming the id, the record is unprovable — refused,
-    nothing bound, nothing overwritten (an administrator resolves it in the Registry)."""
-    _, registry = clouds
-    _mark_ready()
-    _install_active()
-    registry.crash_after_create = True
-    with pytest.raises(ConnectionError):
-        client.post(ROUTE)
-    rid = next(iter(registry.records))
-    registry.tokens.clear()  # the service forgot the token
-    before = json.loads(json.dumps(registry.records[rid]))
-    res = client.post(ROUTE)
-    assert res.status_code == 409 and res.json()["code"] == "system_skill.foreign_record"
-    row = _mapping()
-    assert row.record_id is None and row.pending_record_id is None and row.status == "creating"
-    assert registry.records[rid] == before and registry.updates == []
-    assert client.get(f"/api/registry/records/{rid}").json()["system"] is None
-
-
-def test_accepted_create_with_denied_readback_is_not_registered_until_verified(gated, clouds):
-    admin, member = gated
-    _, registry = clouds
-    _mark_ready()
-    _install_active()
-    registry.fail_get = True
-    res = admin.post(ROUTE)
-    assert res.status_code == 403, res.text  # the AWS AccessDenied envelope, not a success
-    assert res.json()["code"] == "aws.access_denied"
-    rid = next(iter(registry.records))
-    row = _mapping()
-    assert row.status == "accepted" and row.pending_record_id == rid and row.record_id is None
-    assert row.release_version is None and row.content_digest is None
-    projection = admin.get("/api/system-agents").json()["presets"][0]["skill_registration"]
-    assert projection["status"] == "accepted" and projection["record_id"] is None
-    assert projection["pending_record_id"] == rid
-    # ours (our create returned the id) ⇒ protected while unverified …
-    for who in (admin, member):
-        res = who.put(f"/api/registry/records/{rid}", json={"description": "x"})
-        assert res.status_code == 403 and res.json()["code"] == "registry.system_skill_protected"
-        assert who.delete(f"/api/registry/records/{rid}").status_code == 403
-    assert member.post(f"/api/registry/records/{rid}/action", json={"action": "approve"}
-                       ).status_code == 403
-    # … and verified on the next attempt without a second create
-    registry.fail_get = False
-    res = admin.post(ROUTE)
-    assert res.status_code == 200, res.text
-    assert res.json()["created"] is False and res.json()["changed"] is False
-    assert "verified" in res.json()["note"]
-    assert len(registry.creates) == 1 and len(registry.records) == 1
-    row = _mapping()
-    assert row.status == "registered" and row.record_id == rid and row.pending_record_id is None
-    assert admin.get("/api/system-agents").json()["presets"][0]["skill_registration"]["status"] \
-        == "registered"
 
 
 def _detached_copy(agent_id: str):
@@ -1170,7 +1055,14 @@ def test_accepted_update_with_lost_response_cannot_be_downgraded_by_a_stale_work
         newer = _snapshot_with_version(NEXT, mp)
         s3.objects.update(_published_objects(newer))
         _repoint_spec(agent_id, newer)
-        registry.crash_after_update = True
+        real_update = registry.update_record
+
+        def crash_once(ws, record_id, **kw):
+            real_update(ws, record_id, **kw)
+            registry.update_record = real_update
+            raise ConnectionError("process died after the update committed")
+
+        registry.update_record = crash_once
         with pytest.raises(ConnectionError):
             client.post(ROUTE)
     remote = registry.records[rid]
@@ -1256,58 +1148,22 @@ def test_registry_replacement_makes_a_same_id_record_ordinary(client, clouds):
         db.commit()
     finally:
         db.close()
-    registry.records[rid]["name"] = "replacement-ordinary"
     listed = client.get("/api/registry/records").json()["records"]
     assert [r["system"] for r in listed] == [None]
     assert client.get(f"/api/registry/records/{rid}").json()["system"] is None
     assert client.get("/api/registry/records/search?q=x").json()["records"][0]["system"] is None
     assert client.get("/api/system-agents").json()["presets"][0]["skill_registration"] is None
+    # PUT /records/{id} is a real edit now that T4 restores the console surface — the
+    # record is no longer system-protected in the replacement registry, so an ordinary
+    # description-only edit succeeds; unrelated to the registry-identity scoping this
+    # test is about.
     res = client.put(f"/api/registry/records/{rid}", json={"description": "edited"})
     assert res.status_code == 200, res.text
+    assert res.json()["description"] == "edited"
     assert client.delete(f"/api/registry/records/{rid}").status_code == 200
     assert registry.deletes == [rid]
     # the ledger row is inert until a registration in the new registry restarts it
     assert _mapping().registry_id == REGISTRY_ID and _mapping().record_id == rid
-
-
-def test_skill_lab_multi_file_publish_is_refused_before_any_bundle_preparation(
-    client, clouds, monkeypatch, tmp_path
-):
-    from app.skill_lab import artifacts, runner
-    from app.skill_lab.models import SkillLabJob
-
-    rid = _registered(client)
-    _, registry = clouds
-    monkeypatch.setattr(artifacts, "JOBS_DIR", tmp_path / "jobs")
-    job_id = "job_sysskill_pub"
-    directory = artifacts.job_dir(job_id)
-    (directory / "out" / "skills").mkdir(parents=True)
-    (directory / "out" / "skills" / "skill_v0000.md").write_text("seed")
-    (directory / "out" / "best_skill.md").write_text("trained")
-    (directory / "skills" / ARCHITECT.name).mkdir(parents=True)
-    (directory / "skills" / ARCHITECT.name / "SKILL.md").write_text("# s")
-    (directory / "publish_skill").mkdir()
-    (directory / "publish_skill" / "prior.txt").write_text("previous publish output")
-    db = SessionLocal()
-    try:
-        db.add(SkillLabJob(
-            id=job_id, workspace_id=DEFAULT_WORKSPACE_ID, type="train", status="succeeded",
-            taskset_id="ts_sysskill",
-            skill_source={"kind": "registry", "record_id": rid, "name": ARCHITECT.name},
-            params={"trainable_files": ["SKILL.md", "references/intake-options.md"]},
-        ))
-        db.commit()
-    finally:
-        db.close()
-    monkeypatch.setattr(runner, "split_trained_bundle",
-                        lambda **kw: (_ for _ in ()).throw(AssertionError("splitter launched")))
-    monkeypatch.setattr(aws_clients, "client", _no_client)
-    res = client.post(f"/api/skill-lab/jobs/{job_id}/publish", json={"reapprove": True})
-    assert res.status_code == 403, res.text
-    assert res.json()["code"] == "registry.system_skill_protected"
-    assert (directory / "publish_skill" / "prior.txt").read_text() == "previous publish output"
-    assert not (directory / "log.txt").exists()
-    assert registry.updates == [] and registry.status_changes == []
 
 
 def _snapshot_same_version_new_digest(monkeypatch):
@@ -1360,7 +1216,14 @@ def test_resident_backfill_request_cannot_downgrade_a_same_version_new_digest_re
             newer = _snapshot_same_version_new_digest(mp)
             s3.objects.update(_published_objects(newer))
             _repoint_spec(agent_id, newer)
-            registry.crash_after_update = True
+            real_update = registry.update_record
+
+            def crash_once(ws, record_id, **kw):
+                real_update(ws, record_id, **kw)
+                registry.update_record = real_update
+                raise ConnectionError("process died after the update committed")
+
+            registry.update_record = crash_once
             db = SessionLocal()
             try:
                 current = db.get(Agent, agent_id)

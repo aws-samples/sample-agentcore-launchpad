@@ -1,0 +1,129 @@
+# CN verify gate — CI mirror of the local `make verify` (scripts/verify.sh).
+#
+# One job, one command: the workflow runs exactly `make verify`, so a green run here means
+# the same thing as a green run on a developer host or on the EC2 hosts' update path
+# (scripts/host-update.sh also ends in `make verify`). Nothing is added or skipped:
+# backend ruff + pytest (-n auto), infra ruff + pytest + cfn-lint, frontend eslint + tsc +
+# vitest + vite build, i18n parity / zh-CN punctuation, the CN partition lint, the region
+# boundary check, the N13 restore check, the BYOC and Harness-template self-checks and the
+# N12 forbidden-API grep.
+#
+# C8 — no AWS. The runner carries no credentials, no profile and no region: the suite is
+# hermetic (backend/tests/conftest.py redirects SQLite, stubs every client and pins the
+# LAUNCHPAD_* env the tests need — nothing is set here). What CANNOT run in CI are the
+# real-AWS e2e scripts (backend/scripts/e2e_*.py, docs/cn/release-smoke-test.md) — those
+# stay a deploy-ops step against the cn-northwest-1 hosts.
+#
+# Toolchain pinned to what the hosts run: Python 3.12 (backend/infra `requires-python`),
+# uv (astral-sh/setup-uv, lockfiles enforced with `uv sync --locked`), Node 20 (README
+# minimum; no .nvmrc / engines field in frontend/package.json).
+
+name: cn-verify
+
+on:
+  push:
+    branches:
+      - cn/integration
+      - cn-region
+      - main
+  pull_request:
+    branches:
+      - cn/integration
+      - cn-region
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run per ref; a newer push to the same branch / PR cancels the older run.
+concurrency:
+  group: cn-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+  UV_PYTHON: "3.12"
+  # Never let botocore probe the runner's instance metadata for credentials: no test may
+  # need any (C8), and a probe only adds a timeout to a failure that should be immediate.
+  AWS_EC2_METADATA_DISABLED: "true"
+  # pytest honours PYTEST_ADDOPTS, so the three pytest runs inside verify.sh (backend,
+  # infra, samples/byoc) each write a junit report next to their cwd without the gate's
+  # command line changing. The files are gitignored.
+  PYTEST_ADDOPTS: "--junitxml=pytest-junit.xml"
+
+jobs:
+  verify:
+    name: make verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          # scripts/n13_restore_check.sh reads the Skill Lab baseline commit (4e27b1f4,
+          # an ancestor of cn/integration) with `git ls-tree` / `git show`, and
+          # verify.sh's forbidden-API step is a `git grep`: a shallow clone has neither.
+          fetch-depth: 0
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv (cached)
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            backend/uv.lock
+            infra/uv.lock
+
+      - name: Set up Node ${{ env.NODE_VERSION }} (npm cache)
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install backend dependencies (locked)
+        working-directory: backend
+        run: uv sync --locked
+
+      - name: Install infra dependencies (locked)
+        working-directory: infra
+        run: uv sync --locked
+
+      - name: Warm cfn-lint
+        # verify.sh runs `uvx cfn-lint` and SKIPS the section when uvx cannot provide the
+        # tool; fetching it here (with network) turns that skip into a real lint step.
+        run: uvx cfn-lint --version
+
+      - name: Install frontend dependencies (npm ci)
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: Toolchain summary
+        run: |
+          python3 --version
+          uv --version
+          node --version
+          npm --version
+
+      - name: make verify
+        run: make verify 2>&1 | tee verify.log
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cn-verify-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            verify.log
+            backend/pytest-junit.xml
+            infra/pytest-junit.xml
+            pytest-junit.xml
+            frontend/vitest-junit.xml

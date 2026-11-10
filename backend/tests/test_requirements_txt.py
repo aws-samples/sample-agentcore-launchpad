@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.services.requirements_txt import (
     MAX_REQUIREMENT_ENTRIES,
     RequirementsFileError,
+    describe_exit,
     parse_requirements_txt,
     pip_python_version,
     preresolve,
@@ -131,6 +132,34 @@ def test_summarizer_appends_caller_hints():
 def test_summarizer_bounds_unknown_output():
     msg = summarize_resolver_failure("mystery " * 500)
     assert len(msg) < 600
+
+
+def test_summarizer_names_the_signal_that_killed_a_silent_install():
+    """N17-obs113: a pip child SIGTERMed by `systemctl restart launchpad-backend` exits -15
+    with EMPTY output — the summary must say the install process was terminated and why,
+    never "resolver produced no output", and never the requirement hints."""
+    msg = summarize_resolver_failure("", returncode=-15, hints=("vendor the wheels",))
+    assert msg == (
+        "install process terminated (signal 15, SIGTERM) — the backend was restarting, or the "
+        "build was stopped from outside; redeploy."
+    )
+    assert "no output" not in msg and "vendor" not in msg
+    killed = summarize_resolver_failure("", returncode=-9)
+    assert killed.startswith("install process terminated (signal 9, SIGKILL)")
+    assert "out of memory" in killed and killed.endswith("redeploy.")
+
+
+def test_summarizer_appends_the_exit_status_to_the_no_output_fallback():
+    assert summarize_resolver_failure("", returncode=1) == (
+        "resolver produced no output (exit status 1)."
+    )
+    assert summarize_resolver_failure("") == "resolver produced no output."
+
+
+def test_describe_exit_names_status_or_signal():
+    assert describe_exit(1) == "exit status 1"
+    assert describe_exit(-15) == "killed by signal 15 (SIGTERM)"
+    assert describe_exit(None) == "no exit status"
 
 
 # ── resolution platform: default + override ──────────────────────────────────

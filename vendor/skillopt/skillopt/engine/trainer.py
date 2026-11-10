@@ -61,8 +61,7 @@ from skillopt.optimizer.update_modes import (
 from skillopt.model import (
     chat_optimizer,
     configure_azure_openai,
-    configure_claude_code_exec,
-    configure_codex_exec,
+    configure_opencode_exec,
     configure_minimax_chat,
     configure_qwen_chat,
     get_token_summary,
@@ -670,15 +669,9 @@ class ReflACTTrainer:
         optimizer_backend = cfg.get("optimizer_backend")
         target_backend = cfg.get("target_backend")
         if not optimizer_backend or not target_backend:
-            if backend in {"claude", "claude_chat"}:
-                optimizer_backend = optimizer_backend or "claude_chat"
-                target_backend = target_backend or "claude_chat"
-            elif backend in {"codex", "codex_exec"}:
-                optimizer_backend = optimizer_backend or "openai_chat"
-                target_backend = target_backend or "codex_exec"
-            elif backend == "claude_code_exec":
-                optimizer_backend = optimizer_backend or "openai_chat"
-                target_backend = target_backend or "claude_code_exec"
+            if backend in {"opencode", "opencode_exec"}:
+                optimizer_backend = optimizer_backend or "bedrock_chat"
+                target_backend = target_backend or "opencode_exec"
             elif backend in {"qwen", "qwen_chat"}:
                 optimizer_backend = optimizer_backend or "openai_chat"
                 target_backend = target_backend or "qwen_chat"
@@ -691,23 +684,9 @@ class ReflACTTrainer:
         set_target_backend(target_backend)
         set_optimizer_deployment(cfg["optimizer_model"])
         set_target_deployment(cfg["target_model"])
-        configure_codex_exec(
-            path=cfg.get("codex_exec_path", "codex"),
-            sandbox=cfg.get("codex_exec_sandbox", "workspace-write"),
-            profile=cfg.get("codex_exec_profile", ""),
-            full_auto=cfg.get("codex_exec_full_auto", False),
-            reasoning_effort=cfg.get("codex_exec_reasoning_effort", "none"),
-            use_sdk=cfg.get("codex_exec_use_sdk", None),
-            network_access=cfg.get("codex_exec_network_access", False),
-            web_search=cfg.get("codex_exec_web_search", False),
-            approval_policy=cfg.get("codex_exec_approval_policy", "never"),
-        )
-        configure_claude_code_exec(
-            path=cfg.get("claude_code_exec_path", "claude"),
-            profile=cfg.get("claude_code_exec_profile", ""),
-            use_sdk=cfg.get("claude_code_exec_use_sdk", None),
-            effort=cfg.get("claude_code_exec_effort", cfg.get("reasoning_effort", "medium")),
-            max_thinking_tokens=cfg.get("claude_code_exec_max_thinking_tokens", 16384),
+        configure_opencode_exec(
+            path=cfg.get("opencode_exec_path", "opencode"),
+            effort=cfg.get("opencode_exec_effort", cfg.get("reasoning_effort", "medium")),
         )
         configure_qwen_chat(
             base_url=cfg.get("qwen_chat_base_url") or None,
@@ -739,11 +718,6 @@ class ReflACTTrainer:
         minimax_model_cfg = cfg.get("minimax_model")
         if minimax_model_cfg and cfg.get("target_backend") == "minimax_chat":
             set_target_deployment(str(minimax_model_cfg))
-        os.environ["REFLACT_CODEX_TRACE_TO_OPTIMIZER"] = (
-            "1"
-            if target_backend == "codex_exec" and cfg.get("codex_trace_to_optimizer", False)
-            else "0"
-        )
         reasoning = cfg.get("reasoning_effort", "") or None
         set_reasoning_effort(reasoning)
         print(

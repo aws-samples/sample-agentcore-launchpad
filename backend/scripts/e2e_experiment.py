@@ -6,6 +6,12 @@ recommend → accept → bundles → gateway → abtest → traffic → verdict 
 promote, then a separate canary record through
 90/10 → 50/50 → 1/99 with traffic and verdict gates at every stage.
 
+CN (N12 W-E3): there is no experiment Gateway and no AgentCore A/B test — ``gateway``
+prepares the local online-eval substrate (``gateway_id`` reads ``invoke-chain``),
+``abtest`` writes the local A/B row the invoke chain routes with, ``traffic`` is one
+replay job on the evaluation worker and ``verdict`` is computed from ``eval_results``.
+The script needs the evaluation worker installed (``make bootstrap``).
+
 Async actions return 202; this waits on running_action/progress like the
 page's poll loop does.
 
@@ -148,7 +154,7 @@ def main() -> int:
     ensure("gateway", lambda a: "gateway" in a)
     art = exp["artifacts"]
     print("  gateway:", art["gateway"]["gateway_id"], "· target",
-          art["gateway"]["target_v1"])
+          art["gateway"]["target_v1"], "· online eval", art["gateway"].get("online_eval_id"))
 
     ensure("abtest", lambda a: "abtest" in a)
     art = exp["artifacts"]
@@ -268,16 +274,13 @@ def main() -> int:
                 allow_non_significant=allow_override,
             )
 
-    print("── canary online eval config state:")
-    import boto3
-    control = boto3.client("bedrock-agentcore-control", region_name="us-west-2")
+    print("── canary online eval config state (local truth, /api/eval/online):")
     setup = canary["artifacts"]["setup"]
     for role in ("champion", "challenger"):
-        oe = control.get_online_evaluation_config(
-            onlineEvaluationConfigId=setup[role]["online_eval_id"]
-        )
-        print(f"  {oe.get('onlineEvaluationConfigName')} · status={oe.get('status')} "
-              f"· execution={oe.get('executionStatus')}")
+        res = client.get(f"/api/eval/online/{setup[role]['online_eval_id']}")
+        oe = res.json() if res.status_code == 200 else {"name": "?", "status": res.status_code}
+        print(f"  {oe.get('name')} · status={oe.get('status')} "
+              f"· execution={oe.get('execution_status')}")
 
     print("── canary cleanup…")
     canary_action("cleanup")
@@ -293,9 +296,9 @@ def main() -> int:
     for row in experiment_cleanup:
         print(f"  {row['status']:<8} {row['category']:<28} {row['detail'][:60]}")
 
-    print("── shared gateway untouched check:")
-    gw = control.get_gateway(gatewayIdentifier=setup["gateway_id"])
-    print(f"  {gw['name']} status: {gw['status']}")
+    print("── routing substrate check (no Gateway in CN):")
+    print(f"  experiment A/B row: {exp['artifacts']['abtest']['execution_status']}"
+          " (expected STOPPED after cleanup)")
 
     failed = [
         row

@@ -19,14 +19,6 @@ import {
 } from "../../ui";
 import { StatusTag } from "./widgets";
 
-type EngineFilter = "" | "attached" | "none" | "enforce" | "logOnly";
-
-function engineState(gateway: GovernanceGatewaySummary): Exclude<EngineFilter, "" | "attached"> {
-  const engine = gateway.policy_engine;
-  if (!engine || engine.missing) return "none";
-  return engine.mode === "ENFORCE" ? "enforce" : "logOnly";
-}
-
 /** MCP Gateway inventory of the live AWS account / region. */
 export function GatewayList() {
   const { t } = useTranslation();
@@ -38,7 +30,6 @@ export function GatewayList() {
     `gov-gateways:${force}`,
   );
   const [managed, setManaged] = useState("");
-  const [engine, setEngine] = useState<EngineFilter>("");
   const [q, setQ] = useState("");
 
   const gateways = useMemo(() => data?.gateways ?? [], [data]);
@@ -46,11 +37,9 @@ export function GatewayList() {
     const needle = q.trim().toLowerCase();
     return gateways.filter((gateway) => {
       if (managed && String(gateway.managed) !== managed) return false;
-      if (engine === "attached" && engineState(gateway) === "none") return false;
-      if (engine && engine !== "attached" && engineState(gateway) !== engine) return false;
       return !needle || `${gateway.name} ${gateway.id} ${gateway.description}`.toLowerCase().includes(needle);
     });
-  }, [gateways, managed, engine, q]);
+  }, [gateways, managed, q]);
   const paged = usePaged(rows, 12);
 
   const open = (gateway: GovernanceGatewaySummary) => setParams({ view: "gateway", gateway: gateway.id });
@@ -87,40 +76,6 @@ export function GatewayList() {
     },
     { key: "targets", title: t("v2.governance.colTargets"), className: "num", render: (gateway) => gateway.target_count },
     {
-      key: "registry",
-      title: t("v2.governance.colRegistry"),
-      render: (gateway) => (
-        <>
-          {gateway.registry_record ? (
-            <StatusTag status={gateway.registry_record.status} />
-          ) : (
-            <Tag tone="gray">{t("v2.governance.notCataloged")}</Tag>
-          )}
-          <span className="sub">
-            {gateway.attachability.attachable ? t("v2.governance.attachable") : t("v2.governance.catalogOnly")}
-          </span>
-        </>
-      ),
-    },
-    {
-      key: "engine",
-      title: t("v2.governance.colEngine"),
-      render: (gateway) =>
-        gateway.policy_engine?.missing ? (
-          <>
-            <Tag tone="red">{t("v2.governance.engineDeleted")}</Tag>
-            <span className="sub mono">{gateway.policy_engine.id}</span>
-          </>
-        ) : gateway.policy_engine ? (
-          <>
-            <StatusTag status={gateway.policy_engine.mode} />
-            <span className="sub mono">{gateway.policy_engine.name}</span>
-          </>
-        ) : (
-          <Tag tone="gray">{t("v2.governance.notAttached")}</Tag>
-        ),
-    },
-    {
       key: "managed",
       title: t("v2.governance.colManaged"),
       render: (gateway) => (
@@ -136,9 +91,6 @@ export function GatewayList() {
       render: (gateway) => (
         <div className="v2-actions">
           <LinkButton onClick={() => open(gateway)}>{t("v2.common.view")}</LinkButton>
-          <LinkButton onClick={() => setParams({ view: "gateway", gateway: gateway.id, section: "policies" })}>
-            {t("v2.governance.section.policies")}
-          </LinkButton>
         </div>
       ),
     },
@@ -151,12 +103,6 @@ export function GatewayList() {
       <div className="v2-kpis">
         <Kpi label={t("v2.governance.kpi.gateways")} value={data ? gateways.length : "—"} sub={source || undefined} />
         <Kpi label={t("v2.governance.kpi.managed")} value={data ? count((g) => g.managed) : "—"} />
-        <Kpi
-          label={t("v2.governance.kpi.engines")}
-          value={data ? count((g) => engineState(g) !== "none") : "—"}
-          sub={data ? t("v2.governance.kpi.enforceSub", { count: count((g) => engineState(g) === "enforce") }) : undefined}
-        />
-        <Kpi label={t("v2.governance.kpi.attachable")} value={data ? count((g) => g.attachability.attachable) : "—"} />
       </div>
       <Card>
         <div className="v2-toolbar">
@@ -171,18 +117,6 @@ export function GatewayList() {
             options={[
               { value: "true", label: t("v2.governance.managed") },
               { value: "false", label: t("v2.governance.unmanaged") },
-            ]}
-          />
-          <FilterSelect
-            label={t("v2.governance.colEngine")}
-            value={engine}
-            allLabel={t("v2.common.all")}
-            onChange={(v) => setEngine(v as EngineFilter)}
-            options={[
-              { value: "attached", label: t("v2.governance.engineFilter.attached") },
-              { value: "enforce", label: "ENFORCE" },
-              { value: "logOnly", label: "LOG_ONLY" },
-              { value: "none", label: t("v2.governance.notAttached") },
             ]}
           />
           <div className="end">

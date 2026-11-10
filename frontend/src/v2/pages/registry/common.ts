@@ -17,7 +17,8 @@ export function isRegistryUnavailable(err: unknown): err is ApiError {
   return err instanceof ApiError && err.code === "registry.unavailable";
 }
 
-/** The staging session behind an inspect expired (410) — re-inspect the source. */
-export function isStagingExpired(err: unknown): boolean {
-  return err instanceof ApiError && err.code === "registry.staging_expired";
+/** The staging session behind an inspect is gone — expired, unknown, or (fix
+ *  round 1) foreign to this workspace/principal (404) — re-inspect the source. */
+export function isStagingNotFound(err: unknown): boolean {
+  return err instanceof ApiError && err.code === "registry.staging_not_found";
 }

@@ -62,6 +62,23 @@ def _pre_p2_database(tmp_path):
             conn.execute(sa.text(f"DROP INDEX {index}"))
         # and the memory-ownership index (issue #55)
         conn.execute(sa.text("DROP INDEX uq_managed_memories_workspace_memory"))
+        # and the local Registry's uniqueness + lookup indexes (N4)
+        conn.execute(sa.text("DROP INDEX uq_registry_records_ws_name_version"))
+        conn.execute(sa.text("DROP INDEX ix_registry_records_ws_type_status"))
+        # and the self-hosted Memory store's uniqueness index (N6)
+        conn.execute(sa.text("DROP INDEX uq_memory_stores_workspace_memory"))
+        # and the self-hosted Knowledge Base's uniqueness index (N6)
+        conn.execute(sa.text("DROP INDEX uq_knowledge_bases_workspace_name"))
+        # and the evaluation tables' uniqueness indexes that span workspace_id (N12)
+        conn.execute(sa.text("DROP INDEX uq_eval_evaluators_workspace_name"))
+        # and the self-hosted Policy tables' uniqueness indexes (D20)
+        conn.execute(sa.text("DROP INDEX uq_policies_engine_name"))
+        conn.execute(sa.text("DROP INDEX uq_policy_settings_workspace"))
+        conn.execute(sa.text("DROP INDEX uq_policy_engines_workspace_name"))  # Global model
+        # and the model registry's per-workspace flag index (D21)
+        conn.execute(sa.text("DROP INDEX uq_workspace_model_settings_workspace_model"))
+        # and the resource-creators side table's unique index (Family B step 1, #261)
+        conn.execute(sa.text("DROP INDEX uq_resource_creators_workspace_kind_resource"))
         for table in WORKSPACE_SCOPED_TABLES:
             conn.execute(sa.text(f"DROP INDEX ix_{table}_workspace_id"))
             conn.execute(sa.text(f"ALTER TABLE {table} DROP COLUMN workspace_id"))
@@ -69,9 +86,9 @@ def _pre_p2_database(tmp_path):
         conn.execute(sa.text("DROP TABLE workspaces"))
         conn.execute(
             sa.text(
-                "INSERT INTO agents (id, name, method, status, spec, owner,"
+                "INSERT INTO agents (id, name, method, status, spec,"
                 " created_at, updated_at)"
-                " VALUES ('a1', 'legacy', 'harness', 'active', '{}', 'river', :now, :now)"
+                " VALUES ('a1', 'legacy', 'harness', 'active', '{}', :now, :now)"
             ),
             {"now": NOW},
         )
@@ -86,17 +103,6 @@ def _pre_p2_database(tmp_path):
             sa.text(
                 "INSERT INTO jobs (id, type, status, payload, log, created_at, updated_at)"
                 " VALUES ('j1', 'deploy_agent', 'succeeded', '{}', '', :now, :now)"
-            ),
-            {"now": NOW},
-        )
-        # the row with frozen audit fields: the backfill must reach it too, which
-        # is why it is raw SQL and why workspace_id is not immutable
-        conn.execute(
-            sa.text(
-                "INSERT INTO policy_changes (id, gateway_id, gateway_arn, gateway_name,"
-                " operation, operator, status, before, requested, created_at)"
-                " VALUES ('p1', 'gw-1', 'arn:gw', 'launchpad-gw', 'attach_engine',"
-                " 'admin', 'succeeded', '{}', '{}', :now)"
             ),
             {"now": NOW},
         )
@@ -187,9 +193,9 @@ def test_seeding_is_idempotent_and_leaves_explicit_assignments_alone(tmp_path, h
     with engine.begin() as conn:
         conn.execute(
             sa.text(
-                "INSERT INTO agents (id, name, method, status, spec, owner, workspace_id,"
+                "INSERT INTO agents (id, name, method, status, spec, workspace_id,"
                 " created_at, updated_at)"
-                " VALUES ('a2', 'other-ws', 'harness', 'active', '{}', 'river', 'acct2-usw2',"
+                " VALUES ('a2', 'other-ws', 'harness', 'active', '{}', 'acct2-usw2',"
                 " :now, :now)"
             ),
             {"now": NOW},
@@ -443,10 +449,10 @@ def _insert_unscoped_agent(engine, agent_id: str = "a-null") -> None:
     with engine.begin() as conn:
         conn.execute(
             sa.text(
-                "INSERT INTO agents (id, name, method, status, spec, owner,"
+                "INSERT INTO agents (id, name, method, status, spec,"
                 " workspace_id, created_at, updated_at)"
                 f" VALUES ('{agent_id}', '{agent_id}', 'harness', 'active', '{{}}',"
-                " 'river', NULL, :now, :now)"
+                " NULL, :now, :now)"
             ),
             {"now": NOW},
         )

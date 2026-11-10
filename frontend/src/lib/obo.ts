@@ -3,12 +3,13 @@ import type { ActingMode, ConnectionKind, ConnectionTemplate, OboConfig } from "
 /**
  * Whether a connection template can carry an on-behalf-of token-exchange config
  * (backend `obo_config_input` / `check_obo_idp`): only CustomOauth2 providers
- * take `onBehalfOfTokenExchangeConfig`, and Cognito implements neither RFC 8693
- * nor RFC 7523 (docs/identity.md §8.3), so its template says why instead.
+ * take `onBehalfOfTokenExchangeConfig`. There is no Cognito template on this
+ * build's vendor table (China Gateway/Runtime disallow a Cognito authorizer —
+ * see docs/cn/interfaces/gateway-iam.md), so there is no vendor-specific
+ * refusal to carry here.
  */
-export function oboAvailability(template: Pick<ConnectionTemplate, "id" | "vendor"> | undefined): "offered" | "cognito" | "none" {
-  if (!template || template.vendor !== "CustomOauth2") return "none";
-  return template.id === "cognito" ? "cognito" : "offered";
+export function oboAvailability(template: Pick<ConnectionTemplate, "id" | "vendor"> | undefined): "offered" | "none" {
+  return template && template.vendor === "CustomOauth2" ? "offered" : "none";
 }
 
 export interface OboFormState {

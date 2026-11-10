@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """E2E: REAL batch evaluation + insights for a platform-deployed zip agent.
 
+CN build (N12 / D14): the run is a job on the workspace's ``launchpad-eval-worker``
+Runtime (Strands evaluators judged through the Global Bedrock bearer); ``batch_eval_id``
+is that job's id and the scores come from the ``eval_results`` ledger. Needs
+``make bootstrap`` (stage ``evaluation``) — without the worker POST /api/eval/runs is
+503 ``evaluation.worker_missing``.
+
 Flow: ensure eval-target agent (zip_runtime) → upload 3-item dataset →
       evaluators run (Correctness+Helpfulness) → scores → insights run over
       the same sessions → failure/intent excerpt.
@@ -90,7 +96,7 @@ def main() -> int:
     if result["status"] != "completed":
         print(f"RUN FAILED: {result['error']}")
         return 1
-    print(f"  batch: {result['batch_eval_id']}")
+    print(f"  job: {result['batch_eval_id']}")
     print(f"  scores: {json.dumps(result['scores'], indent=1)}")
     assert len(result["scores"]) >= 1, "expected numeric scores"
 

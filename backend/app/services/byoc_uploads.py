@@ -24,8 +24,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
 
+from app.core.display_time import DisplayTimeJSONResponse
 from app.core.errors import AppError, NotFoundError
 from app.core.runtime_target import TARGET_PYTHON
 from app.services import requirements_txt
@@ -52,6 +52,12 @@ _REQUIREMENTS_MAX_BYTES = 256 * 1024
 _SDK_SCAN_MAX_BYTES = 1024 * 1024
 _SDK_SCAN_MAX_FILES = 400
 _SDK_MARKERS = (b"BedrockAgentCoreApp", b"@app.entrypoint")
+# N17-obs410: the ADOT distro that brings the `opentelemetry-instrument` launcher
+ADOT_DISTRIBUTION = "aws-opentelemetry-distro"
+ADOT_PACKAGE = "aws_opentelemetry_distro"
+_ADOT_REQ_RE = re.compile(r"^\s*aws[-_.]opentelemetry[-_.]distro(?=\s*(?:[\[<>=!~;@,]|$))",
+                          re.I | re.M)
+_PYPROJECT_MAX_BYTES = 256 * 1024
 
 
 def _error(code: str, message: str, status: int = 422) -> AppError:
@@ -82,7 +88,7 @@ async def upload_body_limit_middleware(request: Request, call_next: Any) -> Any:
         except ValueError:
             length = None
         if length is not None and length > UPLOAD_REQUEST_MAX_BYTES:
-            return JSONResponse(
+            return DisplayTimeJSONResponse(
                 status_code=413,
                 content={
                     "code": "byoc.upload_request_too_large",
@@ -169,6 +175,9 @@ def validate_and_detect(path: Path) -> dict[str, Any]:
             "has_requirements": "requirements.txt" in rel,
             "has_dockerfile": "Dockerfile" in rel,
             "agentcore_sdk_detected": _scan_for_sdk(zf, root, rel),
+            # N17-obs410: where the zip gets the ADOT launcher from (the package stage
+            # re-checks the built bundle, which is what decides)
+            "telemetry": telemetry_source(zf, root, rel),
         }
         return {
             "entries_count": len(infos),
@@ -176,6 +185,60 @@ def validate_and_detect(path: Path) -> dict[str, Any]:
             "root_prefix": root,
             "detected": detected,
         }
+
+
+def declares_adot(text: str | None) -> bool:
+    """A requirements.txt / pyproject.toml text that names the ADOT distro (comments aside)."""
+    if not text:
+        return False
+    return bool(_ADOT_REQ_RE.search(re.sub(r"#.*", "", text).replace('"', "\n")
+                                    .replace("'", "\n")))
+
+
+def vendors_adot(names: list[str]) -> bool:
+    """The distro is already in the tree (a vendored install: package dir or dist-info)."""
+    return any(n.startswith(f"{ADOT_PACKAGE}/") or (n.startswith(f"{ADOT_PACKAGE}-")
+               and ".dist-info/" in n) for n in names)
+
+
+def adot_source(zf: zipfile.ZipFile, root: str, rel: list[str]) -> str:
+    """``vendored`` | ``requirements`` | ``pyproject_only`` | ``absent`` — read, never run.
+    ``pyproject_only``: the deploy installs requirements.txt only, so a distro declared in
+    pyproject.toml alone never reaches the bundle."""
+    if vendors_adot(rel):
+        return "vendored"
+
+    def text(name: str, cap: int) -> str | None:
+        try:
+            info = zf.getinfo(root + name)
+        except KeyError:
+            return None
+        return None if info.file_size > cap else zf.read(info).decode("utf-8", "replace")
+
+    if declares_adot(text("requirements.txt", _REQUIREMENTS_MAX_BYTES)):
+        return "requirements"
+    if declares_adot(text("pyproject.toml", _PYPROJECT_MAX_BYTES)):
+        return "pyproject_only"
+    return "absent"
+
+
+def telemetry_source(zf: zipfile.ZipFile, root: str, rel: list[str]) -> dict[str, Any]:
+    """``{adot, runtime, adot_node}``: the Python launcher's source (N17-obs410) — or, for a
+    Node zip (N17-obs459: it read ``absent``), ``adot: "node"`` when its package.json depends
+    on ADOT Node (``adot_node`` = that version range). Read, never run."""
+    from app.deployer import adot_cn  # noqa: PLC0415 — keeps the deployer out of import time
+
+    out: dict[str, Any] = {"adot": adot_source(zf, root, rel), "runtime": "", "adot_node": None}
+    if "package.json" in rel:
+        out["runtime"] = "node"
+        info = zf.getinfo(root + "package.json")
+        if info.file_size <= _PYPROJECT_MAX_BYTES:
+            rng = adot_cn.node_adot_in_package_json(zf.read(info).decode("utf-8", "replace"))
+            if rng is not None:
+                out["adot"], out["adot_node"] = "node", rng
+    elif any(n.endswith(".py") for n in rel):
+        out["runtime"] = "python"
+    return out
 
 
 def _requirements_text(path: Path, root: str) -> str | None:
@@ -238,16 +301,28 @@ def stage_upload(
     uploaded_at: str,
     python_version: str = "PYTHON_3_13",
     s3_client: Any = None,
+    uploaded_by_id: str | None = None,
 ) -> dict[str, Any]:
     """Validate the staged temp zip, store object + manifest to S3, return the
     manifest. The caller has already streamed the request body to ``tmp_zip``
-    (enforcing the 250 MiB cap) and computed its digest."""
+    (enforcing the 250 MiB cap) and computed its digest.
+
+    ``uploaded_by_id`` (N16-obs77) is the uploader's ``users.id`` (``None`` for the
+    config-driven admin) — the manifest's ``created_by`` for the workspace-visibility rule
+    (users-and-ownership §7) ``get_byoc_upload`` applies; ``uploaded_by`` stays the
+    display name."""
     bucket = workspace.resources.get("artifacts_bucket")
     if not bucket:
         raise RuntimeError(
             "artifacts_bucket missing from this workspace's resource map — run its bootstrap"
         )
     report = validate_and_detect(tmp_zip)
+    # N17-obs465: whether the deploy adds the aws-cn trace exporter layer (the spec may still
+    # opt out with byoc.cn_trace_exporter=false; only container_source deploys build it)
+    tele = report["detected"]["telemetry"]
+    tele["cn_exporter"] = (
+        "will_apply" if workspace.partition == "aws-cn" and tele.get("adot") == "node"
+        else "not_applicable")
     if report["detected"]["has_requirements"]:
         report["detected"]["requirements"] = check_requirements(
             tmp_zip, report["root_prefix"], python_version
@@ -265,6 +340,7 @@ def stage_upload(
         "size_bytes": size_bytes,
         "original_filename": filename,
         "uploaded_by": uploaded_by,
+        "uploaded_by_id": uploaded_by_id,
         "uploaded_at": uploaded_at,
         **report,
     }

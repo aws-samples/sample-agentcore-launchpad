@@ -1,12 +1,13 @@
 # skilleval — optimize a user skill against a rubric-judged task set.
-# Small-budget demo defaults: exec target (Claude Code) + chat judge/optimizer.
+# Small-budget demo defaults: exec target (OpenCode on Global Bedrock, Kimi K3)
+# + Bedrock Converse chat judge/optimizer (GLM 5.3) — LAUNCHPAD PATCH (D10/D16).
 _base_: ../_base_/default.yaml
 
 model:
-  target_backend: claude_code_exec
-  target: claude-opus-4-8
-  optimizer_backend: openai_chat
-  optimizer: openai.gpt-5.6-sol
+  target_backend: opencode_exec
+  target: global.moonshotai.kimi-k3
+  optimizer_backend: bedrock_chat
+  optimizer: global.zai.glm-5.3
   reasoning_effort: medium
 
 train:
@@ -53,8 +54,8 @@ env:
   # where AppArmor blocks unprivileged bwrap (e.g. Ubuntu 24.04), set
   # judge_sandbox_command: "sudo -n bwrap". See the design doc's Deployment
   # Requirements section.
-  judge_mode: auto
-  judge_backend: claude_code_exec
+  judge_mode: chat
+  judge_backend: opencode_exec
   judge_model: ""
   judge_timeout: 300
   judge_effort: low

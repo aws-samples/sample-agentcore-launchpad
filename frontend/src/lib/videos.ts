@@ -2,9 +2,13 @@ export type VideoLocale = "en" | "zh-CN";
 export type VideoText = Record<VideoLocale, string>;
 export type ConsoleVersion = "v2" | "classic";
 export type VideoVersionFilter = ConsoleVersion | "all";
+/** a recording, or a document (workshop manual: PDF / self-contained HTML opened in a new tab) */
+export type ContentKind = "video" | "document";
+export type DocumentFormat = "pdf" | "html";
 
 export interface LibraryVideo {
   id: string;
+  kind: ContentKind;
   consoleVersion: ConsoleVersion;
   title: VideoText;
   description: VideoText;
@@ -12,6 +16,10 @@ export interface LibraryVideo {
   durationSeconds: number;
   language: string;
   posterUrl: string;
+  /** document only: the file the console opens in a new tab ("" for a recording) */
+  documentUrl: string;
+  /** document only: the same manual in the other format (PDF ↔ HTML) */
+  altUrl: string | null;
   sources: { url: string; type: string }[];
   captions: { url: string; language: string; label: string }[];
   chapters: { startSeconds: number; title: VideoText }[];
@@ -49,12 +57,15 @@ export interface VideoContent {
   category_id: string;
   section_id: string;
   console_version: ConsoleVersion;
+  kind: ContentKind;
   title: VideoText;
   description: VideoText;
   cdn_url: string;
   webm_url: string | null;
   poster_url: string | null;
   caption_url: string | null;
+  /** document only: the other-format twin of `cdn_url` */
+  alt_url: string | null;
   duration_seconds: number;
   chapters: LibraryVideo["chapters"];
   sort_order: number;
@@ -114,10 +125,19 @@ export function videoCollectionsByVersion(
   }));
 }
 
-/** The V2 recordings of the module whose sidebar entry is `path`, or null when it has none. */
+/** The V2 recordings of the module whose sidebar entry is `path`, or null when it has none.
+ *  Documents never play in the per-module drawer, so they are left out here. */
 export function moduleVideoCollection(catalog: VideoCatalog, path: string): VideoCollection | null {
-  return videoCollectionsByVersion(videoCollections(catalog), "v2")
-    .find((collection) => collection.path === path) ?? null;
+  const collection = videoCollectionsByVersion(videoCollections(catalog), "v2")
+    .find((item) => item.path === path);
+  if (!collection) return null;
+  const videos = collection.videos.filter((video) => video.kind === "video");
+  return videos.length ? { ...collection, videos } : null;
+}
+
+/** `.pdf` → "pdf"; anything else the backend accepted for a document is `.html`. */
+export function documentFormat(url: string): DocumentFormat {
+  return url.toLowerCase().endsWith(".pdf") ? "pdf" : "html";
 }
 
 export function videoTimestamp(seconds: number): string {

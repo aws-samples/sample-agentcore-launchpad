@@ -40,3 +40,12 @@
   .v2 .v2-registry-layout, .v2 .v2-registry-layout.reverse, .v2 .v2-stages.v2-registry-flow { grid-template-columns: 1fr; }
   .v2 .v2-options.v2-registry-sources { grid-template-columns: 1fr; }
 }
+
+/* N17-obs267: the publisher list's status tabs (待审批 / 已发布 / 草稿 / 已驳回 / 全部) */
+.v2-registry-status-tabs { margin-bottom: 12px; }
+.v2-registry-status-tabs button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 14px; font-size: 14px; }
+.v2-registry-tab-count {
+  min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--v2-fill); color: var(--v2-ink-3);
+  font-size: 12px; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.v2-registry-tab-count.attention { background: #d25f00; color: #fff; font-weight: 600; }

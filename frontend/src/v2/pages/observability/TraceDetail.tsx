@@ -1,6 +1,7 @@
 import { RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { cacheHint, tokenSplit } from "../../judgeTokens";
 import { useSearchParams } from "react-router-dom";
 
 import {
@@ -14,9 +15,10 @@ import {
 import { fmtDuration, fmtNumber, fmtTime } from "../../format";
 import { useLoad } from "../../hooks";
 import { Alert, Button, Card, Descriptions, FlowHeader, LinkButton, Spin, Tag } from "../../ui";
-import { approxCost, shortId, TRACE_ID_RE } from "./common";
+import { shortId, TRACE_ID_RE } from "./common";
 import { CopyId } from "./SessionList";
 import { TraceStatusTag } from "./TraceList";
+import { awsStatusLabel } from "../../awsStatus";
 
 type Category = ObsSpanNode["category"];
 const CATEGORIES: Category[] = ["llm", "tool", "memory", "gateway", "http", "agent", "other"];
@@ -30,6 +32,7 @@ function flatten(nodes: ObsSpanNode[], out: ObsSpanNode[] = []): ObsSpanNode[] {
 }
 
 function MessageList({ label, messages }: { label: string; messages: ObsSpanMessage[] }) {
+  const { t } = useTranslation();
   return (
     <>
       <div className="v2-sub-title">{label}</div>
@@ -51,7 +54,7 @@ function MessageList({ label, messages }: { label: string; messages: ObsSpanMess
                 </div>
               ) : block.type === "tool_result" ? (
                 <div className="tool" key={j}>
-                  ✓ {block.status ?? "result"} · {block.text}
+                  ✓ {block.status ? awsStatusLabel(t, block.status) : t("v2.observability.toolResult.result")} · {block.text}
                 </div>
               ) : (
                 <div className="text v2-muted" key={j}>
@@ -104,8 +107,8 @@ function SpanPanel({ span, detail }: { span: ObsSpanNode; detail: ObsTraceDetail
           {
             label: t("v2.observability.col.status"),
             value: (
-              <Tag tone={failed ? "red" : "green"}>
-                {span.status}
+              <Tag tone={failed ? "red" : "green"} title={span.status}>
+                {awsStatusLabel(t, span.status)}
                 {httpStatus != null ? ` · http ${httpStatus}` : ""}
               </Tag>
             ),
@@ -123,10 +126,17 @@ function SpanPanel({ span, detail }: { span: ObsSpanNode; detail: ObsTraceDetail
           <Descriptions
             one
             items={[
-              { label: t("v2.observability.chart.input"), value: fmtNumber(span.tokens.input) },
+              {
+                label: t("v2.observability.chart.input"),
+                // N17-obs439: the whole prompt; the cache split stays in the next row and the tooltip
+                value: (
+                  <span title={cacheHint(t, tokenSplit(span.tokens), fmtNumber)} data-testid="v2-obs-span-input">
+                    {fmtNumber(tokenSplit(span.tokens).prompt)}
+                  </span>
+                ),
+              },
               { label: t("v2.observability.chart.output"), value: fmtNumber(span.tokens.output) },
               { label: t("v2.observability.span.cacheRw"), value: `${fmtNumber(span.tokens.cache_read)} / ${fmtNumber(span.tokens.cache_write)}` },
-              { label: t("v2.observability.span.cost"), value: approxCost(span.est_cost_usd) },
             ]}
           />
         </>
@@ -250,13 +260,17 @@ export function TraceDetail({ traceId, range }: { traceId: string; range: V2Rang
                 { label: t("v2.observability.col.spansLlm"), value: `${meta.span_count} / ${meta.llm_count}` },
                 {
                   label: "Tokens",
-                  value: t("v2.observability.tokensDetail", {
-                    total: fmtNumber(meta.tokens.total),
-                    input: fmtNumber(meta.tokens.input),
-                    output: fmtNumber(meta.tokens.output),
-                  }),
+                  // N17-obs439: input = the whole prompt (cache reads / writes included)
+                  value: (
+                    <span title={cacheHint(t, tokenSplit(meta.tokens), fmtNumber)} data-testid="v2-obs-tokens-detail">
+                      {t("v2.observability.tokensDetail", {
+                        total: fmtNumber(meta.tokens.total),
+                        input: fmtNumber(tokenSplit(meta.tokens).prompt),
+                        output: fmtNumber(meta.tokens.output),
+                      })}
+                    </span>
+                  ),
                 },
-                { label: t("v2.observability.span.cost"), value: approxCost(meta.est_cost_usd) },
               ]}
             />
           </Card>
@@ -289,7 +303,7 @@ export function TraceDetail({ traceId, range }: { traceId: string; range: V2Rang
                       <span className="nm" style={{ paddingLeft: Math.min(row.depth, 8) * 14 }} title={row.name}>
                         <i className={`v2-observability-dot ${row.category}`} />
                         <span className="t">{row.tool_name ?? row.name}</span>
-                        {row.status === "ERROR" && <Tag tone="red">ERROR</Tag>}
+                        {row.status === "ERROR" && <Tag tone="red">{awsStatusLabel(t, "ERROR")}</Tag>}
                       </span>
                       <span className="lane">
                         <span className="track">

@@ -3,7 +3,8 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
-import { hasInsightTrees, type InsightCluster } from "../lib/evaluation";
+import { failureDetectionTotals, hasInsightTrees, type InsightCluster } from "../lib/evaluation";
+import { FailureDetectionNote } from "./InsightClusters";
 import type { V2Task } from "./tasks";
 import { Button, Card, Descriptions, Drawer, LinkButton, Segmented, Spin, Tag, type TagTone } from "./ui";
 
@@ -180,6 +181,17 @@ export function InsightsPanel({ tasks, loading, needle }: { tasks: V2Task[]; loa
   const [open, setOpen] = useState<MergedCluster | null>(null);
 
   const merged = useMemo(() => mergeClusters(tasks), [tasks]);
+  // N17-obs449: the failure analysis' own counts over every task in scope
+  const detection = useMemo(() => {
+    const parts = tasks.map((task) => failureDetectionTotals(task.run?.insights)).filter((d) => d !== null);
+    if (!parts.length) return null;
+    return parts.reduce((acc, p) => ({
+      sessions: acc.sessions + p.sessions,
+      incomplete: acc.incomplete + p.incomplete,
+      lowConfidenceDropped: acc.lowConfidenceDropped + p.lowConfidenceDropped,
+      threshold: acc.threshold ?? p.threshold,
+    }));
+  }, [tasks]);
   const withTrees = tasks.filter((task) => hasInsightTrees(task.run?.insights)).length;
   const failedSessions = useMemo(() => {
     const ids = new Set(merged.failures.flatMap((c) => c.sessionIds));
@@ -219,6 +231,7 @@ export function InsightsPanel({ tasks, loading, needle }: { tasks: V2Task[]; loa
             <Stat label={t("v2.insights.panel.intents")} value={merged.userIntents.length} />
             <Stat label={t("v2.insights.panel.summaries")} value={merged.executionSummaries.length} />
           </div>
+          {section === "failures" && <FailureDetectionNote totals={detection} clusters={merged.failures.length} />}
           {withTrees === 0 ? (
             <p className="v2-muted">{t("v2.insights.panel.emptyTrees")}</p>
           ) : (

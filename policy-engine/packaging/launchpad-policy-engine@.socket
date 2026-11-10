@@ -1,0 +1,17 @@
+# Data-plane socket of shard %i (systemd socket activation): the listening socket outlives
+# a restart of the service, so connections queue during a warm restart instead of being
+# refused (§13.5). The address is a per-instance drop-in written by install.sh:
+#   /etc/systemd/system/launchpad-policy-engine@<n>.socket.d/listen.conf
+#   [Socket]
+#   ListenStream=<host private IP>:<7443 + n>
+# Nothing is world-accessible: the private IP only, and the host SG admits the
+# interceptor Lambda's SG alone on 7443-7444.
+[Unit]
+Description=Launchpad policy engine shard %i (data-plane socket)
+
+[Socket]
+NoDelay=true
+Backlog=512
+
+[Install]
+WantedBy=sockets.target

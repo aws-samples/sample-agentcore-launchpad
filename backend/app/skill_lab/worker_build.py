@@ -1,10 +1,15 @@
 """Skill Lab exec-worker image: build-context assembly + CodeBuild build.
 
-The worker image is the vendored SkillOpt agentcore_worker (claude CLI pinned
-inside the Dockerfile) built for linux/arm64 by the shared launchpad-agent-builder
-CodeBuild project, pushed as a content-addressed tag into the shared
-launchpad-agents ECR repository (a separate repo would need a CodeBuild role
-policy widening; a tag namespace does not).
+The worker image is the vendored SkillOpt agentcore_worker with the OpenCode CLI
+pinned inside the Dockerfile (D16), built for linux/arm64 by the shared
+launchpad-agent-builder CodeBuild project, pushed as a content-addressed tag into
+the shared launchpad-agents ECR repository (a separate repo would need a CodeBuild
+role policy widening; a tag namespace does not). The buildspec is rendered here from
+Settings so every China mirror (base image, apt, the CodeBuild pip index + its
+fallback, npm registry) reaches the Dockerfile as a build arg — and is part of the
+content hash, so a mirror change rolls the image. The pip index is the BUILD mirror
+(`codebuild_pip_index_url`), not the host mirror: tuna 4xx-blocks CodeBuild's egress
+(N11-r3-bug7).
 """
 
 from __future__ import annotations
@@ -24,15 +29,92 @@ from app.services.workspace import WorkspaceContext
 
 VENDOR_ROOT = REPO_ROOT / "vendor" / "skillopt"
 WORKER_DOCKERFILE = VENDOR_ROOT / "deploy" / "agentcore" / "Dockerfile"
-WORKER_CODEX_CONFIG = VENDOR_ROOT / "deploy" / "agentcore" / "codex-config.toml"
 WORKER_PACKAGE_DIR = VENDOR_ROOT / "skillopt"
-# The buildspec contract (ECR login → docker build arm64 → push) is shared with
-# the 方式A container path; reuse its file verbatim.
-BUILDSPEC_TEMPLATE = (
-    REPO_ROOT / "backend" / "app" / "templates" / "claude_sdk_agent" / "buildspec.yml"
-)
 SOURCE_ZIP_KEY = "builds/skill-lab-worker/source.zip"
 IMAGE_TAG_PREFIX = "skill-lab-worker-"
+# Keep in step with scripts/mirror_base_images.sh (the one image the mirror holds).
+WORKER_BASE_IMAGE = "python:3.13-slim"
+# Public mirror of that image for a build without the ECR mirror (spike §6 verified
+# the arm64 manifest from cn-northwest-1-reachable hosts) — the Dockerfile default.
+WORKER_BASE_IMAGE_PUBLIC_MIRROR = "docker.m.daocloud.io/library/" + WORKER_BASE_IMAGE
+
+# Same contract as backend/app/deployer/buildspec.yml (ECR login → docker build
+# arm64 → push), with the worker's extra build args rendered from Settings.
+_BUILDSPEC_TEMPLATE = """version: 0.2
+
+# Rendered by backend/app/skill_lab/worker_build.py — the mirrors come from Settings
+# (codebuild_pip_index_url + codebuild_pip_fallback_index_url, npm_registry, apt_mirror,
+# base_image_mirror_*) and are part of the image's content hash. Env via start_build
+# environmentVariablesOverride: AWS_REGION, ECR_REGISTRY, ECR_REPO, IMAGE_TAG.
+phases:
+  pre_build:
+    commands:
+      - echo "logging in to $ECR_REGISTRY"
+      - >-
+        aws ecr get-login-password --region $AWS_REGION
+        | docker login --username AWS --password-stdin $ECR_REGISTRY
+      - |
+        # N11-r3-bug7: both live worker builds died inside `docker build` with pip's
+        # opaque "No matching distribution found" 0.2 s after "Looking in indexes" — an
+        # immediate 4xx from the mirror to the CodeBuild egress. Probe the primary and
+        # the fallback index first; the HTTP codes land in the log, and the build fails
+        # here, before `docker build`, only when NEITHER answers (the Dockerfile falls
+        # back to the second index on its own).
+        reachable=0
+        for idx in "{pip_index_url}" "{pip_fallback_index_url}"; do
+          url="${{idx%/}}/uv/"
+          code="$(curl -sS -o /dev/null -w '%{{http_code}}' --max-time 30 "$url")" || true
+          echo "pypi pre-flight: $url -> HTTP $code"
+          case "$code" in 2*|3*) reachable=1 ;; esac
+        done
+        if [ "$reachable" != 1 ]; then
+          echo "pypi pre-flight FAILED: neither index answers the CodeBuild egress (codes above)"
+          exit 1
+        fi
+  build:
+    commands:
+      - echo "building $ECR_REPO:$IMAGE_TAG (linux/arm64, skill-lab worker)"
+      - |
+        docker build --platform linux/arm64 \\
+          --build-arg BASE_IMAGE="{base_image}" \\
+          --build-arg APT_MIRROR="{apt_mirror}" \\
+          --build-arg PIP_INDEX_URL="{pip_index_url}" \\
+          --build-arg PIP_FALLBACK_INDEX_URL="{pip_fallback_index_url}" \\
+          --build-arg PIP_EXTRA_INDEX_URL="{pip_extra_index_url}" \\
+          --build-arg NPM_CONFIG_REGISTRY="{npm_registry}" \\
+          --build-arg OPENCODE_VERSION="{opencode_version}" \\
+          -t $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG .
+  post_build:
+    commands:
+      - docker push $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG
+      - echo "pushed $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG"
+"""
+
+
+def worker_base_image(workspace: WorkspaceContext) -> str:
+    """The Dockerfile's base: the ECR mirror copy when the CN mirror is on
+    (scripts/mirror_base_images.sh populated it), else the public China mirror."""
+    settings = get_settings()
+    if settings.base_image_mirror_enabled:
+        return (
+            f"{workspace.account_id}.dkr.ecr.{workspace.region}.{workspace.dns_suffix}/"
+            f"{settings.base_image_mirror_prefix}/{WORKER_BASE_IMAGE}"
+        )
+    return WORKER_BASE_IMAGE_PUBLIC_MIRROR
+
+
+def render_buildspec(workspace: WorkspaceContext) -> str:
+    settings = get_settings()
+    return _BUILDSPEC_TEMPLATE.format(
+        base_image=worker_base_image(workspace),
+        apt_mirror=settings.apt_mirror,
+        # N11-r3-bug7: the BUILD mirrors, never the host mirror (tuna 4xx-blocks CodeBuild)
+        pip_index_url=settings.codebuild_pip_index_url,
+        pip_fallback_index_url=settings.codebuild_pip_fallback_index_url,
+        pip_extra_index_url=settings.pip_extra_index_url,
+        npm_registry=settings.npm_registry,
+        opencode_version=settings.skill_lab_worker_opencode_version,
+    )
 
 _COPY_IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store")
 
@@ -44,10 +126,7 @@ def _iter_context_files() -> list[tuple[str, Path]]:
             f"vendored skillopt package missing: {WORKER_PACKAGE_DIR} — "
             "the vendor/skillopt tree must be present to build the worker image"
         )
-    pairs: list[tuple[str, Path]] = [
-        ("Dockerfile", WORKER_DOCKERFILE),
-        ("buildspec.yml", BUILDSPEC_TEMPLATE),
-    ]
+    pairs: list[tuple[str, Path]] = [("Dockerfile", WORKER_DOCKERFILE)]
     for path in sorted(WORKER_PACKAGE_DIR.rglob("*")):
         if not path.is_file():
             continue
@@ -58,35 +137,20 @@ def _iter_context_files() -> list[tuple[str, Path]]:
     return pairs
 
 
-def _codex_catalog_bytes() -> bytes:
-    """The bedrock model catalog staged into codex-home, read from the backend
-    host (settings.skill_lab_codex_catalog_path). `{}` mirrors upstream
-    build_and_push.sh's fallback when the host has no catalog — the file embeds
-    proprietary model instructions, so it is never committed to this repo."""
-    path = Path(get_settings().skill_lab_codex_catalog_path).expanduser()
-    if path.is_file():
-        return path.read_bytes()
-    return b"{}"
+def _extra_context_blobs(workspace: WorkspaceContext) -> list[tuple[str, bytes]]:
+    """In-memory build-context files (sorted, hashed alongside the file pairs):
+    the buildspec rendered from Settings for this workspace."""
+    return [("buildspec.yml", render_buildspec(workspace).encode("utf-8"))]
 
 
-def _extra_context_blobs() -> list[tuple[str, bytes]]:
-    """In-memory build-context files (sorted, hashed alongside the file pairs).
-
-    codex-home/ is assembled here rather than committed: config.toml is the
-    vendored launchpad variant; the model catalog comes from the host."""
-    return [
-        ("codex-home/config.toml", WORKER_CODEX_CONFIG.read_bytes()),
-        ("codex-home/model-catalogs/bedrock-models.json", _codex_catalog_bytes()),
-    ]
-
-
-def context_content_hash() -> str:
-    """sha256 over every file that reaches the build context. The image tag is
-    derived from this, so 'rebuild when sources change' is a tag lookup."""
+def context_content_hash(workspace: WorkspaceContext) -> str:
+    """sha256 over every file that reaches the build context (incl. the rendered
+    buildspec, so a mirror/pin change rolls the image). The image tag is derived
+    from this, so 'rebuild when sources change' is a tag lookup."""
     digest = hashlib.sha256()
     for name, payload in [
         *((name, path.read_bytes()) for name, path in _iter_context_files()),
-        *_extra_context_blobs(),
+        *_extra_context_blobs(workspace),
     ]:
         digest.update(name.encode())
         digest.update(b"\0")
@@ -95,19 +159,18 @@ def context_content_hash() -> str:
     return digest.hexdigest()
 
 
-def image_tag(content_hash: str | None = None) -> str:
-    return IMAGE_TAG_PREFIX + (content_hash or context_content_hash())[:12]
+def image_tag(content_hash: str) -> str:
+    return IMAGE_TAG_PREFIX + content_hash[:12]
 
 
-def assemble_worker_context(target_dir: Path) -> Path:
-    """Stage Dockerfile + buildspec + the vendored skillopt package + codex-home."""
+def assemble_worker_context(target_dir: Path, workspace: WorkspaceContext) -> Path:
+    """Stage Dockerfile + the rendered buildspec + the vendored skillopt package."""
     if target_dir.exists():
         shutil.rmtree(target_dir)
     target_dir.mkdir(parents=True)
     shutil.copy2(WORKER_DOCKERFILE, target_dir / "Dockerfile")
-    shutil.copy2(BUILDSPEC_TEMPLATE, target_dir / "buildspec.yml")
     shutil.copytree(WORKER_PACKAGE_DIR, target_dir / "skillopt", ignore=_COPY_IGNORE)
-    for name, payload in _extra_context_blobs():
+    for name, payload in _extra_context_blobs(workspace):
         dest = target_dir / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(payload)
@@ -147,7 +210,7 @@ def ensure_worker_image(
             "resource map — run the base bootstrap first"
         )
     registry = repo_uri.split("/", 1)[0]
-    tag = image_tag()
+    tag = image_tag(context_content_hash(workspace))
     ecr_client = workspace.client("ecr")
 
     if _tag_exists(ecr_client, repo, tag):
@@ -155,10 +218,8 @@ def ensure_worker_image(
         log(f"worker image up to date · :{tag} @ {digest[:19]}…")
         return {"tag": tag, "digest": digest, "uri": f"{repo_uri}@{digest}"}
 
-    if not Path(get_settings().skill_lab_codex_catalog_path).expanduser().is_file():
-        log("codex model catalog missing on this host — staging empty `{}` catalog")
     with tempfile.TemporaryDirectory(prefix="skill_lab_worker_ctx_") as tmp:
-        context_dir = assemble_worker_context(Path(tmp) / "ctx")
+        context_dir = assemble_worker_context(Path(tmp) / "ctx", workspace)
         archive = shutil.make_archive(str(context_dir) + "_src", "zip", context_dir)
         workspace.client("s3").upload_file(archive, bucket, SOURCE_ZIP_KEY)
     log(f"worker build context → s3://{bucket}/{SOURCE_ZIP_KEY}")

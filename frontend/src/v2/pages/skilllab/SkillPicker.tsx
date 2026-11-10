@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { api, errorMessage, type RegistryRecordOut } from "../../../lib/api";
 import { Alert, Button, SearchInput, Segmented, Table, Tag, type TagTone } from "../../ui";
 import { type SourceState, useSkillRecords } from "./state";
+import { statusLabel } from "../registry/common";
 
 const RECORD_TONE: Record<string, TagTone> = {
   DRAFT: "gray",
@@ -78,7 +79,7 @@ function RecordTable({
               key: "status",
               title: t("skillLab.eval.col.status"),
               width: 150,
-              render: (r) => <Tag tone={RECORD_TONE[r.status] ?? "gray"}>{r.status}</Tag>,
+              render: (r) => <Tag tone={RECORD_TONE[r.status] ?? "gray"}>{statusLabel(t, r.status)}</Tag>,
             },
           ]}
           rows={rows}

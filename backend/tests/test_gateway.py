@@ -1,4 +1,11 @@
-"""Gateway bootstrap idempotency, MCP client parsing, harness gateway mapping."""
+"""Gateway bootstrap idempotency, MCP client parsing.
+
+``app.deployer.harness.build_create_params``/``app.services.agentcore.harness``
+(the harness gateway-tool-mapping and user-gateway-override coverage that used to
+live here) were removed with the AWS Harness deploy/invoke paths (N1 Task 2) —
+there is no Harness CreateHarness payload builder in this build. Everything above
+is independent of that and still runs.
+"""
 
 import json
 from contextlib import nullcontext
@@ -7,19 +14,15 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from botocore.exceptions import ClientError
 
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError
-from app.deployer.harness import build_create_params
 from app.models.ledger import Workspace
 from app.routers import tools as tools_router
 from app.routers.workspaces import WORKSPACE_HEADER
-from app.schemas.agent import AgentSpec
 from app.services import aws_clients, mcp_client
 from app.services import gateway_bootstrap as gb
-from app.services.agentcore.harness import user_authenticated_tools
-from tests.conftest import set_default_resources, ws_ctx
+from app.services.workspace import WorkspaceContext
 
 GW_ARN = "arn:aws:bedrock-agentcore:us-west-2:111:gateway/launchpad-gw-abc"
 OAUTH_ARN = (
@@ -65,25 +68,18 @@ def make_control(gateways=(), targets=(), api_providers=(), oauth_providers=()):
 
 def test_ensure_gateway_reuses_existing():
     control = make_control(gateways=[{"name": "launchpad-gw", "gatewayId": "launchpad-gw-abc"}])
-    gw, created = gb.ensure_gateway(
-        control, role_arn="arn:role", user_pool_id="p", client_id="c", region="us-west-2"
-    )
+    gw, created = gb.ensure_gateway(control, role_arn="arn:role", region="us-west-2")
     assert created is False and gw["arn"] == GW_ARN
     control.create_gateway.assert_not_called()
 
 
-def test_ensure_gateway_creates_with_jwt_auth():
+def test_ensure_gateway_creates_an_iam_authorized_gateway():
     control = make_control()
-    gw, created = gb.ensure_gateway(
-        control, role_arn="arn:role", user_pool_id="us-west-2_ABC", client_id="cid",
-        region="us-west-2",
-    )
+    gw, created = gb.ensure_gateway(control, role_arn="arn:role", region="us-west-2")
     assert created is True
     kwargs = control.create_gateway.call_args.kwargs
-    assert kwargs["authorizerType"] == "CUSTOM_JWT"
-    jwt = kwargs["authorizerConfiguration"]["customJWTAuthorizer"]
-    assert "us-west-2_ABC/.well-known/openid-configuration" in jwt["discoveryUrl"]
-    assert jwt["allowedClients"] == ["cid"]
+    assert kwargs["authorizerType"] == "AWS_IAM"
+    assert "authorizerConfiguration" not in kwargs
 
 
 def test_ensure_targets_idempotent():
@@ -111,91 +107,37 @@ def test_openapi_target_injects_server_and_api_key():
     assert akp["credentialLocation"] == "HEADER"
 
 
-def test_ensure_gateway_allows_client_appends_once():
+def test_ensure_gateway_still_creates_an_iam_authorized_gateway():
     control = make_control()
-    changed = gb.ensure_gateway_allows_client(control, "gw", "m2m-id")
-    assert changed is True
-    updated = control.update_gateway.call_args.kwargs
-    assert updated["authorizerConfiguration"]["customJWTAuthorizer"]["allowedClients"] == [
-        "console", "m2m-id",
+    gw, created = gb.ensure_gateway(
+        control, role_arn="arn:aws-cn:iam::1:role/gw", region="cn-northwest-1",
+    )
+    assert created
+    kwargs = control.create_gateway.call_args.kwargs
+    assert kwargs["authorizerType"] == "AWS_IAM"
+    assert "authorizerConfiguration" not in kwargs
+
+
+def test_lambda_target_uses_gateway_iam_role_credential_provider(tmp_path, monkeypatch):
+    control = make_control()
+    gb.ensure_lambda_target(control, "gw-1", "arn:aws-cn:lambda:cn-northwest-1:1:function:hr")
+    kwargs = control.create_gateway_target.call_args.kwargs
+    assert kwargs["credentialProviderConfigurations"] == [
+        {"credentialProviderType": "GATEWAY_IAM_ROLE"}
     ]
-    # second call: already present
-    control2 = make_control()
-    control2.get_gateway.return_value["authorizerConfiguration"]["customJWTAuthorizer"][
-        "allowedClients"
-    ] = ["console", "m2m-id"]
-    assert gb.ensure_gateway_allows_client(control2, "gw", "m2m-id") is False
-    control2.update_gateway.assert_not_called()
 
 
-def test_harness_gateway_tool_mapping():
-    spec = AgentSpec(
-        name="gw-agent",
-        method="harness",
-        system_prompt="x",
-        tools=[{"type": "gateway", "name": "hr-database"}],
+def test_openapi_target_still_uses_api_key_credential_provider():
+    control = make_control()
+    gb.ensure_openapi_target(
+        control,
+        "gw-1",
+        "https://facts.example",
+        "arn:aws-cn:bedrock-agentcore:cn-northwest-1:1:token-vault/default/apikeycredentialprovider/x",
     )
-    params = build_create_params(
-        spec, "arn:role", None,
-        gateway={"arn": GW_ARN, "oauth_provider_arn": OAUTH_ARN},
-    )
-    tool = params["tools"][0]
-    assert tool["type"] == "agentcore_gateway"
-    cfg = tool["config"]["agentCoreGateway"]
-    assert cfg["gatewayArn"] == GW_ARN
-    assert cfg["outboundAuth"]["oauth"] == {
-        "providerArn": OAUTH_ARN,
-        "grantType": "CLIENT_CREDENTIALS",
-        "scopes": ["launchpad-gw/invoke"],
-    }
-
-
-def test_harness_gateway_ignored_without_config():
-    spec = AgentSpec(
-        name="gw-agent", method="harness", system_prompt="x",
-        tools=[{"type": "gateway", "name": "hr-database"}],
-    )
-    params = build_create_params(spec, "arn:role", None, gateway=None)
-    assert "tools" not in params
-
-
-def test_harness_user_gateway_override_preserves_other_tools():
-    tools = user_authenticated_tools(
-        {
-            "tools": [
-                {"type": "builtin", "name": "browser", "config": {}},
-                {
-                    "type": "mcp",
-                    "name": "docs",
-                    "config": {"url": "https://mcp.example/docs"},
-                },
-                {
-                    "type": "gateway",
-                    "name": "hr-database",
-                    "config": {"gateway_id": "launchpad-gw-abc"},
-                },
-            ],
-            "knowledge_bases": [{"kb_id": "KB1"}],
-        },
-        {
-            "gateway_id": "launchpad-gw-abc",
-            "gateway_url": "https://gw.example/mcp",
-            "kb_gateway_arn": "arn:kb-gw",
-            "oauth_provider_arn": OAUTH_ARN,
-        },
-        "trusted-user-jwt",
-    )
-    assert [tool["type"] for tool in tools] == [
-        "agentcore_browser",
-        "remote_mcp",
-        "remote_mcp",
-        "agentcore_gateway",
-    ]
-    user_gateway = tools[2]["config"]["remoteMcp"]
-    assert user_gateway == {
-        "url": "https://gw.example/mcp",
-        "headers": {"Authorization": "Bearer trusted-user-jwt"},
-    }
+    kwargs = control.create_gateway_target.call_args.kwargs
+    cp = kwargs["credentialProviderConfigurations"][0]
+    assert cp["credentialProviderType"] == "API_KEY"
 
 
 def test_mcp_client_parses_sse_and_json(monkeypatch):
@@ -214,43 +156,21 @@ def test_mcp_client_parses_sse_and_json(monkeypatch):
 
 
 def test_mcp_rpc_raises_envelope_on_401(monkeypatch):
-    def fake_post(url, json=None, headers=None, timeout=None):
+    ws = WorkspaceContext(account_id="1", region="cn-northwest-1")
+    ws.resources["gateway_url"] = "https://gw/mcp"
+    monkeypatch.setattr(
+        WorkspaceContext,
+        "credentials",
+        lambda self: SimpleNamespace(access_key="AK", secret_key="SK", token=None),
+    )
+
+    def fake_post(url, *, headers=None, content=None, timeout=None):
         return httpx.Response(401, text="Unauthorized", request=httpx.Request("POST", url))
 
     monkeypatch.setattr(mcp_client.httpx, "post", fake_post)
     with pytest.raises(AppError) as err:
-        mcp_client._rpc("https://gw/mcp", "tok", "tools/list")
+        mcp_client._rpc(ws, "tools/list")
     assert err.value.code == "gateway.unauthorized"
-
-
-def test_mcp_cognito_auth_rejection_becomes_app_error(monkeypatch):
-    cognito = MagicMock()
-    cognito.initiate_auth.side_effect = ClientError(
-        {
-            "Error": {
-                "Code": "NotAuthorizedException",
-                "Message": "Incorrect username or password.",
-            }
-        },
-        "InitiateAuth",
-    )
-    set_default_resources(
-        {"user_pool_client_id": "client-id", "gateway_url": "https://gw.example/mcp"}
-    )
-    monkeypatch.setattr(
-        mcp_client,
-        "load_yaml_config",
-        lambda: {"demo_users": {"passwords": {"admin": "stale-password"}}},
-    )
-    monkeypatch.setattr(aws_clients, "client", lambda *args, **kwargs: cognito)
-    mcp_client._token_cache.clear()
-
-    with pytest.raises(AppError) as err:
-        mcp_client.get_cognito_token(ws_ctx({"user_pool_client_id": "client-id"}))
-
-    assert err.value.code == "gateway.credentials_rejected"
-    assert err.value.status_code == 503
-    assert err.value.detail == {"aws_code": "NotAuthorizedException"}
 
 
 def test_tool_catalog_degrades_when_gateway_credentials_are_rejected(client, monkeypatch):
@@ -272,30 +192,75 @@ def test_tool_catalog_degrades_when_gateway_credentials_are_rejected(client, mon
     assert {tool["name"] for tool in body["tools"]} == {"code-interpreter", "browser"}
 
 
-def test_browser_demo_retains_live_session_until_stopped(client, monkeypatch):
+# N15-obs17: the data-plane endpoint botocore resolved for an aws-cn region — the ONLY
+# host the demo may sign its stream / live-view URLs against (SDK 1.17.0 builds a Global one)
+CN_DATA_PLANE = "https://bedrock-agentcore.cn-northwest-1.amazonaws.com.cn"
+DEMO_SESSION = "01KXNH955ZJWTEVR5PFHGE827F"
+
+
+def _fake_browser_client(data_plane_client=None):
+    """A `BrowserClient` double with the attributes the partition-aware signing reads
+    (`region`, `identifier`, `session_id`, `data_plane_client.meta.endpoint_url`). The SDK's
+    own URL builders are present but trip: the demo must never call them (N15-obs17)."""
+
     class FakeBrowserClient:
         instances = []
 
         def __init__(self, region):
             self.region = region
+            self.identifier = None
             self.session_id = None
             self.started_with = None
             self.stopped = False
+            self.data_plane_client = data_plane_client or SimpleNamespace()
+            self.data_plane_client.meta = SimpleNamespace(endpoint_url=CN_DATA_PLANE)
             self.instances.append(self)
 
         def start(self, **kwargs):
             self.started_with = kwargs
-            self.session_id = "01KXNH955ZJWTEVR5PFHGE827F"
+            self.identifier = kwargs["identifier"]
+            self.session_id = DEMO_SESSION
 
-        def generate_ws_headers(self):
-            return "wss://browser.example/automation", {"Authorization": "signed"}
+        def generate_ws_headers(self):  # pragma: no cover — must not be reached
+            raise AssertionError("SDK generate_ws_headers builds a Global host (N15-obs17)")
 
-        def generate_live_view_url(self, expires):
-            assert expires == tools_router.BROWSER_DEMO_SESSION_SECONDS
-            return "https://browser.example/live-view?signed=true"
+        def generate_live_view_url(self, expires):  # pragma: no cover — must not be reached
+            raise AssertionError("SDK generate_live_view_url builds a Global host (N15-obs17)")
 
         def stop(self):
             self.stopped = True
+
+    return FakeBrowserClient
+
+
+def _fake_hub_credentials(monkeypatch):
+    """The hub session the demo signs with: static fake keys, never resolved from the host."""
+    from botocore.credentials import Credentials
+
+    creds = Credentials("AKIAFAKEFAKEFAKEFAKE", "fake-secret-not-real", "fake-token")
+    monkeypatch.setattr(tools_router, "_demo_signing_credentials", lambda workspace: creds)
+    return creds
+
+
+def _assert_cn_signed_stream(chromium, session_id: str, identifier: str = "aws.browser.v1"):
+    """The CDP dial went to the aws-cn data-plane host with a SigV4 header set scoped to
+    cn-northwest-1 / bedrock-agentcore and the session token — never the secret."""
+    call = chromium.connect_over_cdp.call_args
+    ws_url, kwargs = call.args[0], call.kwargs
+    assert ws_url == (
+        "wss://bedrock-agentcore.cn-northwest-1.amazonaws.com.cn/browser-streams/"
+        f"{identifier}/sessions/{session_id}/automation"
+    )
+    headers = kwargs["headers"]
+    assert headers["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAFAKEFAKEFAKEFAKE/")
+    assert "cn-northwest-1/bedrock-agentcore/aws4_request" in headers["Authorization"]
+    assert headers["X-Amz-Security-Token"] == "fake-token" and "X-Amz-Date" in headers
+    assert "fake-secret-not-real" not in json.dumps(headers)
+
+
+def test_browser_demo_retains_live_session_until_stopped(client, monkeypatch):
+    FakeBrowserClient = _fake_browser_client()
+    _fake_hub_credentials(monkeypatch)
 
     page = MagicMock()
     page.title.return_value = "Example Domain"
@@ -316,8 +281,16 @@ def test_browser_demo_retains_live_session_until_stopped(client, monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["title"] == "Example Domain"
-    assert body["live_view_url"] == "https://browser.example/live-view?signed=true"
+    # the live view is pre-signed (SigV4 query) on the same aws-cn data-plane host
+    assert body["live_view_url"].startswith(
+        "https://bedrock-agentcore.cn-northwest-1.amazonaws.com.cn/browser-streams/aws.browser.v1"
+        f"/sessions/{DEMO_SESSION}/live-view?"
+    )
+    assert "X-Amz-Expires=300" in body["live_view_url"]
+    assert "X-Amz-Signature=" in body["live_view_url"]
+    assert "fake-secret-not-real" not in body["live_view_url"]
     assert body["live_view_expires_in"] == 300
+    _assert_cn_signed_stream(chromium, DEMO_SESSION)
     assert body["viewport"] == {"width": 1280, "height": 720}
     browser_client = FakeBrowserClient.instances[0]
     assert browser_client.started_with == {
@@ -338,6 +311,80 @@ def test_browser_demo_retains_live_session_until_stopped(client, monkeypatch):
     assert stopped.json()["stopped"] is True
     assert stopped.json()["profile_saved"] is None
     assert browser_client.stopped is True
+
+
+def test_browser_demo_failure_is_a_502_envelope_and_the_session_is_stopped(
+    client, monkeypatch
+):
+    """N15-obs17 (secondary): the live failure escaped as a plain-text 500. Any failure
+    after the session started is one `demo.browser_failed` envelope with a bounded reason,
+    the SDK session is stopped and nothing is retained."""
+    FakeBrowserClient = _fake_browser_client()
+    _fake_hub_credentials(monkeypatch)
+    chromium = MagicMock()
+    chromium.connect_over_cdp.side_effect = RuntimeError(
+        "WebSocket error: getaddrinfo ENOTFOUND " + "x" * 600
+    )
+    playwright = SimpleNamespace(chromium=chromium)
+    monkeypatch.setattr("bedrock_agentcore.tools.BrowserClient", FakeBrowserClient)
+    monkeypatch.setattr(
+        "playwright.sync_api.sync_playwright", lambda: nullcontext(playwright),
+    )
+
+    response = client.post("/api/demos/browser", json={"url": "https://example.com"})
+
+    assert response.status_code == 502
+    body = response.json()
+    assert body["code"] == "demo.browser_failed"
+    reason = body["detail"]["reason"]
+    assert reason.startswith("RuntimeError: WebSocket error: getaddrinfo ENOTFOUND")
+    assert len(reason) <= tools_router.DEMO_FAILURE_REASON_CHARS
+    assert "Traceback" not in response.text
+    (browser_client,) = FakeBrowserClient.instances
+    assert browser_client.stopped is True
+    assert DEMO_SESSION not in tools_router._browser_demo_sessions
+    _assert_cn_signed_stream(chromium, DEMO_SESSION)
+
+
+def test_browser_demo_signs_against_the_clients_resolved_endpoint_not_a_literal(
+    client, monkeypatch
+):
+    """The host comes from the data-plane client the SDK built for the region: a client
+    whose resolver answered another host is followed there (no partition table, no literal)."""
+    FakeBrowserClient = _fake_browser_client()
+    _fake_hub_credentials(monkeypatch)
+    page = MagicMock()
+    page.title.return_value = "Example Domain"
+    chromium = MagicMock()
+    chromium.connect_over_cdp.return_value = SimpleNamespace(
+        contexts=[SimpleNamespace(pages=[page])]
+    )
+    monkeypatch.setattr("bedrock_agentcore.tools.BrowserClient", FakeBrowserClient)
+    monkeypatch.setattr(
+        "playwright.sync_api.sync_playwright",
+        lambda: nullcontext(SimpleNamespace(chromium=chromium)),
+    )
+    original_init = FakeBrowserClient.__init__
+
+    def init(self, region):
+        original_init(self, region)
+        self.data_plane_client.meta.endpoint_url = "https://dp.example.test:8443/"
+
+    monkeypatch.setattr(FakeBrowserClient, "__init__", init)
+
+    response = client.post("/api/demos/browser", json={"url": "https://example.com"})
+
+    assert response.status_code == 200, response.text
+    ws_url = chromium.connect_over_cdp.call_args.args[0]
+    assert ws_url == (
+        f"wss://dp.example.test:8443/browser-streams/aws.browser.v1/sessions/{DEMO_SESSION}"
+        "/automation"
+    )
+    assert response.json()["live_view_url"].startswith(
+        f"https://dp.example.test:8443/browser-streams/aws.browser.v1/sessions/{DEMO_SESSION}"
+        "/live-view?"
+    )
+    tools_router._stop_browser_demo_session(DEMO_SESSION)
 
 
 def test_a_browser_demo_session_is_only_stoppable_by_the_workspace_that_started_it(client):
@@ -452,7 +499,7 @@ def test_the_code_interpreter_demo_targets_the_workspace_it_runs_in(client, monk
 
     assert response.status_code == 200
     assert response.json()["stdout"] == "42"
-    assert seen["region"] == "us-west-2"
+    assert seen["region"] == "cn-northwest-1"  # the default workspace's region
     assert isinstance(seen["session"], aws_clients.FunnelSession)
     assert seen["stopped"] is True
 
@@ -523,17 +570,37 @@ def test_browser_demo_options_lists_web_bot_auth_browsers_and_profiles(
                 "name": "demo-profile",
                 "description": "Persistent demo state",
                 "status": "READY",
-                "last_saved_at": "2026-07-16T12:00:00+00:00",
+                "last_saved_at": "2026-07-16T20:00:00+08:00",  # N17-obs463
                 "last_saved_browser_identifier": "signed-browser-123",
             }
         ],
     }
 
 
-def test_browser_demo_uses_web_bot_auth_browser_and_saves_profile(
+def _commercial_workspace(workspace_id: str = "commercial-usw2") -> str:
+    """A same-account workspace in a partition that offers Web Bot Auth (`aws`)."""
+    db = SessionLocal()
+    try:
+        if db.get(Workspace, workspace_id) is None:
+            db.add(
+                Workspace(
+                    id=workspace_id, name=workspace_id, account_id="444455556666",
+                    region="us-west-2", bootstrap_status="ready", resources={},
+                )
+            )
+            db.commit()
+    finally:
+        db.close()
+    return workspace_id
+
+
+def test_browser_demo_uses_web_bot_auth_browser_and_saves_profile_outside_china(
     client,
     monkeypatch,
 ):
+    """Upstream behaviour kept for a partition that has browser signing (N17-obs258 gates
+    it on the partition, it does not delete it)."""
+    workspace_id = _commercial_workspace()
     class FakeControlClient:
         def get_browser(self, browserId):
             assert browserId == "signed-browser-123"
@@ -550,30 +617,8 @@ def test_browser_demo_uses_web_bot_auth_browser_and_saves_profile(
         def save_browser_session_profile(self, **kwargs):
             self.saved.append(kwargs)
 
-    class FakeBrowserClient:
-        instances = []
-
-        def __init__(self, region):
-            self.region = region
-            self.session_id = None
-            self.started_with = None
-            self.stopped = False
-            self.data_plane_client = FakeDataPlaneClient()
-            self.instances.append(self)
-
-        def start(self, **kwargs):
-            self.started_with = kwargs
-            self.session_id = "01KXNH955ZJWTEVR5PFHGE827F"
-
-        def generate_ws_headers(self):
-            return "wss://browser.example/automation", {"Authorization": "signed"}
-
-        def generate_live_view_url(self, expires):
-            assert expires == tools_router.BROWSER_DEMO_SESSION_SECONDS
-            return "https://browser.example/live-view?signed=true"
-
-        def stop(self):
-            self.stopped = True
+    FakeBrowserClient = _fake_browser_client(FakeDataPlaneClient())
+    _fake_hub_credentials(monkeypatch)
 
     page = MagicMock()
     page.title.return_value = "Example Domain"
@@ -599,6 +644,7 @@ def test_browser_demo_uses_web_bot_auth_browser_and_saves_profile(
             "profile_identifier": "demo-profile-abcdefghij",
             "save_profile": True,
         },
+        headers={WORKSPACE_HEADER: workspace_id},
     )
 
     assert response.status_code == 200
@@ -617,7 +663,9 @@ def test_browser_demo_uses_web_bot_auth_browser_and_saves_profile(
         },
     }
 
-    stopped = client.delete(f"/api/demos/browser/{body['session_id']}")
+    stopped = client.delete(
+        f"/api/demos/browser/{body['session_id']}", headers={WORKSPACE_HEADER: workspace_id}
+    )
 
     assert stopped.status_code == 200
     assert stopped.json()["stopped"] is True
@@ -630,3 +678,105 @@ def test_browser_demo_uses_web_bot_auth_browser_and_saves_profile(
         }
     ]
     assert browser_client.stopped is True
+
+
+def test_browser_demo_refuses_web_bot_auth_in_the_china_partition(client, monkeypatch):
+    """N17-obs258: aws-cn has no Web Bot Auth signer (`CreateBrowser` with
+    `browserSigning.enabled=true` → ValidationException "Browser signing configuration is
+    not enabled in this environment"). A client that still asks is refused with 409 before
+    any AgentCore call or browser session."""
+    constructed: list = []
+    monkeypatch.setattr(
+        "bedrock_agentcore.tools.BrowserClient",
+        lambda **kwargs: constructed.append(kwargs) or SimpleNamespace(),
+    )
+
+    def no_control_client(_ws=None):  # pragma: no cover — must not be reached
+        raise AssertionError("the signing refusal must precede every AgentCore call")
+
+    monkeypatch.setattr(tools_router, "control_client", no_control_client)
+
+    response = client.post(
+        "/api/demos/browser",
+        json={
+            "url": "https://example.com",
+            "web_bot_auth": True,
+            "browser_identifier": "signed-browser-123",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "browser.signing_unsupported_in_partition"
+    assert response.json()["detail"] == {"partition": "aws-cn"}
+    assert constructed == []
+
+
+def test_browser_demo_in_china_runs_the_managed_browser_with_a_profile(client, monkeypatch):
+    """N17-obs258: the ordinary demo stays in aws-cn — managed `aws.browser.v1`, an
+    optional READY profile — and nothing it sends carries a signing configuration."""
+    class FakeControlClient:
+        def get_browser(self, browserId):  # pragma: no cover — must not be reached
+            raise AssertionError("no custom (signed) browser is looked up in aws-cn")
+
+        def get_browser_profile(self, profileId):
+            return {"status": "READY"}
+
+    FakeBrowserClient = _fake_browser_client()
+    _fake_hub_credentials(monkeypatch)
+    page = MagicMock()
+    page.title.return_value = "Example Domain"
+    chromium = MagicMock()
+    chromium.connect_over_cdp.return_value = SimpleNamespace(
+        contexts=[SimpleNamespace(pages=[page])]
+    )
+    monkeypatch.setattr(tools_router, "control_client", lambda _ws=None: FakeControlClient())
+    monkeypatch.setattr("bedrock_agentcore.tools.BrowserClient", FakeBrowserClient)
+    monkeypatch.setattr(
+        "playwright.sync_api.sync_playwright",
+        lambda: nullcontext(SimpleNamespace(chromium=chromium)),
+    )
+
+    response = client.post(
+        "/api/demos/browser",
+        json={"url": "https://example.com", "profile_identifier": "demo-profile-abcdefghij"},
+    )
+
+    try:
+        assert response.status_code == 200
+        body = response.json()
+        assert body["browser_identifier"] == "aws.browser.v1"
+        assert body["web_bot_auth"] is False
+        started = FakeBrowserClient.instances[0].started_with
+        assert started["identifier"] == "aws.browser.v1"
+        assert "browserSigning" not in json.dumps(started)
+    finally:
+        tools_router._browser_demo_sessions.pop(body["session_id"], None)
+
+
+def test_the_backend_never_creates_a_signed_browser():
+    """N17-obs258: no control-plane write that could carry `browserSigning` exists — the
+    only `browserSigning` the backend touches is the READ of an existing browser."""
+    from pathlib import Path
+
+    app_root = Path(tools_router.__file__).resolve().parents[1]
+    offenders = []
+    for path in app_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if "create_browser(" in text or "update_browser(" in text:
+            offenders.append(str(path.relative_to(app_root)))
+        if "browserSigning" in text and path.name != "tools.py":
+            offenders.append(str(path.relative_to(app_root)))
+    assert offenders == []
+
+
+def test_browser_signing_support_is_partition_derived():
+    """One answer for the capability and the refusal: false in aws-cn, true elsewhere."""
+    assert tools_router.browser_signing_supported(
+        WorkspaceContext(account_id="1", region="cn-northwest-1")
+    ) is False
+    assert tools_router.browser_signing_supported(
+        WorkspaceContext(account_id="1", region="cn-north-1")
+    ) is False
+    assert tools_router.browser_signing_supported(
+        WorkspaceContext(account_id="1", region="us-west-2")
+    ) is True

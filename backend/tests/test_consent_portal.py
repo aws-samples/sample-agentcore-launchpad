@@ -17,6 +17,8 @@ OAUTH_ARN = f"{VAULT}/oauth2credentialprovider/team-idp"
 RESOURCES = {"gateway_id": "gw-1"}
 ACCOUNT = "111122223333"
 ROLE = f"arn:aws:iam::{ACCOUNT}:role/portal-exec"
+# the console's default workspace lives in cn-northwest-1 → its roles are in aws-cn
+ROUTE_ROLE = f"arn:aws-cn:iam::{ACCOUNT}:role/portal-exec"
 PORTAL_URL = "https://gw.consent-portal.bedrock-agentcore.us-west-2.amazonaws.com"
 
 
@@ -257,7 +259,7 @@ def control(monkeypatch):
 
 def test_routes_create_read_delete(client, control):
     response = client.post("/api/identity/consent-portal", json={
-        "name": "team-portal", "connection": "team-idp", "execution_role_arn": ROLE,
+        "name": "team-portal", "connection": "team-idp", "execution_role_arn": ROUTE_ROLE,
     })
     assert response.status_code == 202, response.text
     assert response.json()["portal"]["status"] == "CREATING"
@@ -287,7 +289,7 @@ def test_route_refuses_a_cross_account_role(client, control):
 
 def test_route_validation_error_envelope(client, control):
     response = client.post("/api/identity/consent-portal", json={
-        "name": "p", "connection": "team-idp", "execution_role_arn": ROLE,
+        "name": "p", "connection": "team-idp", "execution_role_arn": ROUTE_ROLE,
         "scopes": ["profile"],
     })
     assert response.status_code == 422

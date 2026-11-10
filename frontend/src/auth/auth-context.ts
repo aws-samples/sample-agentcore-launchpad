@@ -5,6 +5,9 @@ import type { AgentPermission, ConsoleRole } from "../lib/api";
 export interface AuthContextValue {
   authRequired: boolean;
   username: string | null;
+  /** `users.id` of the signed-in account — the ownership key the server compares
+   *  `created_by` against; null for the config admin and on an open console */
+  userId: string | null;
   role: ConsoleRole | null;
   email: string | null;
   /** ISO account-validity end for registered users; null = never expires */
@@ -19,6 +22,7 @@ export interface AuthContextValue {
 export const AuthContext = createContext<AuthContextValue>({
   authRequired: false,
   username: null,
+  userId: null,
   role: null,
   email: null,
   accountExpiresAt: null,

@@ -1,120 +1,82 @@
 /**
- * Shared Bedrock model catalog and default model id.
+ * Canvas view of the platform model catalog (CN build, spec C3; N-R6-obs2).
  *
- * DEFAULT_MODEL_ID is the single source of truth for the fallback model used by
- * every code-generation fallback path — nodes that carry no explicit model id
- * (orchestrator/swarm drops, legacy flows). It is deliberately NOT what a newly
- * dropped agent node gets: that is DEFAULT_NEW_AGENT_MODEL_ID (see FlowEditor).
- * Changing these fallbacks would retroactively change existing flows.
- *
- * Claude Sonnet 5 / 4.6 / Opus 4.8 ids verified against
- * `aws bedrock list-inference-profiles` (us-west-2) on 2026-07-10.
- * xai.grok-4.3 / openai.gpt-5.5 / openai.gpt-5.4 are available in
- * us-east-1 (per user confirmation; not visible in this account's
- * listings — likely requires model access enablement).
+ * The canvas offers exactly the models `GET /api/capabilities` lists — the two Global
+ * Bedrock cross-region profiles plus the environment's OpenAI-compatible rows (SiliconFlow
+ * first), merged into `lib/models` by `applyModelCatalog` when the shell loads. Generated
+ * code names the model by its Launchpad id (`BedrockModel(model_id=…)`); the Studio adapter
+ * (backend `app/templates/studio_agent`) rebinds that name to the shared provider dispatch,
+ * which fetches the provider's API key from AgentCore Identity at run time — so no node
+ * carries a key, a region or an endpoint. DEFAULT_MODEL_ID is the fallback every
+ * code-generation path uses for a node without an explicit model id; it equals the
+ * backend's `DEFAULT_MODEL_ID`.
  */
 
-import { MODEL_CATALOG } from '../../lib/models';
+import {
+  type ModelOption,
+  SPEC_DEFAULT_MODEL_ID,
+  defaultModelFor,
+  modelOption,
+  modelOptionsFor,
+} from '../../lib/models';
 
-export const DEFAULT_MODEL_ID = 'global.anthropic.claude-sonnet-5';
+export type { ModelOption } from '../../lib/models';
+export { isModelAvailable, modelOptionLabel, modelUnavailableReason } from '../../lib/models';
+
+export const DEFAULT_MODEL_ID = SPEC_DEFAULT_MODEL_ID;
 
 /** Sentinel value for the "Custom model ID" option in model dropdowns. */
 export const CUSTOM_MODEL_OPTION = '__custom__';
 
-export interface BedrockModelOption {
-  model_id: string;
-  model_name: string;
+/**
+ * The models a canvas node may run on: every catalog row that supports tool calling
+ * (`lib/models.modelOptionsFor`), in catalog order — Bedrock rows first, then the
+ * environment's OpenAI-compatible rows. A row whose provider is not configured stays
+ * listed with `available: false`; the picker renders it disabled (`models.unavailable`).
+ * Read at render time: the catalog is merged in place after the shell loads capabilities.
+ */
+export function studioModelOptions(): ModelOption[] {
+  return modelOptionsFor('bedrock');
 }
 
-// Entry [0] is what a new agent node and a switch to the Bedrock provider get.
-export const BEDROCK_MODELS: BedrockModelOption[] = [
-  {
-    model_id: 'global.openai.gpt-6-sol',
-    model_name: 'GPT-6 Sol (global)',
-  },
-  {
-    model_id: 'global.openai.gpt-6-astra',
-    model_name: 'GPT-6 Astra (global)',
-  },
-  {
-    model_id: 'global.openai.gpt-6-luna',
-    model_name: 'GPT-6 Luna (global)',
-  },
-  {
-    model_id: 'global.anthropic.claude-sonnet-5',
-    model_name: 'Claude Sonnet 5 (global)',
-  },
-  {
-    model_id: 'us.anthropic.claude-sonnet-5',
-    model_name: 'Claude Sonnet 5 (US)',
-  },
-  {
-    model_id: 'global.anthropic.claude-sonnet-4-6',
-    model_name: 'Claude Sonnet 4.6 (global)',
-  },
-  {
-    model_id: 'us.anthropic.claude-sonnet-4-6',
-    model_name: 'Claude Sonnet 4.6 (US)',
-  },
-  {
-    model_id: 'eu.anthropic.claude-sonnet-4-6',
-    model_name: 'Claude Sonnet 4.6 (EU)',
-  },
-  {
-    model_id: 'global.anthropic.claude-opus-4-8',
-    model_name: 'Claude Opus 4.8 (global)',
-  },
-  {
-    model_id: 'us.anthropic.claude-opus-4-8',
-    model_name: 'Claude Opus 4.8 (US)',
-  },
-  {
-    model_id: 'eu.anthropic.claude-opus-4-8',
-    model_name: 'Claude Opus 4.8 (EU)',
-  },
-  {
-    model_id: 'openai.gpt-oss-120b-1:0',
-    model_name: 'GPT-OSS-120B',
-  },
-  {
-    model_id: 'qwen.qwen3-235b-a22b-2507-v1:0',
-    model_name: 'Qwen3 235B A22B 2507',
-  },
-  {
-    model_id: 'qwen.qwen3-32b-v1:0',
-    model_name: 'Qwen3 32B (dense)',
-  },
-  {
-    model_id: 'qwen.qwen3-coder-480b-a35b-v1:0',
-    model_name: 'Qwen3 Coder 480B A35B Instruct',
-  },
-  {
-    model_id: 'deepseek.v3-v1:0',
-    model_name: 'DeepSeek-V3.1',
-  },
-  {
-    model_id: 'us.amazon.nova-premier-v1:0',
-    model_name: 'Amazon Nova Premier v1',
-  },
-  {
-    model_id: 'us.amazon.nova-pro-v1:0',
-    model_name: 'Amazon Nova Pro v1',
-  },
-];
+/** The model a newly dropped agent node (or a switch to the catalog provider) starts on:
+ *  the first AVAILABLE catalog row — the platform default, never an unconfigured one. */
+export function defaultNewAgentModel(): ModelOption {
+  const id = defaultModelFor('bedrock');
+  return modelOption(id) ?? studioModelOptions()[0];
+}
 
-/** The model a newly dropped agent node starts on (native Bedrock, Converse). */
-export const DEFAULT_NEW_AGENT_MODEL = BEDROCK_MODELS[0];
+/**
+ * Display label for a catalog model id: the catalog's label when `modelId` is
+ * listed, else the raw id, else (no id at all) the default new-agent model's
+ * label. Never a hardcoded brand/model string (fix round 1, C5) — a node that
+ * carries no explicit `modelName` must still show a label that tracks its
+ * actual `modelId`, not a stale name from a deleted catalog entry.
+ */
+export function catalogModelLabel(modelId: string | null | undefined): string {
+  if (!modelId) return defaultNewAgentModel().label;
+  return modelOption(modelId)?.label ?? modelId;
+}
+
+/**
+ * Anthropic-only request shapes (adaptive thinking / output_config). GLM 5.3 and Kimi K3
+ * reject unknown additionalModelRequestFields, so the emitters gate that block on this
+ * and a GLM/Kimi node with the thinking toggle still generates a plain model (R17).
+ */
+export function isAnthropicModel(modelId: string | null | undefined): boolean {
+  return /(^|\.)anthropic\./.test(modelId || '');
+}
 
 /**
  * OpenAI GPT-5.x / GPT-6 on native Bedrock (any profile prefix). These take a
- * reasoning effort instead of Claude's adaptive thinking, and no Claude cache
- * points. gpt-oss is deliberately excluded — its request shape is not verified.
+ * reasoning effort instead of Anthropic's adaptive thinking, and no Anthropic
+ * cache points. gpt-oss is deliberately excluded — its request shape is not verified.
  */
 export function isBedrockOpenAiGpt(modelId: string | null | undefined): boolean {
   return /(^|\.)openai\.gpt-\d/.test(modelId || '');
 }
 
-/** GPT reasoning effort scale on Bedrock; Claude-only tiers clamp to high. */
+/** GPT reasoning effort scale on Bedrock; Anthropic-only tiers clamp to high. */
 export const GPT_REASONING_EFFORTS = ['low', 'medium', 'high'] as const;
 
 function gptEffort(effort: string | null | undefined): string | null {
@@ -127,7 +89,7 @@ function gptEffort(effort: string | null | undefined): string | null {
  * `BedrockModel(...)` for an OpenAI GPT model. The effort rides Converse's
  * `additionalModelRequestFields` as `{"reasoning": {"effort": …}}` — the shape the
  * managed harness sends for the same models (backend `app/deployer/harness.py`).
- * Claude's adaptive-thinking block and cache kwargs are never emitted here.
+ * Anthropic's adaptive-thinking block and cache kwargs are never emitted here.
  * `indent` is the leading indentation of the call's closing paren; argument
  * lines get four more (the two emitter scopes differ only in that).
  */
@@ -156,92 +118,6 @@ ${inner}}`;
   return `${code}\n${indent})`;
 }
 
-/**
- * Amazon Bedrock Mantle provider — OpenAI-compatible endpoint served via
- * `OpenAIResponsesModel` (OpenAI Responses API). Grok / GPT models are only
- * reachable through Mantle, not the native BedrockModel InvokeModel path.
- *
- * Auth is IAM by default: `bedrock_mantle_config` makes the Strands SDK mint a
- * short-lived bearer token from the ambient credential chain (the runtime
- * execution role) on every request, so no key is provisioned. A node may still
- * carry an explicit `BEDROCK_API_KEY`, which switches codegen to the keyed
- * `client_args` form — the two are mutually exclusive in the SDK.
- */
-export const MANTLE_PROVIDER = 'Amazon Bedrock (Mantle)';
-
-/**
- * Default region for the Mantle endpoint. us-east-1 carries the widest
- * catalogue — every id below exists there, whereas us-west-2 is missing
- * `openai.gpt-5.6-sol` and `openai.gpt-5.5`. Enumerate a region's real
- * catalogue with `GET https://bedrock-mantle.<region>.api.aws/v1/models`
- * (bearer token from `aws_bedrock_token_generator`); Mantle models never appear
- * in `bedrock:ListFoundationModels`.
- */
-export const DEFAULT_MANTLE_REGION = 'us-east-1';
-
-/**
- * Build the Mantle OpenAI-compatible base URL for a region and model.
- *
- * Only `openai.gpt-5.*` ids are served from `/openai/v1`; every other
- * Mantle-routed model (grok, gpt-oss, …) lives under `/v1`. Mirrors
- * `strands/models/_openai_bedrock.py:28-39`, which the SDK applies itself on the
- * IAM path — so this matters only for the explicit-key `client_args` form.
- */
-export function mantleBaseUrl(region: string, modelId?: string | null): string {
-  const path = modelId?.startsWith('openai.gpt-5.') ? '/openai/v1' : '/v1';
-  return `https://bedrock-mantle.${region || DEFAULT_MANTLE_REGION}.api.aws${path}`;
-}
-
-/**
- * Mantle ids offered by the canvas. The GPT-5.6 family comes from the shared
- * platform catalog so the wizard and the canvas cannot drift; the older ids stay
- * listed so flows published against them do not fall into `isCustomMantleModel`.
- */
-export const MANTLE_MODELS: BedrockModelOption[] = [
-  ...MODEL_CATALOG.mantle.map((m) => ({ model_id: m.model_id, model_name: m.label })),
-  { model_id: 'openai.gpt-5.5', model_name: 'GPT-5.5 (OpenAI, us-east-1 only)' },
-  { model_id: 'openai.gpt-5.4', model_name: 'GPT-5.4 (OpenAI)' },
-  { model_id: 'xai.grok-4.3', model_name: 'Grok 4.3 (xAI)' },
-];
-
-export const DEFAULT_MANTLE_MODEL_ID = MANTLE_MODELS[0].model_id;
-
-/**
- * The `OpenAIResponsesModel` auth argument for a Mantle node, as Python source.
- *
- * Two mutually exclusive forms — the SDK raises if `client_args` carries
- * `api_key`/`base_url` alongside `bedrock_mantle_config`:
- *
- * - **no key (the default)** → `bedrock_mantle_config`. The SDK mints a
- *   short-lived bearer token from the ambient AWS credential chain (the runtime
- *   execution role) on every request and derives the base URL itself.
- * - **explicit key** → today's `client_args` form, so flows published with a
- *   `BEDROCK_API_KEY` keep generating exactly the code they generated before.
- *
- * `indent` is the leading indentation of the emitted argument line; inner lines
- * get four more. Shared by all three emitters (agent scope, agent-as-tool scope,
- * and the graph generator) so the two forms cannot drift apart.
- */
-export function mantleModelArgs(
-  opts: {
-    apiKey?: string | null;
-    region?: string | null;
-    modelId?: string | null;
-  },
-  indent: string,
-): string {
-  const region = opts.region || DEFAULT_MANTLE_REGION;
-  if (!opts.apiKey) {
-    return `\n${indent}bedrock_mantle_config={"region": "${region}"},`;
-  }
-  const inner = `${indent}    `;
-  const clientArgs = [
-    `"api_key": os.environ.get("BEDROCK_API_KEY")`,
-    `"base_url": "${mantleBaseUrl(region, opts.modelId)}"`,
-  ];
-  return `\n${indent}client_args={\n${inner}${clientArgs.join(`,\n${inner}`)}\n${indent}},`;
-}
-
 /** Display name marking a node as using a user-entered (custom) model id. */
 export const CUSTOM_MODEL_NAME = 'Custom model';
 
@@ -257,15 +133,5 @@ export function isCustomModel(
 ): boolean {
   if (modelName === CUSTOM_MODEL_NAME) return true;
   if (!modelId) return false;
-  return !BEDROCK_MODELS.some((m) => m.model_id === modelId);
-}
-
-/** Same as {@link isCustomModel} but against the Mantle catalog. */
-export function isCustomMantleModel(
-  modelId: string | undefined | null,
-  modelName?: string | null,
-): boolean {
-  if (modelName === CUSTOM_MODEL_NAME) return true;
-  if (!modelId) return false;
-  return !MANTLE_MODELS.some((m) => m.model_id === modelId);
+  return modelOption(modelId) === undefined;
 }

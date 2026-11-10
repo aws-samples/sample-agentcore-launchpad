@@ -17,8 +17,9 @@ import {
   type TaskgenReviewDraft,
   toReviewDrafts,
 } from "../../../lib/skillLabTaskgen";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
+import { useMayMutate } from "../../ownership";
 import { Alert, Button, Card, Confirm, Descriptions, Field, FlowHeader, LinkButton, Spin, Tag } from "../../ui";
 import { GoneCard, JobStatusTag } from "./common";
 import { JobLog } from "./JobLog";
@@ -119,6 +120,7 @@ export function TaskgenDetail({ id }: { id: string }) {
   const { t } = useTranslation();
   const [, setParams] = useSearchParams();
   const toast = useV2Toast();
+  const mayMutate = useMayMutate();
   const { job: detail, setJob, missing, error: jobError } = useJob(id);
   const [results, setResults] = useState<SkillLabTaskgenResults | null>(null);
   const [drafts, setDrafts] = useState<TaskgenReviewDraft[] | null>(null);
@@ -237,7 +239,7 @@ export function TaskgenDetail({ id }: { id: string }) {
         }
         onBack={back}
         end={
-          live && (
+          live && mayMutate(detail) && (
             <Button kind="danger" onClick={() => setConfirmCancel(true)} testId="v2-taskgen-cancel">
               {t("skillLab.taskgen.job.cancel")}
             </Button>
@@ -250,13 +252,14 @@ export function TaskgenDetail({ id }: { id: string }) {
           items={[
             { label: t("skillLab.taskgen.col.skills"), value: jobSkillName(detail) || "—" },
             { label: t("skillLab.taskgen.col.target"), value: taskgenTarget(detail, t("skillLab.taskgen.target.new")) },
-            { label: t("skillLab.backend.field"), value: <span className="mono">{detail.params.target_backend ?? "claude_code_exec"}</span> },
+            { label: t("skillLab.backend.field"), value: <span className="mono">{detail.params.target_backend ?? "opencode_exec"}</span> },
             { label: t("skillLab.eval.wizard.field.targetModel"), value: <span className="mono">{detail.params.model ?? "—"}</span> },
             { label: t("skillLab.taskgen.field.count"), value: detail.params.count ?? "—" },
             { label: t("skillLab.taskgen.field.timeout"), value: `${detail.params.timeout}s` },
             { label: t("skillLab.taskgen.field.attachments"), value: attachedNames.length ? <span className="mono">{attachedNames.join(" · ")}</span> : "—" },
-            { label: t("v2.skillLab.progress"), value: detail.progress || detail.status },
+            { label: t("v2.skillLab.progress"), value: detail.progress || t(`skillLab.eval.status.${detail.status}`, { defaultValue: detail.status }) },
             { label: t("skillLab.eval.col.created"), value: fmtTime(detail.created_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(detail) },
             { label: t("skillLab.eval.field.elapsed"), value: elapsed(detail) },
             ...(detail.params.guidance
               ? [{ label: t("skillLab.taskgen.field.guidance"), value: <span className="v2-skilllab-clamp">{detail.params.guidance}</span> }]

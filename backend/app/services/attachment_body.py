@@ -2,12 +2,14 @@
 
 import re
 
-from starlette.responses import JSONResponse
-
+from app.core.display_time import DisplayTimeJSONResponse
 from app.core.errors import envelope
 from app.schemas.attachments import MAX_REQUEST_BYTES
 
-_PATH = re.compile(r"^/(?:api/chat/[^/]+|(?:api|v1)/agents/[^/]+/invoke(?:-stream)?)/?$")
+_PATH = re.compile(
+    r"^/(?:api/chat/[^/]+|(?:api|v1)/agents/[^/]+/invoke(?:-stream)?"
+    r"|api/knowledge-bases/[^/]+/files)/?$"
+)
 
 
 class AttachmentBodyCap:
@@ -49,7 +51,7 @@ class AttachmentBodyCap:
             if not tripped:
                 raise
         if tripped and not started:
-            response = JSONResponse(
+            response = DisplayTimeJSONResponse(
                 envelope(
                     "chat.attachment_too_large", "Attachment request exceeds the size limit.",
                     {"max_bytes": self.max_bytes},

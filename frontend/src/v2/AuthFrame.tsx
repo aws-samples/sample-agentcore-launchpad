@@ -11,7 +11,7 @@ import { V2Logo } from "./Logo";
 /**
  * The V2 chrome of the pages shown before the console shell: sign-in / register
  * and "no workspace granted". Same top bar as the shell (brand + language), no
- * sidebar, and the V2 light theme on <body> while mounted — so the classic
+ * sidebar, and the V2 light theme on <body> while mounted — so the token-styled
  * components some of these pages still embed render light too (`.v2-classic`).
  */
 export function V2AuthFrame({ end, children, testId, narrow = false }: {
@@ -44,14 +44,20 @@ export function V2AuthFrame({ end, children, testId, narrow = false }: {
   );
 }
 
-/** Centered spinner on the V2 background while a session / workspace resolves. */
-export function V2AuthLoading({ label }: { label: string }) {
+/**
+ * Centered spinner on the V2 background while a session / workspace resolves.
+ * `reason` names the gate that is waiting (`auth` = session check, `workspace` =
+ * workspace list) so a page stuck here is diagnosable from the DOM — the N10 v3 e2e
+ * saw `/agents/new` stay on this spinner for 30 s+ after a reload and could only
+ * report "no Uninstall button rendered".
+ */
+export function V2AuthLoading({ label, reason }: { label: string; reason?: "auth" | "workspace" }) {
   useEffect(() => {
     document.body.classList.add("v2-body");
     return () => document.body.classList.remove("v2-body");
   }, []);
   return (
-    <div className="v2 v2-auth-loading" role="status">
+    <div className="v2 v2-auth-loading" role="status" data-testid="v2-auth-loading" data-reason={reason}>
       <span className="v2-auth-spinner" aria-hidden="true" />
       <span className="sr-only">{label}</span>
     </div>

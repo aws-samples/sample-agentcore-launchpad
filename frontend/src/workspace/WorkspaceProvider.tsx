@@ -138,7 +138,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
 function WorkspaceLoading() {
   const { t } = useTranslation();
-  return <V2AuthLoading label={t("workspacesPage.resolving")} />;
+  return <V2AuthLoading label={t("workspacesPage.resolving")} reason="workspace" />;
 }
 
 /**

@@ -1,0 +1,4770 @@
+{
+  "components": {
+    "schemas": {
+      "CandidateEdit": {
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System Prompt"
+          },
+          "tool_description_overrides": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Tool Description Overrides",
+            "type": "object"
+          }
+        },
+        "title": "CandidateEdit",
+        "type": "object"
+      },
+      "DatasetCreate": {
+        "properties": {
+          "items": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          },
+          "locale": {
+            "default": "en",
+            "title": "Locale",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "name"
+        ],
+        "title": "DatasetCreate",
+        "type": "object"
+      },
+      "DatasetUpdate": {
+        "properties": {
+          "items": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "maxItems": 200,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Items"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "DatasetUpdate",
+        "type": "object"
+      },
+      "DatasetUpload": {
+        "properties": {
+          "jsonl": {
+            "minLength": 1,
+            "title": "Jsonl",
+            "type": "string"
+          },
+          "locale": {
+            "default": "en",
+            "title": "Locale",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jsonl",
+          "name"
+        ],
+        "title": "DatasetUpload",
+        "type": "object"
+      },
+      "ExperimentCreate": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "lookback_hours": {
+            "default": 24,
+            "maximum": 720.0,
+            "minimum": 24.0,
+            "title": "Lookback Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent_id"
+        ],
+        "title": "ExperimentCreate",
+        "type": "object"
+      },
+      "FilterSpec": {
+        "properties": {
+          "key": {
+            "pattern": "^[a-zA-Z0-9._-]{1,256}$",
+            "title": "Key",
+            "type": "string"
+          },
+          "operator": {
+            "enum": [
+              "Equals",
+              "NotEquals",
+              "GreaterThan",
+              "LessThan",
+              "GreaterThanOrEqual",
+              "LessThanOrEqual",
+              "Contains",
+              "NotContains"
+            ],
+            "title": "Operator",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/FilterValue"
+          }
+        },
+        "required": [
+          "key",
+          "operator",
+          "value"
+        ],
+        "title": "FilterSpec",
+        "type": "object"
+      },
+      "FilterValue": {
+        "properties": {
+          "booleanValue": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Booleanvalue"
+          },
+          "doubleValue": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doublevalue"
+          },
+          "stringValue": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stringvalue"
+          }
+        },
+        "title": "FilterValue",
+        "type": "object"
+      },
+      "FromSessions": {
+        "properties": {
+          "dataset_id": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Id"
+          },
+          "dedupe": {
+            "default": true,
+            "title": "Dedupe",
+            "type": "boolean"
+          },
+          "first_turn_only": {
+            "default": false,
+            "title": "First Turn Only",
+            "type": "boolean"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "range": {
+            "default": "24h",
+            "enum": [
+              "1h",
+              "6h",
+              "24h",
+              "7d"
+            ],
+            "title": "Range",
+            "type": "string"
+          },
+          "session_ids": {
+            "items": {
+              "pattern": "^[A-Za-z0-9_\\-#:.@]{8,256}$",
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Session Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "session_ids"
+        ],
+        "title": "FromSessions",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HarnessVersions": {
+        "properties": {
+          "control": {
+            "pattern": "^[0-9]{1,9}$",
+            "title": "Control",
+            "type": "string"
+          },
+          "treatment": {
+            "pattern": "^[0-9]{1,9}$",
+            "title": "Treatment",
+            "type": "string"
+          }
+        },
+        "required": [
+          "control",
+          "treatment"
+        ],
+        "title": "HarnessVersions",
+        "type": "object"
+      },
+      "JudgeCreate": {
+        "properties": {
+          "base_evaluator_id": {
+            "anyOf": [
+              {
+                "pattern": "^(Builtin|ThirdParty)\\.[A-Za-z0-9_.]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Evaluator Id"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "minLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
+          "lambda_arn": {
+            "anyOf": [
+              {
+                "pattern": "^arn:aws(-[a-z]+)?:lambda:[a-z0-9-]+:\\d{12}:function:[A-Za-z0-9_-]+(:[A-Za-z0-9_$-]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lambda Arn"
+          },
+          "lambda_timeout_s": {
+            "anyOf": [
+              {
+                "maximum": 300.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lambda Timeout S"
+          },
+          "level": {
+            "default": "TRACE",
+            "pattern": "^(TOOL_CALL|TRACE|SESSION)$",
+            "title": "Level",
+            "type": "string"
+          },
+          "model_id": {
+            "default": "global.openai.gpt-6-sol",
+            "title": "Model Id",
+            "type": "string"
+          },
+          "name": {
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_]{0,47}$",
+            "title": "Name",
+            "type": "string"
+          },
+          "rating_scale": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RatingScaleItem"
+                },
+                "minItems": 2,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rating Scale"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "JudgeCreate",
+        "type": "object"
+      },
+      "JudgeUpdate": {
+        "properties": {
+          "base_evaluator_id": {
+            "anyOf": [
+              {
+                "pattern": "^(Builtin|ThirdParty)\\.[A-Za-z0-9_.]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Evaluator Id"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "minLength": 10,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
+          "lambda_arn": {
+            "anyOf": [
+              {
+                "pattern": "^arn:aws(-[a-z]+)?:lambda:[a-z0-9-]+:\\d{12}:function:[A-Za-z0-9_-]+(:[A-Za-z0-9_$-]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lambda Arn"
+          },
+          "lambda_timeout_s": {
+            "anyOf": [
+              {
+                "maximum": 300.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lambda Timeout S"
+          },
+          "level": {
+            "default": "TRACE",
+            "pattern": "^(TOOL_CALL|TRACE|SESSION)$",
+            "title": "Level",
+            "type": "string"
+          },
+          "model_id": {
+            "default": "global.openai.gpt-6-sol",
+            "title": "Model Id",
+            "type": "string"
+          },
+          "rating_scale": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RatingScaleItem"
+                },
+                "minItems": 2,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rating Scale"
+          }
+        },
+        "title": "JudgeUpdate",
+        "type": "object"
+      },
+      "LambdaRevisionReview": {
+        "additionalProperties": false,
+        "properties": {
+          "cloudtrail_event_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Cloudtrail Event Id",
+            "type": "string"
+          },
+          "expected_created_revision_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Expected Created Revision Id",
+            "type": "string"
+          },
+          "expected_current_revision_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Expected Current Revision Id",
+            "type": "string"
+          },
+          "plan_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Plan Hash",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cloudtrail_event_id",
+          "expected_created_revision_id",
+          "expected_current_revision_id",
+          "plan_hash",
+          "reason"
+        ],
+        "title": "LambdaRevisionReview",
+        "type": "object"
+      },
+      "LogSource": {
+        "properties": {
+          "log_group_names": {
+            "items": {
+              "pattern": "^[.\\-_/#A-Za-z0-9]{1,512}$",
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Log Group Names",
+            "type": "array"
+          },
+          "service_name": {
+            "pattern": "^[A-Za-z0-9._:/@#\\-]{1,256}$",
+            "title": "Service Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "log_group_names",
+          "service_name"
+        ],
+        "title": "LogSource",
+        "type": "object"
+      },
+      "OnlineConfigCreate": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "clustering_frequencies": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 3,
+            "title": "Clustering Frequencies",
+            "type": "array"
+          },
+          "enable_on_create": {
+            "default": true,
+            "title": "Enable On Create",
+            "type": "boolean"
+          },
+          "evaluators": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluators"
+          },
+          "filters": {
+            "items": {
+              "$ref": "#/components/schemas/FilterSpec"
+            },
+            "maxItems": 5,
+            "title": "Filters",
+            "type": "array"
+          },
+          "insights": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Insights"
+          },
+          "mode": {
+            "default": "scores",
+            "enum": [
+              "scores",
+              "insights"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "sampling_percentage": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.01,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sampling Percentage"
+          },
+          "session_timeout_minutes": {
+            "default": 15,
+            "maximum": 1440.0,
+            "minimum": 1.0,
+            "title": "Session Timeout Minutes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent_id"
+        ],
+        "title": "OnlineConfigCreate",
+        "type": "object"
+      },
+      "OnlineConfigPatch": {
+        "properties": {
+          "clustering_frequencies": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clustering Frequencies"
+          },
+          "evaluators": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluators"
+          },
+          "filters": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/FilterSpec"
+                },
+                "maxItems": 5,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filters"
+          },
+          "insights": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Insights"
+          },
+          "sampling_percentage": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.01,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sampling Percentage"
+          },
+          "session_timeout_minutes": {
+            "anyOf": [
+              {
+                "maximum": 1440.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Timeout Minutes"
+          }
+        },
+        "title": "OnlineConfigPatch",
+        "type": "object"
+      },
+      "PipelineBody": {
+        "properties": {
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "output": {
+            "$ref": "#/components/schemas/PipelineOutput"
+          },
+          "processing": {
+            "$ref": "#/components/schemas/PipelineProcessing"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PipelineSource"
+          }
+        },
+        "required": [
+          "name",
+          "output"
+        ],
+        "title": "PipelineBody",
+        "type": "object"
+      },
+      "PipelineOutput": {
+        "properties": {
+          "dataset_id": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Id"
+          },
+          "dataset_name": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Name"
+          }
+        },
+        "title": "PipelineOutput",
+        "type": "object"
+      },
+      "PipelineProcessing": {
+        "properties": {
+          "dedupe": {
+            "default": true,
+            "title": "Dedupe",
+            "type": "boolean"
+          },
+          "first_turn_only": {
+            "default": false,
+            "title": "First Turn Only",
+            "type": "boolean"
+          },
+          "min_input_chars": {
+            "default": 0,
+            "maximum": 500.0,
+            "minimum": 0.0,
+            "title": "Min Input Chars",
+            "type": "integer"
+          }
+        },
+        "title": "PipelineProcessing",
+        "type": "object"
+      },
+      "PipelineSource": {
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "pattern": "^[A-Za-z0-9._-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          },
+          "max_sessions": {
+            "default": 20,
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Max Sessions",
+            "type": "integer"
+          },
+          "range": {
+            "default": "24h",
+            "enum": [
+              "1h",
+              "6h",
+              "24h",
+              "7d"
+            ],
+            "title": "Range",
+            "type": "string"
+          },
+          "status": {
+            "default": "all",
+            "enum": [
+              "all",
+              "ok",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "PipelineSource",
+        "type": "object"
+      },
+      "PlanEdit": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "additionalProperties": true,
+            "title": "Content",
+            "type": "object"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "PlanEdit",
+        "type": "object"
+      },
+      "PlanMaterialize": {
+        "properties": {
+          "acknowledge_disclosure": {
+            "title": "Acknowledge Disclosure",
+            "type": "boolean"
+          },
+          "plan_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Plan Hash",
+            "type": "string"
+          },
+          "plan_revision": {
+            "minimum": 1.0,
+            "title": "Plan Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "acknowledge_disclosure",
+          "plan_hash",
+          "plan_revision"
+        ],
+        "title": "PlanMaterialize",
+        "type": "object"
+      },
+      "PlanPrepare": {
+        "properties": {
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "title": "PlanPrepare",
+        "type": "object"
+      },
+      "RatingScaleItem": {
+        "properties": {
+          "definition": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Definition",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "definition",
+          "label",
+          "value"
+        ],
+        "title": "RatingScaleItem",
+        "type": "object"
+      },
+      "RecommendationAccept": {
+        "properties": {
+          "system_prompt": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System Prompt"
+          }
+        },
+        "title": "RecommendationAccept",
+        "type": "object"
+      },
+      "RecommendationCreate": {
+        "properties": {
+          "evaluator": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluator"
+          },
+          "input_source": {
+            "default": "manual",
+            "enum": [
+              "harness",
+              "spec",
+              "manual"
+            ],
+            "title": "Input Source",
+            "type": "string"
+          },
+          "kinds": {
+            "items": {
+              "enum": [
+                "system_prompt",
+                "tool_descriptions"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Kinds",
+            "type": "array"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "enum": [
+                  "agentcore",
+                  "gepa_lite"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System Prompt"
+          },
+          "tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RecommendationTool"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tools"
+          }
+        },
+        "required": [
+          "kinds"
+        ],
+        "title": "RecommendationCreate",
+        "type": "object"
+      },
+      "RecommendationTool": {
+        "properties": {
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "RecommendationTool",
+        "type": "object"
+      },
+      "ReportStart": {
+        "properties": {
+          "range": {
+            "default": "24h",
+            "enum": [
+              "1h",
+              "6h",
+              "24h",
+              "7d"
+            ],
+            "title": "Range",
+            "type": "string"
+          }
+        },
+        "title": "ReportStart",
+        "type": "object"
+      },
+      "RunCreate": {
+        "properties": {
+          "actor_model_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Model Id"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "cloud_dataset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cloud Dataset Id"
+          },
+          "dataset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Id"
+          },
+          "dataset_version": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Version"
+          },
+          "evaluators": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evaluators",
+            "type": "array"
+          },
+          "insights": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Insights"
+          },
+          "log_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LogSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lookback_hours": {
+            "anyOf": [
+              {
+                "maximum": 336.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lookback Hours"
+          },
+          "mode": {
+            "default": "evaluators",
+            "pattern": "^(evaluators|insights)$",
+            "title": "Mode",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "session_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Ids"
+          },
+          "session_source": {
+            "anyOf": [
+              {
+                "const": "logs",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Source"
+          },
+          "wait_seconds": {
+            "default": 180,
+            "maximum": 600.0,
+            "minimum": 0.0,
+            "title": "Wait Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "RunCreate",
+        "type": "object"
+      },
+      "RuntimeCanaryAction": {
+        "properties": {
+          "action": {
+            "pattern": "^(setup|traffic|verdict|advance|complete|rollback|cleanup)$",
+            "title": "Action",
+            "type": "string"
+          },
+          "allow_non_significant": {
+            "default": false,
+            "title": "Allow Non Significant",
+            "type": "boolean"
+          },
+          "dataset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Id"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "RuntimeCanaryAction",
+        "type": "object"
+      },
+      "RuntimeCanaryCreate": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "candidate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateEdit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "harness_versions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HarnessVersions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_experiment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Experiment Id"
+          },
+          "start_stage": {
+            "default": 0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Start Stage",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent_id"
+        ],
+        "title": "RuntimeCanaryCreate",
+        "type": "object"
+      },
+      "SessionEvaluateBody": {
+        "properties": {
+          "evaluator_ids": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._-]+$",
+              "type": "string"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Evaluator Ids",
+            "type": "array"
+          },
+          "range": {
+            "default": "24h",
+            "enum": [
+              "1h",
+              "6h",
+              "24h",
+              "7d"
+            ],
+            "title": "Range",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evaluator_ids"
+        ],
+        "title": "SessionEvaluateBody",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "app__optimization__routers__ActionRequest": {
+        "properties": {
+          "accepted_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Prompt"
+          },
+          "accepted_tool_descriptions": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Tool Descriptions"
+          },
+          "action": {
+            "pattern": "^(recommend|accept|bundles|gateway|abtest|traffic|verdict|promote|canary|ramp|cleanup)$",
+            "title": "Action",
+            "type": "string"
+          },
+          "challenger_agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Challenger Agent Id"
+          },
+          "dataset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Id"
+          },
+          "online_evaluators": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Online Evaluators"
+          },
+          "recommend_model_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 3,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommend Model Id"
+          },
+          "recommend_provider": {
+            "anyOf": [
+              {
+                "enum": [
+                  "agentcore",
+                  "gepa_lite"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommend Provider"
+          },
+          "recommend_source_run_id": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommend Source Run Id"
+          },
+          "recommend_tools": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommend Tools"
+          },
+          "recommend_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "system_prompt",
+                    "tool_descriptions"
+                  ],
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommend Types"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "ActionRequest",
+        "type": "object"
+      }
+    }
+  },
+  "paths": {
+    "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan": {
+      "get": {
+        "operationId": "get_evaluation_plan_api_assistant_architect_conversations__conversation_id__evaluation_plan_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Evaluation Plan Api Assistant Architect Conversations  Conversation Id  Evaluation Plan Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get Evaluation Plan",
+        "tags": [
+          "assistant"
+        ]
+      },
+      "put": {
+        "operationId": "edit_evaluation_plan_api_assistant_architect_conversations__conversation_id__evaluation_plan_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanEdit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Edit Evaluation Plan Api Assistant Architect Conversations  Conversation Id  Evaluation Plan Put",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Edit Evaluation Plan",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/materialize": {
+      "post": {
+        "operationId": "materialize_evaluation_plan_api_assistant_architect_conversations__conversation_id__evaluation_plan_materialize_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanMaterialize"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Materialize Evaluation Plan Api Assistant Architect Conversations  Conversation Id  Evaluation Plan Materialize Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Materialize Evaluation Plan",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}": {
+      "get": {
+        "operationId": "get_evaluation_operation_api_assistant_architect_conversations__conversation_id__evaluation_plan_operations__operation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Evaluation Operation Api Assistant Architect Conversations  Conversation Id  Evaluation Plan Operations  Operation Id  Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get Evaluation Operation",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}/assets": {
+      "delete": {
+        "operationId": "cleanup_evaluation_operation_api_assistant_architect_conversations__conversation_id__evaluation_plan_operations__operation_id__assets_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cleanup Evaluation Operation Api Assistant Architect Conversations  Conversation Id  Evaluation Plan Operations  Operation Id  Assets Delete",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Cleanup Evaluation Operation",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}/lambda-revision-review": {
+      "post": {
+        "operationId": "review_lambda_revision_api_assistant_architect_conversations__conversation_id__evaluation_plan_operations__operation_id__lambda_revision_review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LambdaRevisionReview"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Review Lambda Revision Api Assistant Architect Conversations  Conversation Id  Evaluation Plan Operations  Operation Id  Lambda Revision Review Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Review Lambda Revision",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/{operation_id}/retry": {
+      "post": {
+        "operationId": "retry_evaluation_operation_api_assistant_architect_conversations__conversation_id__evaluation_plan_operations__operation_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Retry Evaluation Operation Api Assistant Architect Conversations  Conversation Id  Evaluation Plan Operations  Operation Id  Retry Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Retry Evaluation Operation",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/prepare": {
+      "post": {
+        "operationId": "prepare_evaluation_plan_api_assistant_architect_conversations__conversation_id__evaluation_plan_prepare_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanPrepare"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Prepare Evaluation Plan Api Assistant Architect Conversations  Conversation Id  Evaluation Plan Prepare Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Prepare Evaluation Plan",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/api/eval/agents/{agent_id}/log-streams": {
+      "get": {
+        "operationId": "agent_log_streams_api_eval_agents__agent_id__log_streams_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hours",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 336,
+              "minimum": 1,
+              "title": "Hours",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Agent Log Streams Api Eval Agents  Agent Id  Log Streams Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Agent Log Streams",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/datasets": {
+      "get": {
+        "operationId": "list_datasets_api_eval_datasets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Datasets Api Eval Datasets Get",
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List Datasets",
+        "tags": [
+          "evaluation"
+        ]
+      },
+      "post": {
+        "operationId": "create_dataset_api_eval_datasets_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Dataset Api Eval Datasets Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create Dataset",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/datasets/cloud": {
+      "get": {
+        "operationId": "list_cloud_datasets_api_eval_datasets_cloud_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Cloud Datasets Api Eval Datasets Cloud Get",
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List Cloud Datasets",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/datasets/cloud/{cloud_id}": {
+      "delete": {
+        "operationId": "delete_cloud_dataset_api_eval_datasets_cloud__cloud_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cloud_id",
+            "required": true,
+            "schema": {
+              "title": "Cloud Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Cloud Dataset Api Eval Datasets Cloud  Cloud Id  Delete",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete Cloud Dataset",
+        "tags": [
+          "evaluation"
+        ]
+      },
+      "get": {
+        "operationId": "get_cloud_dataset_api_eval_datasets_cloud__cloud_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cloud_id",
+            "required": true,
+            "schema": {
+              "title": "Cloud Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Cloud Dataset Api Eval Datasets Cloud  Cloud Id  Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get Cloud Dataset",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/datasets/cloud/{cloud_id}/publish-version": {
+      "post": {
+        "operationId": "publish_cloud_dataset_version_api_eval_datasets_cloud__cloud_id__publish_version_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cloud_id",
+            "required": true,
+            "schema": {
+              "title": "Cloud Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Publish Cloud Dataset Version Api Eval Datasets Cloud  Cloud Id  Publish Version Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Publish Cloud Dataset Version",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/datasets/cloud/{cloud_id}/versions/{version}": {
+      "delete": {
+        "operationId": "delete_cloud_dataset_version_api_eval_datasets_cloud__cloud_id__versions__version__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cloud_id",
+            "required": true,
+            "schema": {
+              "title": "Cloud Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Cloud Dataset Version Api Eval Datasets Cloud  Cloud Id  Versions  Version  Delete",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete Cloud Dataset Version",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/datasets/from-sessions": {
+      "post": {
+        "operationId": "datasets_from_sessions_api_eval_datasets_from_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FromSessions"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Datasets From Sessions Api Eval Datasets From Sessions Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Datasets From Sessions",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/datasets/upload": {
+      "post": {
+        "operationId": "upload_dataset_api_eval_datasets_upload_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Upload Dataset Api Eval Datasets Upload Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Upload Dataset",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/datasets/{dataset_id}": {
+      "delete": {
+        "operationId": "delete_dataset_api_eval_datasets__dataset_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Dataset Api Eval Datasets  Dataset Id  Delete",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete Dataset",
+        "tags": [
+          "evaluation"
+        ]
+      },
+      "put": {
+        "operationId": "update_dataset_api_eval_datasets__dataset_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Dataset Api Eval Datasets  Dataset Id  Put",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Update Dataset",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/datasets/{dataset_id}/publish-version": {
+      "post": {
+        "operationId": "publish_dataset_version_api_eval_datasets__dataset_id__publish_version_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Publish Dataset Version Api Eval Datasets  Dataset Id  Publish Version Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Publish Dataset Version",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/datasets/{dataset_id}/sync-to-aws": {
+      "post": {
+        "operationId": "sync_dataset_to_aws_api_eval_datasets__dataset_id__sync_to_aws_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sync Dataset To Aws Api Eval Datasets  Dataset Id  Sync To Aws Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Sync Dataset To Aws",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/evaluators": {
+      "get": {
+        "operationId": "list_evaluators_api_eval_evaluators_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Evaluators Api Eval Evaluators Get",
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List Evaluators",
+        "tags": [
+          "evaluation"
+        ]
+      },
+      "post": {
+        "operationId": "create_judge_api_eval_evaluators_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JudgeCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Judge Api Eval Evaluators Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create Judge",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/evaluators/{evaluator_id}": {
+      "delete": {
+        "operationId": "delete_evaluator_api_eval_evaluators__evaluator_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evaluator_id",
+            "required": true,
+            "schema": {
+              "title": "Evaluator Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Evaluator Api Eval Evaluators  Evaluator Id  Delete",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete Evaluator",
+        "tags": [
+          "evaluation"
+        ]
+      },
+      "get": {
+        "operationId": "get_evaluator_api_eval_evaluators__evaluator_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evaluator_id",
+            "required": true,
+            "schema": {
+              "title": "Evaluator Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Evaluator Api Eval Evaluators  Evaluator Id  Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get Evaluator",
+        "tags": [
+          "evaluation"
+        ]
+      },
+      "put": {
+        "operationId": "update_evaluator_api_eval_evaluators__evaluator_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evaluator_id",
+            "required": true,
+            "schema": {
+              "title": "Evaluator Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JudgeUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Evaluator Api Eval Evaluators  Evaluator Id  Put",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Update Evaluator",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/log-groups": {
+      "get": {
+        "operationId": "log_groups_api_eval_log_groups_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "pattern": "^[.\\-_/#A-Za-z0-9]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Log Groups Api Eval Log Groups Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Log Groups",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/log-services": {
+      "get": {
+        "operationId": "log_services_api_eval_log_services_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "hours",
+            "required": false,
+            "schema": {
+              "default": 168,
+              "maximum": 336,
+              "minimum": 1,
+              "title": "Hours",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "log_group",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "pattern": "^[.\\-_/#A-Za-z0-9]{1,512}$",
+                    "type": "string"
+                  },
+                  "maxItems": 10,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Log Group"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Log Services Api Eval Log Services Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Log Services",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/log-sessions": {
+      "get": {
+        "operationId": "log_sessions_api_eval_log_sessions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "log_group",
+            "required": true,
+            "schema": {
+              "items": {
+                "pattern": "^[.\\-_/#A-Za-z0-9]{1,512}$",
+                "type": "string"
+              },
+              "maxItems": 10,
+              "minItems": 1,
+              "title": "Log Group",
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "service_name",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9._:/@#\\-]{1,256}$",
+              "title": "Service Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hours",
+            "required": false,
+            "schema": {
+              "default": 168,
+              "maximum": 336,
+              "minimum": 1,
+              "title": "Hours",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Log Sessions Api Eval Log Sessions Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Log Sessions",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/online": {
+      "get": {
+        "operationId": "list_configs_api_eval_online_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Configs Api Eval Online Get",
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List Configs",
+        "tags": [
+          "evaluation-online"
+        ]
+      },
+      "post": {
+        "operationId": "create_config_api_eval_online_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnlineConfigCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Config Api Eval Online Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create Config",
+        "tags": [
+          "evaluation-online"
+        ]
+      }
+    },
+    "/api/eval/online/{config_id}": {
+      "delete": {
+        "operationId": "delete_config_api_eval_online__config_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "config_id",
+            "required": true,
+            "schema": {
+              "title": "Config Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Config Api Eval Online  Config Id  Delete",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete Config",
+        "tags": [
+          "evaluation-online"
+        ]
+      },
+      "get": {
+        "operationId": "get_config_api_eval_online__config_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "config_id",
+            "required": true,
+            "schema": {
+              "title": "Config Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Config Api Eval Online  Config Id  Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get Config",
+        "tags": [
+          "evaluation-online"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_config_api_eval_online__config_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "config_id",
+            "required": true,
+            "schema": {
+              "title": "Config Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnlineConfigPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Patch Config Api Eval Online  Config Id  Patch",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Patch Config",
+        "tags": [
+          "evaluation-online"
+        ]
+      }
+    },
+    "/api/eval/online/{config_id}/pause": {
+      "post": {
+        "operationId": "pause_config_api_eval_online__config_id__pause_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "config_id",
+            "required": true,
+            "schema": {
+              "title": "Config Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Pause Config Api Eval Online  Config Id  Pause Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Pause Config",
+        "tags": [
+          "evaluation-online"
+        ]
+      }
+    },
+    "/api/eval/online/{config_id}/reports": {
+      "get": {
+        "operationId": "list_reports_api_eval_online__config_id__reports_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "config_id",
+            "required": true,
+            "schema": {
+              "title": "Config Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Reports Api Eval Online  Config Id  Reports Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List Reports",
+        "tags": [
+          "evaluation-online"
+        ]
+      },
+      "post": {
+        "operationId": "run_report_api_eval_online__config_id__reports_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "config_id",
+            "required": true,
+            "schema": {
+              "title": "Config Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Run Report Api Eval Online  Config Id  Reports Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Run Report",
+        "tags": [
+          "evaluation-online"
+        ]
+      }
+    },
+    "/api/eval/online/{config_id}/reports/{batch_id}": {
+      "get": {
+        "operationId": "report_detail_api_eval_online__config_id__reports__batch_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "config_id",
+            "required": true,
+            "schema": {
+              "title": "Config Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Report Detail Api Eval Online  Config Id  Reports  Batch Id  Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Report Detail",
+        "tags": [
+          "evaluation-online"
+        ]
+      }
+    },
+    "/api/eval/online/{config_id}/results": {
+      "get": {
+        "operationId": "config_results_api_eval_online__config_id__results_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "config_id",
+            "required": true,
+            "schema": {
+              "title": "Config Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "range",
+            "required": false,
+            "schema": {
+              "default": "24h",
+              "title": "Range",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Config Results Api Eval Online  Config Id  Results Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Config Results",
+        "tags": [
+          "evaluation-online"
+        ]
+      }
+    },
+    "/api/eval/online/{config_id}/resume": {
+      "post": {
+        "operationId": "resume_config_api_eval_online__config_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "config_id",
+            "required": true,
+            "schema": {
+              "title": "Config Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resume Config Api Eval Online  Config Id  Resume Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Resume Config",
+        "tags": [
+          "evaluation-online"
+        ]
+      }
+    },
+    "/api/eval/pipelines": {
+      "get": {
+        "operationId": "list_pipelines_api_eval_pipelines_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Pipelines Api Eval Pipelines Get",
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List Pipelines",
+        "tags": [
+          "evaluation"
+        ]
+      },
+      "post": {
+        "operationId": "create_pipeline_api_eval_pipelines_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Pipeline Api Eval Pipelines Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create Pipeline",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/pipelines/{pipeline_id}": {
+      "delete": {
+        "operationId": "delete_pipeline_api_eval_pipelines__pipeline_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "title": "Pipeline Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Pipeline Api Eval Pipelines  Pipeline Id  Delete",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete Pipeline",
+        "tags": [
+          "evaluation"
+        ]
+      },
+      "get": {
+        "operationId": "get_pipeline_api_eval_pipelines__pipeline_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "title": "Pipeline Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Pipeline Api Eval Pipelines  Pipeline Id  Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get Pipeline",
+        "tags": [
+          "evaluation"
+        ]
+      },
+      "put": {
+        "operationId": "update_pipeline_api_eval_pipelines__pipeline_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "title": "Pipeline Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Pipeline Api Eval Pipelines  Pipeline Id  Put",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Update Pipeline",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/pipelines/{pipeline_id}/run": {
+      "post": {
+        "operationId": "run_pipeline_api_eval_pipelines__pipeline_id__run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "title": "Pipeline Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Run Pipeline Api Eval Pipelines  Pipeline Id  Run Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Run Pipeline",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/queue": {
+      "get": {
+        "operationId": "queue_state_api_eval_queue_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Queue State Api Eval Queue Get",
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Queue State",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/runs": {
+      "get": {
+        "operationId": "list_runs_api_eval_runs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(evaluators|insights)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mode"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dataset_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 16,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dataset Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Runs Api Eval Runs Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List Runs",
+        "tags": [
+          "evaluation"
+        ]
+      },
+      "post": {
+        "operationId": "create_run_api_eval_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Run Api Eval Runs Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create Run",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/runs/{run_id}": {
+      "delete": {
+        "operationId": "delete_run_api_eval_runs__run_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Run Api Eval Runs  Run Id  Delete",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete Run",
+        "tags": [
+          "evaluation"
+        ]
+      },
+      "get": {
+        "operationId": "get_run_api_eval_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Run Api Eval Runs  Run Id  Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get Run",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/runs/{run_id}/recheck": {
+      "post": {
+        "operationId": "recheck_run_api_eval_runs__run_id__recheck_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Recheck Run Api Eval Runs  Run Id  Recheck Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Recheck Run",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/runs/{run_id}/recommendation-inputs": {
+      "get": {
+        "operationId": "get_recommendation_inputs_api_eval_runs__run_id__recommendation_inputs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Recommendation Inputs Api Eval Runs  Run Id  Recommendation Inputs Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get Recommendation Inputs",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/runs/{run_id}/recommendations": {
+      "get": {
+        "operationId": "list_run_recommendations_api_eval_runs__run_id__recommendations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Run Recommendations Api Eval Runs  Run Id  Recommendations Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List Run Recommendations",
+        "tags": [
+          "evaluation"
+        ]
+      },
+      "post": {
+        "operationId": "create_run_recommendations_api_eval_runs__run_id__recommendations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecommendationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Run Recommendations Api Eval Runs  Run Id  Recommendations Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create Run Recommendations",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/runs/{run_id}/recommendations/{rec_id}/accept": {
+      "post": {
+        "operationId": "accept_run_recommendation_api_eval_runs__run_id__recommendations__rec_id__accept_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rec_id",
+            "required": true,
+            "schema": {
+              "title": "Rec Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RecommendationAccept"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Req"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Accept Run Recommendation Api Eval Runs  Run Id  Recommendations  Rec Id  Accept Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Accept Run Recommendation",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/runs/{run_id}/results": {
+      "get": {
+        "operationId": "get_run_results_api_eval_runs__run_id__results_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Run Results Api Eval Runs  Run Id  Results Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get Run Results",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/eval/runs/{run_id}/stop": {
+      "post": {
+        "operationId": "stop_run_api_eval_runs__run_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Stop Run Api Eval Runs  Run Id  Stop Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Stop Run",
+        "tags": [
+          "evaluation"
+        ]
+      }
+    },
+    "/api/experiments": {
+      "get": {
+        "operationId": "list_experiments_api_experiments_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Experiments Api Experiments Get",
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List Experiments",
+        "tags": [
+          "experiments"
+        ]
+      },
+      "post": {
+        "operationId": "create_experiment_api_experiments_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExperimentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Experiment Api Experiments Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create Experiment",
+        "tags": [
+          "experiments"
+        ]
+      }
+    },
+    "/api/experiments/providers": {
+      "get": {
+        "operationId": "recommend_providers_api_experiments_providers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Recommend Providers Api Experiments Providers Get",
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Recommend Providers",
+        "tags": [
+          "experiments"
+        ]
+      }
+    },
+    "/api/experiments/readiness": {
+      "get": {
+        "operationId": "experiment_readiness_api_experiments_readiness_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "maxLength": 32,
+              "minLength": 1,
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lookback_hours",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 720,
+              "minimum": 24,
+              "title": "Lookback Hours",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Experiment Readiness Api Experiments Readiness Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Experiment Readiness",
+        "tags": [
+          "experiments"
+        ]
+      }
+    },
+    "/api/experiments/{exp_id}": {
+      "get": {
+        "operationId": "get_experiment_api_experiments__exp_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exp_id",
+            "required": true,
+            "schema": {
+              "title": "Exp Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Experiment Api Experiments  Exp Id  Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get Experiment",
+        "tags": [
+          "experiments"
+        ]
+      }
+    },
+    "/api/experiments/{exp_id}/action": {
+      "post": {
+        "operationId": "experiment_action_api_experiments__exp_id__action_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exp_id",
+            "required": true,
+            "schema": {
+              "title": "Exp Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/app__optimization__routers__ActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Experiment Action Api Experiments  Exp Id  Action Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Experiment Action",
+        "tags": [
+          "experiments"
+        ]
+      }
+    },
+    "/api/observability/sessions/{session_id}/evaluate": {
+      "post": {
+        "operationId": "session_evaluate_api_observability_sessions__session_id__evaluate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_\\-#:.@]{8,256}$",
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionEvaluateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Session Evaluate Api Observability Sessions  Session Id  Evaluate Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Session Evaluate",
+        "tags": [
+          "observability"
+        ]
+      }
+    },
+    "/api/overview/online-quality": {
+      "get": {
+        "operationId": "overview_online_quality_api_overview_online_quality_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Overview Online Quality Api Overview Online Quality Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Overview Online Quality",
+        "tags": [
+          "overview"
+        ]
+      }
+    },
+    "/api/runtime-canaries": {
+      "get": {
+        "operationId": "list_runtime_canaries_api_runtime_canaries_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Runtime Canaries Api Runtime Canaries Get",
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List Runtime Canaries",
+        "tags": [
+          "runtime-canaries"
+        ]
+      },
+      "post": {
+        "operationId": "create_runtime_canary_api_runtime_canaries_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeCanaryCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Runtime Canary Api Runtime Canaries Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create Runtime Canary",
+        "tags": [
+          "runtime-canaries"
+        ]
+      }
+    },
+    "/api/runtime-canaries/{canary_id}": {
+      "get": {
+        "operationId": "get_runtime_canary_api_runtime_canaries__canary_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "canary_id",
+            "required": true,
+            "schema": {
+              "title": "Canary Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Runtime Canary Api Runtime Canaries  Canary Id  Get",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get Runtime Canary",
+        "tags": [
+          "runtime-canaries"
+        ]
+      }
+    },
+    "/api/runtime-canaries/{canary_id}/action": {
+      "post": {
+        "operationId": "runtime_canary_action_api_runtime_canaries__canary_id__action_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "canary_id",
+            "required": true,
+            "schema": {
+              "title": "Canary Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeCanaryAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Runtime Canary Action Api Runtime Canaries  Canary Id  Action Post",
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Runtime Canary Action",
+        "tags": [
+          "runtime-canaries"
+        ]
+      }
+    }
+  }
+}

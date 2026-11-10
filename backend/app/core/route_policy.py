@@ -22,25 +22,21 @@ governance posture; member for reads and for the member's own interaction with a
 agent.** Amended by river 2026-08-07: the agent-lifecycle routes (deploy,
 discovery import, delete, convert and the deploy-flow skill helpers) are
 member-grantable via `perm:agents.*`, **default granted**, revocable per user.
-Amended by river 2026-08-10: starting evaluation/insights runs
-(`POST /api/eval/runs`) is member-grantable via `perm:eval.run` on the same
-default-granted terms — it invokes agents (member parity with Chat) and creates
-billable AWS eval jobs, which revocation can still shut off per user.
 Amended by river 2026-08-11: **the whole console is member-reachable except user
 management** — every route that used to demand `ADMIN` (registry writes, knowledge
-bases, governance, evaluation datasets/evaluators, experiments, canaries, API keys,
-studio local exec, tools/demos, prices refresh) is now `MEMBER`; only `/api/users*`
-still requires an administrator. The `perm:*` entries keep their revocation
-semantics unchanged.
+bases, governance, API keys, studio local exec, tools/demos) is now
+`MEMBER`; only `/api/users*` still requires an administrator. The `perm:*` entries
+keep their revocation semantics unchanged.
 Amended 2026-10-04 (issue #55): creating, editing and deleting AgentCore Memory
 resources (`/api/memory/resources` writes) is member-grantable via
 `perm:memory.manage` on the same default-granted, revocable terms — DeleteMemory
 is irreversible — and those routes reach only memories the workspace manages.
 Adopting an existing account memory into management is `ADMIN`.
-Amended 2026-10-08: the architect assistant's evaluation-assets routes (materialize,
-retry, Lambda revision review, cleanup) are member-grantable via `perm:agents.deploy`
-— the same permission that approves a proposal into a deployed Agent — instead of
-`ADMIN`; clearing a conversation with assets needs the matching `perm:` keys.
+Amended 2026-10-22 (N17-obs248, user ruling): `POST /api/registry/records/{record_id}/action`
+stays `MEMBER` because `submit` is a member operation, but its handler gates per action —
+`approve`, `publish`, `reject` and `disable` require an administrator (403
+`registry.approval_admin_only`); platform-owned records are still approved by the `system`
+actor inside the platform paths, never through this route.
 Since 2026-08-12 the table carries a **second dimension**: whether a route
 operates inside a workspace (one account/region environment). `WORKSPACE_EXEMPT`
 names the hub-global routes; every other entry is workspace-scoped, and
@@ -61,9 +57,19 @@ Consequences worth knowing before editing this table:
   in production through its own handler guard (`local_exec`, refused outright in
   prod unless explicitly opted in) — that guard, not this table, is the real
   boundary there.
-* Invoking an agent is deliberately `MEMBER` (`/api/agents/{id}/invoke`,
-  `/api/registry/a2a-demo`): it is the same capability the Chat console gives
-  every member, so gating it while Chat stays open would protect nothing.
+* Invoking an agent is deliberately `MEMBER` (`/api/agents/{id}/invoke`): it is the
+  same capability the Chat console gives every member, so gating it while Chat stays
+  open would protect nothing.
+
+The table is the only route-level admin check (N17-obs284, r17-s2): a handler of an
+`ADMIN` route does not repeat it with `Depends(require_admin)` or `require_admin(request)` —
+`tests/test_route_policy.py::TestAdminRoutesAreTableOnly` fails if one comes back and proves,
+per `ADMIN` route, that the table refuses a member before any route dependency or handler body
+runs. What handlers still check is what a `(method, path)` row cannot express: per-action
+gates inside a `MEMBER` route (registry `ADMIN_ONLY_ACTIONS`), per-field gates
+(`model_registry.require_admin_for_credential_fields`, `routers/model_providers.
+_require_admin_for_scope`), per-row ownership (`services/ownership.require_creator_or_admin`)
+and protected-resource refusals (`refuse_protected_mutation`).
 
 There is deliberately **no** setting that disables this table. A flag that turns
 authorization off is the vulnerability; fixing a misclassification means editing
@@ -75,7 +81,7 @@ from typing import Any
 from fastapi import Request
 
 from app.core.errors import AppError
-from app.routers.auth import require_admin, require_permission
+from app.routers.auth import app_path, require_admin, require_permission
 from app.routers.workspaces import resolve_workspace
 
 ADMIN = "admin"
@@ -87,11 +93,14 @@ PUBLIC = "public"
 PERM_AGENT_DEPLOY = "perm:agents.deploy"
 PERM_AGENT_IMPORT = "perm:agents.import"
 PERM_AGENT_DELETE = "perm:agents.delete"
-PERM_AGENT_CONVERT = "perm:agents.convert"
-PERM_EVAL_RUN = "perm:eval.run"
 PERM_IDENTITY_MANAGE = "perm:identity.manage"
 PERM_IDENTITY_GRANT = "perm:identity.grant"
 PERM_MEMORY_MANAGE = "perm:memory.manage"
+# starting evaluation / insights runs (billable judge calls) is member-grantable
+PERM_EVAL_RUN = "perm:eval.run"
+# D20 / Global model: authoring / publishing Cedar policies and managing policy engines is
+# member-grantable; attaching an engine to a gateway (its governance posture) is ADMIN.
+PERM_POLICY_MANAGE = "perm:policy.manage"
 _PERM_PREFIX = "perm:"
 
 API_PREFIX = "/api"
@@ -118,12 +127,14 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/agents/{agent_id}"): MEMBER,
     ("GET", "/api/agents/{agent_id}/identity"): MEMBER,
     ("GET", "/api/agents/{agent_id}/versions"): MEMBER,  # read-only AWS view
-    ("GET", "/api/agents/{agent_id}/conversions"): MEMBER,  # ledger read: runtime twins
+    ("GET", "/api/agents/{agent_id}/trace-status"): MEMBER,  # N17-obs465, read-only logs
     ("DELETE", "/api/agents/{agent_id}"): PERM_AGENT_DELETE,
-    ("POST", "/api/agents/{agent_id}/convert"): PERM_AGENT_CONVERT,
     ("POST", "/api/agents/{agent_id}/redeploy"): PERM_AGENT_DEPLOY,
-    ("POST", "/api/agents/{agent_id}/inbound-auth"): PERM_AGENT_DEPLOY,
     ("POST", "/api/agents/{agent_id}/invoke"): MEMBER,  # parity with Chat
+    # spec snapshots (upstream #277, reads only in CN): ledger reads
+    ("GET", "/api/agents/{agent_id}/snapshots"): MEMBER,
+    ("GET", "/api/agents/{agent_id}/snapshots/diff"): MEMBER,
+    ("GET", "/api/agents/{agent_id}/snapshots/{seq}"): MEMBER,
     ("GET", "/api/jobs/{job_id}"): MEMBER,
     # ---- system-managed presets: status is a ledger read; install/repair and
     # uninstall create or delete billable AWS resources on an operator's explicit
@@ -134,6 +145,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # registers / verifies the preset's published Skill release in the Registry
     # (one Registry write at most, no S3 write) — administrator, like install
     ("POST", "/api/system-agents/{preset_key}/skill-registration"): ADMIN,
+    # the preset's own job log (install/repair/uninstall) — names AWS resources
+    ("GET", "/api/system-agents/{preset_key}/jobs/{job_id}"): ADMIN,
     ("DELETE", "/api/system-agents/{preset_key}"): ADMIN,
     # ---- architect assistant (SE-039): discussion with the preset is member
     # (parity with Chat); approving a proposal deploys a NEW agent and rides the
@@ -142,21 +155,30 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/assistant/architect/conversations"): MEMBER,
     ("POST", "/api/assistant/architect/conversations"): MEMBER,
     ("GET", "/api/assistant/architect/conversations/{conversation_id}"): MEMBER,
-    ("PUT", "/api/assistant/architect/conversations/{conversation_id}/sharing"): ADMIN,
+    # sharing: the owner (upstream #226, ported 2026-10-16) or an administrator — the
+    # handler refuses a non-owner collaborator (403 assistant.share_forbidden); nobody
+    # but an admin can reach a private conversation it does not own
+    ("PUT", "/api/assistant/architect/conversations/{conversation_id}/sharing"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/catalog"): MEMBER,
     ("PUT", "/api/assistant/architect/conversations/{conversation_id}/preparation"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/preparation/skills"):
         PERM_AGENT_DEPLOY,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/turns"): MEMBER,
+    # N-ARCH-obs15: reattach to a turn (same member parity as the turn itself)
+    ("GET", "/api/assistant/architect/conversations/{conversation_id}/turns/{turn}/stream"):
+        MEMBER,
     ("PUT", "/api/assistant/architect/conversations/{conversation_id}/proposal"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/proposal/reject"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/proposal/approve"):
         PERM_AGENT_DEPLOY,
-    # ---- SE-047 evaluation-assets plan: preparing/editing the private plan is
-    # discussion (member, owner-bound); materializing creates AWS evaluators + a
-    # Lambda + IAM → the deploy permission (amended 2026-10-08: was admin), owner-
-    # bound, exact plan revision/hash; status is a ledger read; retry / review /
-    # cleanup of an operation ride the same permission ----
+    # ---- clearing a conversation (History panel): the footprint is a ledger read;
+    # the purge is owner-bound and MEMBER at the policy layer — the handler adds
+    # agents.deploy for cloud assets and agents.delete for an Agent (cleanup /
+    # delete parity), so a plain transcript stays the member's to delete ----
+    # ---- SE-047 evaluation-assets plan (N12 W-E5): every member prepares / edits /
+    # reads plans; materialization is owner-bound, exact plan revision/hash and needs
+    # the deploy permission; status is a ledger read; retry / cleanup of an operation
+    # ride the same permission ----
     ("GET", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/prepare"):
         MEMBER,
@@ -168,17 +190,8 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
      "{operation_id}"): MEMBER,
     ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
      "{operation_id}/retry"): PERM_AGENT_DEPLOY,
-    # SE-049: reviewed recovery of the Lambda first-initialization RevisionId conflict —
-    # deploy permission + owner, reads CloudTrail / Lambda, writes only the ledger
-    # review + requeue
-    ("POST", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/operations/"
-     "{operation_id}/lambda-revision-review"): PERM_AGENT_DEPLOY,
     ("DELETE", "/api/assistant/architect/conversations/{conversation_id}/evaluation-plan/"
      "operations/{operation_id}/assets"): PERM_AGENT_DEPLOY,
-    # ---- clearing a conversation (History panel): the footprint is a ledger read;
-    # the purge is owner-bound and MEMBER at the policy layer — the handler adds
-    # agents.deploy for cloud assets and agents.delete for an Agent (cleanup /
-    # delete parity), so a plain transcript stays the member's to delete ----
     ("GET", "/api/assistant/architect/conversations/{conversation_id}/footprint"): MEMBER,
     ("DELETE", "/api/assistant/architect/conversations/{conversation_id}"): MEMBER,
     # ---- credential minting ----
@@ -186,12 +199,16 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/apikeys"): MEMBER,
     ("POST", "/api/apikeys/{key_id}/disable"): MEMBER,
     ("POST", "/api/apikeys/{key_id}/enable"): MEMBER,
+    # the handler adds owner-or-admin on top (apikeys.require_key_owner)
+    ("DELETE", "/api/apikeys/{key_id}"): MEMBER,
     # ---- chat: the member-facing invoke surface ----
     ("POST", "/api/chat/{agent_id}"): MEMBER,
     ("GET", "/api/chat/{agent_id}/history"): MEMBER,
     ("GET", "/api/chat/{agent_id}/memory"): MEMBER,
     ("GET", "/api/chat/{agent_id}/sessions"): MEMBER,
     ("POST", "/api/chat/{agent_id}/sessions/{session_id}/stop"): MEMBER,
+    # N-ARCH-obs15 v2: reattach to a console turn (same member parity as the turn)
+    ("GET", "/api/chat/{agent_id}/sessions/{session_id}/turns/{turn}/stream"): MEMBER,
     # ---- studio local-debug scaffolding: prod refuses these in the handler
     # (local_exec guard) regardless of role ----
     ("GET", "/api/conversations"): MEMBER,
@@ -215,11 +232,15 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/registry/records/search"): MEMBER,
     # data-plane read (ListDiscoverableRegistryRecords) of the workspace registry
     ("GET", "/api/registry/records/discoverable"): MEMBER,
+    # per-status counts (N17-obs267): the sidebar pending badge + the list's status tabs
+    ("GET", "/api/registry/records/counts"): MEMBER,
     ("GET", "/api/registry/records/{record_id}"): MEMBER,
     # a data-plane read (GetAgentCard) of the agent's own runtime; no ARN from the client
     ("GET", "/api/registry/records/{record_id}/live-agent-card"): MEMBER,
     ("PUT", "/api/registry/records/{record_id}"): MEMBER,
     ("DELETE", "/api/registry/records/{record_id}"): MEMBER,
+    # MEMBER for submit; approve/publish/reject/disable are admin-only inside the handler
+    # (403 registry.approval_admin_only — N17-obs248, 2026-10-22)
     ("POST", "/api/registry/records/{record_id}/action"): MEMBER,
     ("POST", "/api/registry/records/{record_id}/reimport"): MEMBER,
     ("GET", "/api/registry/skills/capabilities"): MEMBER,
@@ -229,8 +250,11 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # fetches remote content (SSRF-guarded); staging-only, needed by deploy
     ("POST", "/api/registry/skills/inspect"): PERM_AGENT_DEPLOY,
     ("POST", "/api/registry/sync-defaults"): MEMBER,
+    # WB-005: the selective gateway → MCP record import; same capability as
+    # sync-defaults / registering an MCP server (parity with POST /api/registry/records)
+    ("GET", "/api/registry/import-gateway/preview"): MEMBER,
+    ("POST", "/api/registry/import-gateway"): MEMBER,
     ("GET", "/api/registry/attachables"): MEMBER,
-    ("POST", "/api/registry/a2a-demo"): MEMBER,  # an invoke; parity with Chat
     # ---- identity: Connections (credential providers) and gateway targets
     # bound to one. Reads are plain member; creating/deleting a vault entry or a
     # target is the member-grantable identity.manage permission ----
@@ -257,11 +281,6 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # AgentCore: an administrator decision, not member-grantable
     ("POST", "/api/identity/consent-portal"): ADMIN,
     ("DELETE", "/api/identity/consent-portal"): ADMIN,
-    # inbound JWT auth (P3): reading the workspace default is member (the
-    # wizard shows the effective value); changing it flips how every inheriting
-    # agent authenticates its callers on next deploy
-    ("GET", "/api/identity/inbound-auth/default"): MEMBER,
-    ("PUT", "/api/identity/inbound-auth/default"): PERM_IDENTITY_MANAGE,
     # ---- tools + demos: /tools/call can mutate external systems through a
     # gateway target, and the demos open billable cloud sessions ----
     ("GET", "/api/tools"): MEMBER,
@@ -273,7 +292,6 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # ---- knowledge bases: reads and the retrieval playground stay open ----
     ("GET", "/api/knowledge-bases"): MEMBER,
     ("POST", "/api/knowledge-bases"): MEMBER,
-    ("POST", "/api/knowledge-bases/ensure-gateway"): MEMBER,
     ("GET", "/api/knowledge-bases/{kb_id}"): MEMBER,
     ("PATCH", "/api/knowledge-bases/{kb_id}"): MEMBER,
     ("DELETE", "/api/knowledge-bases/{kb_id}"): MEMBER,
@@ -284,97 +302,6 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/ingestion-jobs"): MEMBER,
     ("POST", "/api/knowledge-bases/{kb_id}/data-sources/{ds_id}/sync"): MEMBER,
     ("POST", "/api/knowledge-bases/{kb_id}/query"): MEMBER,  # retrieval playground
-    # ---- governance ----
-    ("GET", "/api/governance/gateways"): MEMBER,
-    ("GET", "/api/governance/gateways/{gateway_id}"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/manage"): MEMBER,
-    ("DELETE", "/api/governance/gateways/{gateway_id}/manage"): MEMBER,
-    ("GET", "/api/governance/gateways/{gateway_id}/registry-preview"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/registry-import"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/retire-legacy-records"): MEMBER,
-    ("GET", "/api/governance/gateways/{gateway_id}/policies"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/policies"): MEMBER,
-    ("PUT", "/api/governance/gateways/{gateway_id}/policies/{policy_id}"): MEMBER,
-    ("DELETE", "/api/governance/gateways/{gateway_id}/policies/{policy_id}"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/policies/{policy_id}/promote"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/policies/{policy_id}/rollback"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/engine"): MEMBER,
-    ("GET", "/api/governance/gateways/{gateway_id}/rate-limits"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/rate-limits"): MEMBER,
-    ("PUT", "/api/governance/gateways/{gateway_id}/rate-limits/{rate_limit_id}"): MEMBER,
-    ("DELETE", "/api/governance/gateways/{gateway_id}/rate-limits/{rate_limit_id}"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/targets/{target_id}/synchronize"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/mode"): MEMBER,
-    ("POST", "/api/governance/gateways/{gateway_id}/generations"): MEMBER,
-    ("GET", "/api/governance/gateways/{gateway_id}/generations/{generation_id}"): MEMBER,
-    ("GET", "/api/governance/gateways/{gateway_id}/audit"): MEMBER,
-    ("GET", "/api/governance/gateways/{gateway_id}/decisions"): MEMBER,
-    ("GET", "/api/governance/operations/{operation_id}"): MEMBER,
-    ("GET", "/api/governance/policies"): MEMBER,
-    ("GET", "/api/governance/decisions"): MEMBER,
-    # Not a dry run: it performs a real tools/call as the chosen principal and
-    # journals a PolicyDecision row (routers/governance.py:406).
-    ("POST", "/api/governance/policy-test"): MEMBER,
-    ("POST", "/api/governance/policy-generation"): MEMBER,
-    ("GET", "/api/governance/policy-generation/{generation_id}"): MEMBER,
-    ("GET", "/api/traces/{session_id}"): MEMBER,
-    # ---- evaluation: runs invoke agents and create AWS eval jobs ----
-    ("GET", "/api/eval/datasets"): MEMBER,
-    ("POST", "/api/eval/datasets"): MEMBER,
-    ("POST", "/api/eval/datasets/upload"): MEMBER,
-    ("GET", "/api/eval/datasets/cloud"): MEMBER,
-    ("GET", "/api/eval/datasets/cloud/{cloud_id}"): MEMBER,
-    ("DELETE", "/api/eval/datasets/cloud/{cloud_id}"): MEMBER,
-    ("POST", "/api/eval/datasets/cloud/{cloud_id}/publish-version"): MEMBER,
-    ("DELETE", "/api/eval/datasets/cloud/{cloud_id}/versions/{version}"): MEMBER,
-    ("PUT", "/api/eval/datasets/{dataset_id}"): MEMBER,
-    ("DELETE", "/api/eval/datasets/{dataset_id}"): MEMBER,
-    ("POST", "/api/eval/datasets/{dataset_id}/sync-to-aws"): MEMBER,
-    ("POST", "/api/eval/datasets/{dataset_id}/publish-version"): MEMBER,
-    # console V2 数据处理: observed sessions → local datasets (reads + ledger writes)
-    ("POST", "/api/eval/datasets/from-sessions"): MEMBER,
-    ("GET", "/api/eval/pipelines"): MEMBER,
-    ("POST", "/api/eval/pipelines"): MEMBER,
-    ("GET", "/api/eval/pipelines/{pipeline_id}"): MEMBER,
-    ("PUT", "/api/eval/pipelines/{pipeline_id}"): MEMBER,
-    ("DELETE", "/api/eval/pipelines/{pipeline_id}"): MEMBER,
-    ("POST", "/api/eval/pipelines/{pipeline_id}/run"): MEMBER,
-    ("GET", "/api/eval/agents/{agent_id}/log-streams"): MEMBER,
-    ("GET", "/api/eval/log-sessions"): MEMBER,
-    ("GET", "/api/eval/log-groups"): MEMBER,
-    ("GET", "/api/eval/log-services"): MEMBER,
-    ("GET", "/api/eval/evaluators"): MEMBER,
-    ("POST", "/api/eval/evaluators"): MEMBER,
-    ("GET", "/api/eval/evaluators/{evaluator_id}"): MEMBER,
-    ("PUT", "/api/eval/evaluators/{evaluator_id}"): MEMBER,
-    ("DELETE", "/api/eval/evaluators/{evaluator_id}"): MEMBER,
-    ("GET", "/api/eval/queue"): MEMBER,
-    ("GET", "/api/eval/runs"): MEMBER,
-    ("POST", "/api/eval/runs"): PERM_EVAL_RUN,
-    ("GET", "/api/eval/runs/{run_id}"): MEMBER,
-    ("GET", "/api/eval/runs/{run_id}/results"): MEMBER,
-    ("POST", "/api/eval/runs/{run_id}/stop"): PERM_EVAL_RUN,
-    ("POST", "/api/eval/runs/{run_id}/recheck"): PERM_EVAL_RUN,
-    ("GET", "/api/eval/runs/{run_id}/recommendation-inputs"): MEMBER,
-    ("GET", "/api/eval/runs/{run_id}/recommendations"): MEMBER,
-    # starts billable AWS recommendation jobs — same revocable grant as a run
-    ("POST", "/api/eval/runs/{run_id}/recommendations"): PERM_EVAL_RUN,
-    # re-publishes the Harness (a new version) — the same grant as a redeploy
-    ("POST", "/api/eval/runs/{run_id}/recommendations/{rec_id}/accept"): PERM_AGENT_DEPLOY,
-    ("DELETE", "/api/eval/runs/{run_id}"): PERM_EVAL_RUN,
-    # online evaluation configs: create/resume start billed judge calls on live
-    # traffic, the same cost class as starting a run; list/detail/results read AWS
-    ("GET", "/api/eval/online"): MEMBER,
-    ("POST", "/api/eval/online"): PERM_EVAL_RUN,
-    ("GET", "/api/eval/online/{config_id}"): MEMBER,
-    ("PATCH", "/api/eval/online/{config_id}"): MEMBER,
-    ("POST", "/api/eval/online/{config_id}/pause"): MEMBER,
-    ("POST", "/api/eval/online/{config_id}/resume"): PERM_EVAL_RUN,
-    ("DELETE", "/api/eval/online/{config_id}"): MEMBER,
-    ("GET", "/api/eval/online/{config_id}/results"): MEMBER,
-    ("GET", "/api/eval/online/{config_id}/reports"): MEMBER,
-    ("POST", "/api/eval/online/{config_id}/reports"): PERM_EVAL_RUN,
-    ("GET", "/api/eval/online/{config_id}/reports/{batch_id}"): MEMBER,
     # ---- skill lab: local task assets/task sets + Runtime-backed jobs ----
     ("GET", "/api/skill-lab/status"): MEMBER,
     ("POST", "/api/skill-lab/task-assets"): MEMBER,
@@ -398,20 +325,132 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/skill-lab/jobs/{job_id}/results"): MEMBER,
     ("GET", "/api/skill-lab/jobs/{job_id}/artifacts"): MEMBER,
     ("GET", "/api/skill-lab/jobs/{job_id}/artifacts/raw"): MEMBER,
-    ("GET", "/api/experiments"): MEMBER,
-    ("GET", "/api/experiments/readiness"): MEMBER,
-    ("GET", "/api/experiments/providers"): MEMBER,
-    ("POST", "/api/experiments"): MEMBER,
-    ("GET", "/api/experiments/{exp_id}"): MEMBER,
-    ("POST", "/api/experiments/{exp_id}/action"): MEMBER,
-    # canaries provision real AgentCore runtimes
+    # ---- governance (Gateway lifecycle, rate limits, target sync; Cedar Policy
+    # does not exist in the CN build) ----
+    ("GET", "/api/governance/gateways"): MEMBER,
+    ("GET", "/api/governance/gateways/{gateway_id}"): MEMBER,
+    ("POST", "/api/governance/gateways/{gateway_id}/manage"): MEMBER,
+    ("DELETE", "/api/governance/gateways/{gateway_id}/manage"): MEMBER,
+    ("GET", "/api/governance/gateways/{gateway_id}/rate-limits"): MEMBER,
+    ("POST", "/api/governance/gateways/{gateway_id}/rate-limits"): MEMBER,
+    ("PUT", "/api/governance/gateways/{gateway_id}/rate-limits/{rate_limit_id}"): MEMBER,
+    ("DELETE", "/api/governance/gateways/{gateway_id}/rate-limits/{rate_limit_id}"): MEMBER,
+    ("POST", "/api/governance/gateways/{gateway_id}/targets/{target_id}/synchronize"): MEMBER,
+    # ---- CN evaluation / optimization (N12): runs invoke agents and start judge jobs ----
+    ("GET", "/api/eval/datasets"): MEMBER,
+    ("POST", "/api/eval/datasets"): MEMBER,
+    ("POST", "/api/eval/datasets/upload"): MEMBER,
+    ("GET", "/api/eval/datasets/cloud"): MEMBER,
+    ("GET", "/api/eval/datasets/cloud/{cloud_id}"): MEMBER,
+    ("DELETE", "/api/eval/datasets/cloud/{cloud_id}"): MEMBER,
+    ("POST", "/api/eval/datasets/cloud/{cloud_id}/publish-version"): MEMBER,
+    ("DELETE", "/api/eval/datasets/cloud/{cloud_id}/versions/{version}"): MEMBER,
+    ("PUT", "/api/eval/datasets/{dataset_id}"): MEMBER,
+    ("DELETE", "/api/eval/datasets/{dataset_id}"): MEMBER,
+    ("POST", "/api/eval/datasets/{dataset_id}/sync-to-aws"): MEMBER,
+    ("POST", "/api/eval/datasets/{dataset_id}/publish-version"): MEMBER,
+    # console V2 data processing: observed sessions → local datasets (reads + ledger writes)
+    ("POST", "/api/eval/datasets/from-sessions"): MEMBER,
+    ("GET", "/api/eval/pipelines"): MEMBER,
+    ("POST", "/api/eval/pipelines"): MEMBER,
+    ("GET", "/api/eval/pipelines/{pipeline_id}"): MEMBER,
+    ("PUT", "/api/eval/pipelines/{pipeline_id}"): MEMBER,
+    ("DELETE", "/api/eval/pipelines/{pipeline_id}"): MEMBER,
+    ("POST", "/api/eval/pipelines/{pipeline_id}/run"): MEMBER,
+    ("GET", "/api/eval/agents/{agent_id}/log-streams"): MEMBER,
+    ("GET", "/api/eval/log-sessions"): MEMBER,
+    ("GET", "/api/eval/log-groups"): MEMBER,
+    ("GET", "/api/eval/log-services"): MEMBER,
+    ("GET", "/api/eval/evaluators"): MEMBER,
+    ("POST", "/api/eval/evaluators"): MEMBER,
+    ("GET", "/api/eval/evaluators/{evaluator_id}"): MEMBER,
+    ("PUT", "/api/eval/evaluators/{evaluator_id}"): MEMBER,
+    ("DELETE", "/api/eval/evaluators/{evaluator_id}"): MEMBER,
+    ("GET", "/api/eval/queue"): MEMBER,
+    ("GET", "/api/eval/runs"): MEMBER,
+    ("POST", "/api/eval/runs"): PERM_EVAL_RUN,
+    # agent scorecards + two-run compare: ledger reads (compare adds the two runs'
+    # results reads, as `/results` does) — upstream #289
+    ("GET", "/api/eval/scorecard"): MEMBER,
+    ("GET", "/api/eval/runs/compare"): MEMBER,
+    ("GET", "/api/eval/runs/{run_id}"): MEMBER,
+    ("GET", "/api/eval/runs/{run_id}/results"): MEMBER,
+    ("POST", "/api/eval/runs/{run_id}/stop"): PERM_EVAL_RUN,
+    ("POST", "/api/eval/runs/{run_id}/recheck"): PERM_EVAL_RUN,
+    # starts a new run of the same scope — the same grant as POST /runs (upstream #289)
+    ("POST", "/api/eval/runs/{run_id}/rerun"): PERM_EVAL_RUN,
+    ("GET", "/api/eval/runs/{run_id}/recommendation-inputs"): MEMBER,
+    ("GET", "/api/eval/runs/{run_id}/recommendations"): MEMBER,
+    # starts a recommendation job (judge / reflection calls) — same revocable grant as a run
+    ("POST", "/api/eval/runs/{run_id}/recommendations"): PERM_EVAL_RUN,
+    # re-publishes the agent (a new version) — the same grant as a redeploy
+    ("POST", "/api/eval/runs/{run_id}/recommendations/{rec_id}/accept"): PERM_AGENT_DEPLOY,
+    ("POST", "/api/eval/runs/{run_id}/recommendations/{rec_id}/revise"): PERM_AGENT_DEPLOY,
+    ("DELETE", "/api/eval/runs/{run_id}"): PERM_EVAL_RUN,
+    # online evaluation configs: create/resume start judge calls on live traffic, the
+    # same cost class as starting a run; list/detail/results are reads
+    ("GET", "/api/eval/online"): MEMBER,
+    ("POST", "/api/eval/online"): PERM_EVAL_RUN,
+    ("GET", "/api/eval/online/{config_id}"): MEMBER,
+    ("PATCH", "/api/eval/online/{config_id}"): MEMBER,
+    ("POST", "/api/eval/online/{config_id}/pause"): MEMBER,
+    ("POST", "/api/eval/online/{config_id}/resume"): PERM_EVAL_RUN,
+    ("DELETE", "/api/eval/online/{config_id}"): MEMBER,
+    ("GET", "/api/eval/online/{config_id}/results"): MEMBER,
+    ("GET", "/api/eval/online/{config_id}/reports"): MEMBER,
+    ("POST", "/api/eval/online/{config_id}/reports"): PERM_EVAL_RUN,
+    ("GET", "/api/eval/online/{config_id}/reports/{batch_id}"): MEMBER,
+    # the recommendation providers a picker may offer (no AWS call)
+    ("GET", "/api/eval/recommendation-providers"): MEMBER,
+    # canaries provision real AgentCore runtime versions + endpoints
     ("GET", "/api/runtime-canaries"): MEMBER,
     ("POST", "/api/runtime-canaries"): MEMBER,
     ("GET", "/api/runtime-canaries/{canary_id}"): MEMBER,
     ("POST", "/api/runtime-canaries/{canary_id}/action"): MEMBER,
+    # ---- end CN evaluation / optimization (N12) ----
+    # ---- self-hosted Policy, Global model (/api/policy-engines, mounted only with the
+    # `policy` feature; contract docs/cn/interfaces/policy-engines.md). Engine / policy writes
+    # are member-grantable (perm:policy.manage); a gateway attachment changes the gateway's
+    # governance posture and is an administrator's. ----
+    ("GET", "/api/policy-engines"): MEMBER,
+    ("POST", "/api/policy-engines"): PERM_POLICY_MANAGE,
+    ("GET", "/api/policy-engines/{engine_id}"): MEMBER,
+    ("PUT", "/api/policy-engines/{engine_id}"): PERM_POLICY_MANAGE,
+    ("DELETE", "/api/policy-engines/{engine_id}"): PERM_POLICY_MANAGE,
+    ("GET", "/api/policy-engines/{engine_id}/status"): MEMBER,
+    ("GET", "/api/policy-engines/{engine_id}/entities"): MEMBER,
+    ("GET", "/api/policy-engines/{engine_id}/changes"): MEMBER,
+    ("GET", "/api/policy-engines/{engine_id}/decisions"): MEMBER,
+    ("POST", "/api/policy-engines/{engine_id}/validate"): MEMBER,  # pure evaluation
+    ("POST", "/api/policy-engines/{engine_id}/format"): MEMBER,
+    # dry-run; `record: true` additionally requires perm:policy.manage in the handler
+    ("POST", "/api/policy-engines/{engine_id}/simulate"): MEMBER,
+    ("GET", "/api/policy-engines/{engine_id}/policies"): MEMBER,
+    ("POST", "/api/policy-engines/{engine_id}/policies"): PERM_POLICY_MANAGE,
+    ("GET", "/api/policy-engines/{engine_id}/policies/{policy_id}"): MEMBER,
+    ("GET", "/api/policy-engines/{engine_id}/policies/{policy_id}/versions"): MEMBER,
+    ("PUT", "/api/policy-engines/{engine_id}/policies/{policy_id}"): PERM_POLICY_MANAGE,
+    ("POST", "/api/policy-engines/{engine_id}/policies/{policy_id}/publish"): PERM_POLICY_MANAGE,
+    ("PUT", "/api/policy-engines/{engine_id}/policies/{policy_id}/enforcement-mode"):
+        PERM_POLICY_MANAGE,
+    ("POST", "/api/policy-engines/{engine_id}/policies/{policy_id}/retire"): PERM_POLICY_MANAGE,
+    ("DELETE", "/api/policy-engines/{engine_id}/policies/{policy_id}"): PERM_POLICY_MANAGE,
+    # Gateway.policyEngineConfiguration: which engine decides a gateway's calls, in which mode
+    ("GET", "/api/governance/gateways/{gateway_id}/policy-engine"): MEMBER,
+    ("PUT", "/api/governance/gateways/{gateway_id}/policy-engine"): ADMIN,
+    ("DELETE", "/api/governance/gateways/{gateway_id}/policy-engine"): ADMIN,
+    # the retired /api/policies surface answers 410 policy.moved for one release
+    ("GET", "/api/policies"): MEMBER,
+    ("POST", "/api/policies"): MEMBER,
+    ("GET", "/api/policies/{rest}"): MEMBER,
+    ("POST", "/api/policies/{rest}"): MEMBER,
+    ("PUT", "/api/policies/{rest}"): MEMBER,
+    ("DELETE", "/api/policies/{rest}"): MEMBER,
+    # ---- end D20 self-hosted Policy ----
     # ---- read-only consoles ----
     ("GET", "/api/overview"): MEMBER,
-    ("GET", "/api/overview/online-quality"): MEMBER,
+    ("GET", "/api/overview/online-quality"): MEMBER,  # N12 E2-3 (baseline row)
+    ("GET", "/api/capabilities"): MEMBER,
     # ---- hub-global notices: members read published snapshots only ----
     ("GET", "/api/announcements"): MEMBER,
     ("GET", "/api/announcements/manage"): ADMIN,
@@ -437,6 +476,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/memory/namespaces"): MEMBER,
     ("GET", "/api/memory/records"): MEMBER,
     ("POST", "/api/memory/records/search"): MEMBER,  # a search, not a mutation
+    # N10v2-bug6: irreversible; the handler further requires admin or the owner of the
+    # agent the record's actor is scoped to
+    ("DELETE", "/api/memory/records/{record_id}"): PERM_MEMORY_MANAGE,
     ("GET", "/api/memory/sessions"): MEMBER,
     ("GET", "/api/memory/resources"): MEMBER,
     # creates a billable AgentCore Memory resource, registered as managed
@@ -452,12 +494,14 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/observability/sessions"): MEMBER,
     ("GET", "/api/observability/sessions/{session_id}"): MEMBER,
     ("GET", "/api/observability/sessions/{session_id}/transcript"): MEMBER,
-    # on-demand Evaluate: a judge inference, persists nothing
-    ("POST", "/api/observability/sessions/{session_id}/evaluate"): MEMBER,
+    # a read; POST for the per-session start times (upstream #287) — the handler adds
+    # the chat-session ownership rule like the transcript route
+    ("POST", "/api/observability/session-previews"): MEMBER,
+    ("POST", "/api/observability/sessions/{session_id}/evaluate"): MEMBER,  # SCORE NOW (N12)
     ("GET", "/api/observability/traces"): MEMBER,
     ("GET", "/api/observability/traces/{trace_id}"): MEMBER,
-    ("GET", "/api/observability/prices"): MEMBER,
-    ("POST", "/api/observability/prices/refresh"): MEMBER,  # rewrites shared config
+    # Chat Inspector trace rail — the handler adds the chat-session ownership rule
+    ("GET", "/api/traces/{session_id}"): MEMBER,
     # ---- console account management ----
     ("GET", "/api/users"): ADMIN,
     ("GET", "/api/users/stats"): ADMIN,
@@ -479,11 +523,44 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     # Bulk grant/revoke from the workspace's side (per-user replacement stays on
     # PATCH /api/users/{id}); both write only `user_workspaces`.
     ("PUT", "/api/workspaces/{workspace_id}/grants"): ADMIN,
+    # Shared vs isolated member resource visibility (services/visibility.py).
+    ("GET", "/api/workspaces/{workspace_id}/settings/visibility"): ADMIN,
+    ("PUT", "/api/workspaces/{workspace_id}/settings/visibility"): ADMIN,
+    # ---- model registry (D21, plan §3/§9.1): hub-global, administrators only — no
+    # member-grantable `models.manage` permission in the pilot (user ruling). Probe /
+    # credential routes answer 501 until M1-b registers its hooks. ----
+    # N17-obs203 (user decision 2026-10-21): model providers are OWNER-BOUND resources —
+    # every signed-in member may register their own (`scope: personal`) and read / change /
+    # delete it, its models, key and probes; the handler adds the visibility 404 and the
+    # creator-or-admin 403 (`model_registry.require_provider_mutable`), and only an
+    # administrator may set `scope: workspace` (share) or touch another member's row. The
+    # journal and the per-workspace flag matrix stay an administrator's.
+    ("GET", "/api/settings/model-providers"): MEMBER,
+    ("POST", "/api/settings/model-providers"): MEMBER,
+    ("GET", "/api/settings/model-providers/changes"): ADMIN,
+    ("PUT", "/api/settings/model-providers/workspaces/{workspace_id}/models"): ADMIN,
+    ("GET", "/api/settings/model-providers/{provider_id}"): MEMBER,
+    ("PUT", "/api/settings/model-providers/{provider_id}"): MEMBER,
+    ("DELETE", "/api/settings/model-providers/{provider_id}"): MEMBER,
+    ("POST", "/api/settings/model-providers/{provider_id}/credential"): MEMBER,
+    ("POST", "/api/settings/model-providers/{provider_id}/probe"): MEMBER,
+    ("POST", "/api/settings/model-providers/{provider_id}/models"): MEMBER,
+    ("PUT", "/api/settings/model-providers/{provider_id}/models/{model_ref}"): MEMBER,
+    ("DELETE", "/api/settings/model-providers/{provider_id}/models/{model_ref}"): MEMBER,
+    ("POST", "/api/settings/model-providers/{provider_id}/models/{model_ref}/probe"): MEMBER,
+    # ---- model roles (r15-e, upstream #275 subset; services/model_roles.py): hub-global.
+    # The effective model per role is every picker's pre-selection (any signed-in role);
+    # an override changes a platform default for every workspace and member at once. ----
+    ("GET", "/api/model-defaults"): MEMBER,
+    ("PUT", "/api/settings/model-roles/{role}"): ADMIN,
+    ("DELETE", "/api/settings/model-roles/{role}"): ADMIN,
 }
 
 # Hub-global route prefixes: nothing under them operates inside a workspace.
 HUB_GLOBAL_PREFIXES = (
     "/api/auth", "/api/users", "/api/workspaces", "/api/announcements", "/api/videos",
+    "/api/settings",  # D21: the model registry is hub-global (per-workspace flags are rows)
+    "/api/model-defaults",  # r15-e: the model roles are one hub-global ledger table
 )
 
 
@@ -549,6 +626,28 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/workspaces/{workspace_id}/bootstrap"),
         ("GET", "/api/workspaces/{workspace_id}/grants"),
         ("PUT", "/api/workspaces/{workspace_id}/grants"),
+        # The target is the path parameter, like grants.
+        ("GET", "/api/workspaces/{workspace_id}/settings/visibility"),
+        ("PUT", "/api/workspaces/{workspace_id}/settings/visibility"),
+        # D21: the model registry is one hub-global table; the per-workspace enable flags
+        # name their workspace in the path, never through the caller's selection.
+        ("GET", "/api/settings/model-providers"),
+        ("POST", "/api/settings/model-providers"),
+        ("GET", "/api/settings/model-providers/changes"),
+        ("PUT", "/api/settings/model-providers/workspaces/{workspace_id}/models"),
+        ("GET", "/api/settings/model-providers/{provider_id}"),
+        ("PUT", "/api/settings/model-providers/{provider_id}"),
+        ("DELETE", "/api/settings/model-providers/{provider_id}"),
+        ("POST", "/api/settings/model-providers/{provider_id}/credential"),
+        ("POST", "/api/settings/model-providers/{provider_id}/probe"),
+        ("POST", "/api/settings/model-providers/{provider_id}/models"),
+        ("PUT", "/api/settings/model-providers/{provider_id}/models/{model_ref}"),
+        ("DELETE", "/api/settings/model-providers/{provider_id}/models/{model_ref}"),
+        ("POST", "/api/settings/model-providers/{provider_id}/models/{model_ref}/probe"),
+        # r15-e: model roles — one hub-global ledger table, no workspace to resolve
+        ("GET", "/api/model-defaults"),
+        ("PUT", "/api/settings/model-roles/{role}"),
+        ("DELETE", "/api/settings/model-roles/{role}"),
     }
 )
 
@@ -557,9 +656,6 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
 # all plain MEMBER anyway; the list survives as a pointer to what to re-examine
 # if per-user data partitioning ever tightens the posture again.
 UNREVIEWED_PREFIXES = (
-    "/api/eval/",
-    "/api/experiments",
-    "/api/runtime-canaries",
     "/api/conversations",
     "/api/observability/",
 )
@@ -585,13 +681,16 @@ def enforce_route_policy(request: Request) -> None:
     the router has matched, so this sees the exact `path_format` instead of
     re-implementing path matching.
     """
-    path = request.url.path
-    if path != API_PREFIX and not path.startswith(f"{API_PREFIX}/"):
+    # N17-obs284 rev-r26 N1: this is the only route-level guard, so the /api test keys on
+    # the MATCHED route's path format (what the table is keyed on). The raw `url.path`
+    # carries any ASGI `root_path` that routing strips, which would skip enforcement for
+    # every route. `app_path` (url.path minus root_path) is the fallback when no route is set.
+    route: Any = request.scope.get("route")
+    path_format = getattr(route, "path_format", None) or app_path(request)
+    if path_format != API_PREFIX and not path_format.startswith(f"{API_PREFIX}/"):
         return  # /v1 carries its own X-Api-Key auth; static and redirects are open
     if request.method == "OPTIONS":
         return  # CORS preflight never reaches a handler
-    route: Any = request.scope.get("route")
-    path_format = getattr(route, "path_format", None) or path
     role = required_role(request.method, path_format)
     if role is None:
         # Default-deny: refuse rather than serve an unclassified route.

@@ -45,7 +45,17 @@ function ResultCard({ index, item }: { index: number; item: QueryResultItem }) {
 }
 
 /** Retrieve playground — what an attached agent would get back for a query. */
-export function KbRetrieve({ kbId, active }: { kbId: string; active: boolean }) {
+export function KbRetrieve({
+  kbId,
+  active,
+  noFiles = false,
+}: {
+  kbId: string;
+  active: boolean;
+  /** Every data source is known to hold no file (N17-obs244): an empty result then says
+   *  "upload first" instead of asking whether ingestion completed. */
+  noFiles?: boolean;
+}) {
   const { t } = useTranslation();
   const [text, setText] = useState("");
   const [count, setCount] = useState(8);
@@ -101,7 +111,11 @@ export function KbRetrieve({ kbId, active }: { kbId: string; active: boolean }) 
         </Button>
       </div>
       {error && <Alert tone="error">{error}</Alert>}
-      {results && results.length === 0 && <Alert>{t("knowledge.detail.playground.noResults")}</Alert>}
+      {results && results.length === 0 && (
+        <Alert testId="v2-kb-retrieve-empty">
+          {noFiles ? t("knowledge.detail.playground.noResultsNoFiles") : t("knowledge.detail.playground.noResults")}
+        </Alert>
+      )}
       {results && results.length > 0 && (
         <div className="v2-stack" data-testid="v2-kb-hits">
           <span className="v2-muted">{t("v2.knowledge.hits", { count: results.length })}</span>

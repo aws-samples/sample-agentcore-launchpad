@@ -1,7 +1,5 @@
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Download, RefreshCw, Search } from "lucide-react";
@@ -13,18 +11,13 @@ import {
   ConfirmDialog,
   DEFAULT_PAGE_SIZE,
   LaunchSequence,
-  MethodChip,
-  methodLabel,
   Pager,
   Panel,
-  StatTile,
   useToast,
-  VersionsPanel,
   ViewHead,
 } from "../components";
 import type {
   AgentInfo,
-  AgentSdk,
   AgentSpecInput,
   ByocArtifactKind,
   ByocConfigInput,
@@ -55,11 +48,9 @@ import {
   BUILTIN_TOOLS,
   buildAgentSpec,
   BYOC_MODELS_MAX,
-  DEFAULT_AGENT_SDK,
   DEFAULT_SESSION_MOUNT,
   defaultModelForMethod,
   entrypointAfterUpload,
-  hasByoMounts,
   isAuthTool,
   promptWithToolkit,
   republishSpec,
@@ -77,17 +68,18 @@ import type {
   AgentMethod,
   A2aSkillRow,
   AttachableKb,
+  AttachableAgent,
   AttachableMcp,
   AttachableSkill,
   AuthToolRow,
   KbRef,
-  MountRow,
   StoredTool,
 } from "../lib/agent-spec";
 import ClassicIdentitySection from "../components/ClassicIdentitySection";
 import type { ModelSource, ReasoningEffort } from "../lib/models";
 import { useWorkspace } from "../workspace/workspace-context";
 import { SystemPresetsPanel } from "./create/SystemPresetsPanel";
+import { entryShown } from "../v2/hiddenSurfaces";
 import {
   apiErrorRows,
   DEFAULT_MAX_ITERATIONS,
@@ -104,7 +96,10 @@ import {
   DEFAULT_MODEL_SOURCE,
   defaultModelFor,
   isCustomModelId,
+  modelOptionLabel,
   modelOptionsFor,
+  modelUnavailableReason,
+  providerBadgeKey,
   REASONING_EFFORTS,
   SPEC_DEFAULT_MODEL_ID,
   supportsReasoningEffort,
@@ -158,9 +153,10 @@ interface EditingTarget {
 
 // Spec fields we read back when loading an existing agent into the wizard.
 interface StoredSpec {
+  /** D20 §4.2 — carried through a classic re-publish, edited in the V2 wizard */
+  policy_ids?: string[];
   model_id?: string;
   model_source?: ModelSource;
-  agent_sdk?: AgentSdk;
   // harness-only inference knobs (absent on every spec written before they existed)
   max_tokens?: number | null;
   reasoning_effort?: ReasoningEffort | null;
@@ -180,10 +176,7 @@ interface StoredSpec {
   env?: Record<string, string>;
   filesystem?: {
     session_storage?: { mount_path?: string } | null;
-    s3_files?: { access_point_arn?: string; mount_path?: string }[];
-    efs?: { access_point_arn?: string; mount_path?: string }[];
   };
-  network?: { subnets?: string[]; security_groups?: string[] };
   byoc?: ByocConfigInput;
 }
 
@@ -253,17 +246,16 @@ const mergeDiscoveryRows = (
 };
 
 /**
- * Agent management is one module on five routes (since 2026-09-18; `/create`
- * redirects here):
- *   list   `/agents`            — the landing page: stats, presets, the table
- *   new    `/agents/new`        — the 3-step wizard as a page of its own
- *   import `/agents/import`     — discovery of existing Runtime/Harness resources
- *   detail `/agents/:agentId`   — the step-3 view of one agent (live while deploying)
- *   edit   `/agents/:agentId/edit` — the wizard preloaded for a re-publish
+ * The agent flows that have no native V2 page yet (the list, detail and
+ * re-publish wizard live in `v2/pages/Agents.tsx`):
+ *   new    `/agents/new`           — the 3-step wizard with the SYSTEM PRESETS panel
+ *   import `/agents/import`        — discovery of existing Runtime/Harness resources
+ *   edit   `/agents/:agentId/edit` — a system preset's configure flow (App.tsx sends
+ *                                    every other agent to the V2 wizard / Studio)
  * The wizard keeps its state machine; the mode only decides what step 1 shows
  * and where "back"/"done" go.
  */
-export type AgentsMode = "list" | "new" | "import" | "detail" | "edit";
+export type AgentsMode = "new" | "import" | "edit";
 
 export function CreateAgent({ mode }: { mode: AgentsMode }) {
   const { agentId } = useParams();
@@ -525,7 +517,7 @@ function RuntimeDiscovery() {
             aria-label={t("create.discovery.columns.type")}
           >
             <option value="all">{t("create.discovery.filterKindAll")}</option>
-            <option value="harness">{t("create.discovery.kindHarness")}</option>
+            <option value="harness">{t("create.discovery.kindManagedHarness")}</option>
             <option value="runtime">{t("create.discovery.kindRuntime")}</option>
           </select>
           <select
@@ -682,7 +674,7 @@ function HarnessRow({
         </div>
       </td>
       <td>
-        <Chip tone="aqua">{t("create.discovery.kindHarness")}</Chip>
+        <Chip tone="aqua">{t("create.discovery.kindManagedHarness")}</Chip>
       </td>
       <td className="mono">—</td>
       <td className="mono">—</td>
@@ -802,9 +794,10 @@ function RuntimeRow({
 
 function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: string }) {
   const { t } = useTranslation();
+  // /agents/new is the system-presets page: the classic method chooser is hidden by flag
+  const presetsOnly = mode === "new" && !entryShown("classicMethods");
   const toast = useToast();
   const navigate = useNavigate();
-  const isList = mode === "list";
   const { can, isAdmin } = useAuth();
   const canDeploy = can("agents.deploy");
   const { current: currentWorkspace } = useWorkspace();
@@ -823,8 +816,6 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   const [modelSource, setModelSource] = useState<ModelSource>(DEFAULT_MODEL_SOURCE);
   // true ⇒ the model dropdown sits on "Custom model ID…" and the free-text input shows
   const [customModel, setCustomModel] = useState(false);
-  // container method only — the "Other Agent SDK" second-level choice
-  const [agentSdk, setAgentSdk] = useState<AgentSdk>(DEFAULT_AGENT_SDK);
   const [systemPrompt, setSystemPrompt] = useState("");
   // Inference / loop knobs (rendered for the harness method). Free text so a
   // half-typed number is validated, not clamped; "" ⇒ no per-call ceiling.
@@ -838,6 +829,9 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   const [toolkits, setToolkits] = useState<Toolkit[]>([]);
   const [gatewayTargets, setGatewayTargets] = useState<AttachableMcp[]>([]);
   const [remoteMcp, setRemoteMcp] = useState<AttachableMcp[]>([]);
+  // N10v2-bug5: APPROVED A2A records (other Launchpad agents) mountable as ask_<agent> tools
+  const [agentCatalog, setAgentCatalog] = useState<AttachableAgent[]>([]);
+  const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [skillCatalog, setSkillCatalog] = useState<AttachableSkill[]>([]);
   const [selectedGateway, setSelectedGateway] = useState<string[]>(
     prefillGateway ? [prefillGateway] : [],
@@ -850,19 +844,12 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   const [selectedKbs, setSelectedKbs] = useState<string[]>([]);
   // KB refs carried in the loaded spec — name fallback for KBs no longer in the catalog.
   const [specKbs, setSpecKbs] = useState<KbRef[]>([]);
-  // KBs shown read-only on the step-3 detail view (viewed agent or just-published).
+  // KBs shown read-only on the step-3 view of the just-published agent.
   const [detailKbs, setDetailKbs] = useState<KbRef[]>([]);
-  const [detailConversion, setDetailConversion] = useState<{
-    source: string;
-    notes: Record<string, string>;
-  } | null>(null);
-  // the viewed agent's server-owned system identity (details mode only)
-  const [detailSystem, setDetailSystem] = useState<AgentInfo["system"]>(null);
   const [longTerm, setLongTerm] = useState(true);
   // per-agent AgentCore Memory pin — "" means the workspace's shared default
   const [memoryId, setMemoryId] = useState("");
   const [memoryOptions, setMemoryOptions] = useState<MemoryResourceRow[]>([]);
-  const [mcpServers, setMcpServers] = useState("");
   // custom skill sources attached without a registry record (name shown on the chip)
   const [customSkills, setCustomSkills] = useState<{ name: string; path: string }[]>([]);
   const [pendingSkills, setPendingSkills] = useState<{
@@ -874,13 +861,9 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   const [gitUrl, setGitUrl] = useState("");
   const [srcBusy, setSrcBusy] = useState(false);
   const skillFileRef = useRef<HTMLInputElement>(null);
-  // AgentCore Runtime filesystem configuration (container method only)
+  // AgentCore Runtime managed session storage (harness / zip_runtime)
   const [sessionFs, setSessionFs] = useState(true);
   const [sessionMount, setSessionMount] = useState(DEFAULT_SESSION_MOUNT);
-  const [s3Mounts, setS3Mounts] = useState<MountRow[]>([]);
-  const [efsMounts, setEfsMounts] = useState<MountRow[]>([]);
-  const [vpcSubnets, setVpcSubnets] = useState("");
-  const [vpcSgs, setVpcSgs] = useState("");
   // zip runtime service protocol: standard HTTP invocations vs a real A2A
   // JSON-RPC server (serverProtocol=A2A) with configurable agent-card skills
   const [protocol, setProtocol] = useState<"http" | "a2a">("http");
@@ -905,6 +888,9 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   const [byocEnvRows, setByocEnvRows] = useState<{ key: string; value: string }[]>([]);
   // zip_runtime (HTTP) / byoc: rest + mcp tools behind a Connection (Identity section)
   const [authTools, setAuthTools] = useState<AuthToolRow[]>([]);
+  // D20: the classic wizard has no POLICIES step; a loaded spec's `policy_ids` are carried
+  // through a re-publish untouched (the V2 wizard edits them)
+  const [policyIds, setPolicyIds] = useState<string[]>([]);
   // the workspace Connection catalog; null until loaded (and after a failed read),
   // which blocks a spec whose rows name a Connection — see authToolIssues
   const [connections, setConnections] = useState<ConnectionInfo[] | null>(null);
@@ -922,13 +908,8 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   // the staged zip, kept so a Python-version change can re-run the
   // requirements pre-resolve (re-staging the same bytes under the new target)
   const byocLastFile = useRef<File | null>(null);
-  // BYOC provenance shown on the step-3 details view of an existing agent
-  const [detailByoc, setDetailByoc] = useState<ByocConfigInput | null>(null);
-  // the models that agent's execution role permits; [0] is the primary (MODEL_ID)
-  const [detailByocModels, setDetailByocModels] = useState<string[]>([]);
   // when set, the wizard edits an existing agent and the launch button re-publishes it
   const [editing, setEditing] = useState<EditingTarget | null>(null);
-  const [detailsMode, setDetailsMode] = useState(false);
   // one submit at a time (both paths); the outcome of an accepted request is
   // consumed only while this component is still mounted
   const [submitting, setSubmitting] = useState(false);
@@ -962,10 +943,11 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
     // Mountable assets come from the registry catalog: only APPROVED records
     // are offered, so the registry lifecycle gates availability.
     fetch("/api/registry/attachables")
-      .then((res) => (res.ok ? res.json() : { mcp_servers: [], skills: [] }))
-      .then((d: { mcp_servers: AttachableMcp[]; skills: AttachableSkill[] }) => {
+      .then((res) => (res.ok ? res.json() : { mcp_servers: [], skills: [], agents: [] }))
+      .then((d: { mcp_servers: AttachableMcp[]; skills: AttachableSkill[]; agents?: AttachableAgent[] }) => {
         setGatewayTargets(d.mcp_servers.filter((m) => m.gateway));
         setRemoteMcp(d.mcp_servers.filter((m) => !m.gateway));
+        setAgentCatalog(d.agents ?? []);
         setSkillCatalog(d.skills);
       })
       .catch(() => {
@@ -1017,7 +999,6 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   const [confirm, setConfirm] = useState<
     | { kind: "republish" }
     | { kind: "delete"; id: string; name: string; external: boolean }
-    | { kind: "convert"; id: string; name: string }
     | null
   >(null);
 
@@ -1055,7 +1036,7 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   }, [launch, agentStatus, poll]);
 
 
-  // A2A zip agents render from strands_a2a_agent, which has no Mantle branch —
+  // A2A zip agents render from strands_a2a_agent and stay on the Converse path —
   // the Model source control is hidden and pinned to A2A_MODEL_SOURCE for them.
   const isA2a = method === "zip_runtime" && protocol === "a2a";
 
@@ -1083,12 +1064,12 @@ const deployLock = !canDeploy
     applyModelSource(sourceOnMethodSwitch(next, protocol), next);
   };
 
-  // `/agents/new?method=zip_runtime|container|byoc` (the V2 console's hand-off for
+  // `/agents/new?method=zip_runtime|byoc` (the V2 console's hand-off for
   // the methods it has no native form for) opens the configure step directly.
   const prefillMethod = params.get("method");
   useEffect(() => {
     if (mode !== "new") return;
-    if (prefillMethod !== "zip_runtime" && prefillMethod !== "container" && prefillMethod !== "byoc") {
+    if (prefillMethod !== "zip_runtime" && prefillMethod !== "byoc") {
       return;
     }
     pickMethod(prefillMethod);
@@ -1102,10 +1083,8 @@ const deployLock = !canDeploy
     nextEditorIntent();
     kbCatalogGen.current += 1;
     setEditing(null);
-    setDetailsMode(false);
     setName("");
     applyModelSource(sourceForMethod(method));
-    setAgentSdk(DEFAULT_AGENT_SDK);
     setSystemPrompt("");
     setMaxTokens("");
     setReasoningEffort(EFFORT_NONE);
@@ -1119,6 +1098,7 @@ const deployLock = !canDeploy
     setStoredGatewayConfig({});
     setSelectedMcp([]);
     setAuthTools([]);
+    setPolicyIds([]);
     setSelectedKbs([]);
     setSpecKbs([]);
     setDetailKbs([]);
@@ -1126,17 +1106,12 @@ const deployLock = !canDeploy
     setAllowedTools(null);
     setNativeTools([...DEFAULT_HARNESS_NATIVE_TOOLS]);
     setLongTerm(true);
-    setMcpServers("");
     setCustomSkills([]);
     setPendingSkills(null);
     setGitOpen(false);
     setGitUrl("");
     setSessionFs(true);
     setSessionMount(DEFAULT_SESSION_MOUNT);
-    setS3Mounts([]);
-    setEfsMounts([]);
-    setVpcSubnets("");
-    setVpcSgs("");
     setProtocol("http");
     setA2aSkills([]);
     setByocKind("code_zip");
@@ -1153,12 +1128,8 @@ const deployLock = !canDeploy
     setByocEnvRows([]);
     setByocContractOpen(false);
     setByocDescription("");
-    setDetailByoc(null);
-    setDetailByocModels([]);
     setSubmitError(null);
   };
-
-  const byoMounts = hasByoMounts({ s3Mounts, efsMounts });
 
   // Tool names the selected toolkits contribute. Non-empty ⇒ they replace the
   // template's own calculator/current_utc_time, matching what the backend emits.
@@ -1190,6 +1161,29 @@ const deployLock = !canDeploy
       </button>
     ));
 
+  // N10v2-bug5: other Launchpad agents (APPROVED A2A records) — same selection for the
+  // harness and the HTTP zip runtime; both bake an ask_<agent> tool.
+  const agentChips = () =>
+    agentCatalog.map((peer) => (
+      <button
+        key={peer.record_id}
+        type="button"
+        data-testid={`a2a-peer-${peer.name}`}
+        className={`selchip${selectedAgents.includes(peer.name) ? " on" : ""}`}
+        disabled={!peer.attachable}
+        style={{ cursor: peer.attachable ? "pointer" : "not-allowed" }}
+        title={peer.attachability_reason ?? peer.description}
+        onClick={() => {
+          if (!peer.attachable) return;
+          setSelectedAgents((prev) =>
+            prev.includes(peer.name) ? prev.filter((x) => x !== peer.name) : [...prev, peer.name],
+          );
+        }}
+      >
+        {peer.name} · a2a {peer.attachable ? (selectedAgents.includes(peer.name) ? "✓" : "+") : "—"}
+      </button>
+    ));
+
   const toggleToolkit = (kit: (typeof TOOLKITS)[number]) => {
     const on = toolkits.includes(kit.name);
     setToolkits((prev) => (on ? prev.filter((x) => x !== kit.name) : [...prev, kit.name]));
@@ -1213,7 +1207,6 @@ const deployLock = !canDeploy
     name,
     modelId,
     modelSource,
-    agentSdk,
     systemPrompt,
     maxTokens,
     reasoningEffort,
@@ -1223,19 +1216,15 @@ const deployLock = !canDeploy
     toolkits,
     selectedGateway,
     selectedMcp,
+    selectedAgents,
     selectedKbs,
     skills,
     allowedTools,
     nativeTools,
     longTerm,
     memoryId,
-    mcpServers,
     sessionFs,
     sessionMount,
-    s3Mounts,
-    efsMounts,
-    vpcSubnets,
-    vpcSgs,
     protocol,
     a2aSkills,
     byocKind,
@@ -1244,13 +1233,15 @@ const deployLock = !canDeploy
     byocEntrypoint,
     byocPython,
     byocInstallReqs,
+    byocCnTraceExporter: true, // N17-obs465: the classic wizard keeps the default (V2 has the toggle)
     byocRawContract,
     byocModels,
     byocEnvRows,
     byocDescription,
     authTools,
+    policyIds,
   });
-  const specCatalogs: AgentFormCatalogs = { gatewayTargets, remoteMcp, storedGatewayConfig, kbInfo };
+  const specCatalogs: AgentFormCatalogs = { gatewayTargets, remoteMcp, agents: agentCatalog, storedGatewayConfig, kbInfo };
 
   const buildSpec = (): AgentSpecInput => buildAgentSpec(agentForm(), specCatalogs);
 
@@ -1377,7 +1368,6 @@ const deployLock = !canDeploy
         failureToasted.current = false;
         setLaunch({ agentId: res.agent.id, jobId: res.job_id, workspaceId: systemEdit.workspaceId });
         setAgentStatus("deploying");
-        setDetailsMode(false);
         setStep(3);
         reloadAgents();
         return;
@@ -1391,7 +1381,6 @@ const deployLock = !canDeploy
       failureToasted.current = false;
       setLaunch({ agentId: res.agent.id, jobId: res.job_id });
       setAgentStatus("deploying");
-      setDetailsMode(false);
       setStep(3);
       reloadAgents();
     } catch (err) {
@@ -1435,7 +1424,6 @@ const deployLock = !canDeploy
         skillVersion: preset.installed_skill_version ?? preset.skill_version,
       },
     });
-    setDetailsMode(false);
     setMethod("harness");
     setName(preset.name);
     applyPresetForm(formFromSettings(stored));
@@ -1473,21 +1461,17 @@ const deployLock = !canDeploy
     nextEditorIntent();
     const spec = (agent.spec ?? {}) as StoredSpec;
     setEditing({ id: agent.id, name: agent.name, method: agent.method as Method, spec: agent.spec });
-    setDetailsMode(false);
     setMethod(agent.method as Method);
     setName(agent.name);
-    // A spec stored before model_source existed is a Converse-API agent, never
-    // Mantle; an id in neither catalog rides the "Custom model ID…" branch.
+    // A spec stored before model_source existed is a Converse-API agent; an id
+    // outside the catalog rides the "Custom model ID…" branch.
     const storedModel = spec.model_id ?? SPEC_DEFAULT_MODEL_ID;
     const storedSource = spec.model_source ?? "bedrock";
     setModelId(storedModel);
     setModelSource(storedSource);
     // Custom unless the id is actually offered for the stored source — covers
-    // unknown ids, an id belonging to the other source, and a non-Claude id on a
-    // Claude Agent SDK agent.
-    setCustomModel(isCustomModelId(storedModel, storedSource, agent.method === "container"));
-    // absent on every container spec written before the SDK choice existed
-    setAgentSdk(spec.agent_sdk ?? DEFAULT_AGENT_SDK);
+    // unknown ids and an id belonging to the other source.
+    setCustomModel(isCustomModelId(storedModel, storedSource));
     setSystemPrompt(spec.system_prompt ?? "");
     // knobs come back exactly as stored — a re-publish must not reset them
     setMaxTokens(spec.max_tokens == null ? "" : String(spec.max_tokens));
@@ -1519,6 +1503,7 @@ const deployLock = !canDeploy
       (spec.tools ?? []).filter((x) => x.type === "mcp" && !isAuthTool(x)).map((x) => x.name),
     );
     setAuthTools((spec.tools ?? []).filter(isAuthTool).map(authRowFromStored));
+    setPolicyIds(Array.isArray(spec.policy_ids) ? spec.policy_ids.filter((id) => typeof id === "string") : []);
     // absent on every zip spec written before toolkits existed
     setToolkits((spec.toolkits ?? []).filter((k) => TOOLKITS.some((x) => x.name === k)));
     setSelectedKbs((spec.knowledge_bases ?? []).map((k) => k.kb_id));
@@ -1528,7 +1513,6 @@ const deployLock = !canDeploy
     setNativeTools(agent.method === "harness" ? spec.native_tools ?? [] : []);
     setLongTerm(spec.memory?.long_term ?? true);
     setMemoryId(spec.memory?.memory_id ?? "");
-    setMcpServers(spec.env?.LAUNCHPAD_MCP_SERVERS ?? "");
     // custom (non-registry) skill paths get their chip name from the path tail
     setCustomSkills(
       (spec.skills ?? [])
@@ -1539,14 +1523,6 @@ const deployLock = !canDeploy
     const fs = spec.filesystem;
     setSessionFs(fs ? fs.session_storage != null : true);
     setSessionMount(fs?.session_storage?.mount_path ?? DEFAULT_SESSION_MOUNT);
-    setS3Mounts(
-      (fs?.s3_files ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
-    );
-    setEfsMounts(
-      (fs?.efs ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
-    );
-    setVpcSubnets((spec.network?.subnets ?? []).join(", "));
-    setVpcSgs((spec.network?.security_groups ?? []).join(", "));
     setProtocol(spec.protocol ?? "http");
     setA2aSkills(
       (spec.a2a_skills ?? []).map((s) => ({
@@ -1584,48 +1560,13 @@ const deployLock = !canDeploy
     setStep(2);
   };
 
-  const openDetails = (agent: AgentInfo) => {
-    const jobId = agent.deployment?.job_id;
-    if (!jobId) return;
-    nextEditorIntent();
-    setEditing(null);
-    setDetailsMode(true);
-    setDetailSystem(agent.system ?? null);
-    setDetailKbs(((agent.spec ?? {}) as StoredSpec).knowledge_bases ?? []);
-    const spec = (agent.spec ?? {}) as Record<string, unknown>;
-    const detailCfg =
-      agent.method === "byoc" ? ((spec.byoc as ByocConfigInput | undefined) ?? null) : null;
-    setDetailByoc(detailCfg);
-    setDetailByocModels(
-      detailCfg
-        ? detailCfg.allowed_models?.length
-          ? detailCfg.allowed_models
-          : spec.model_id
-            ? [spec.model_id as string]
-            : []
-        : [],
-    );
-    const src = spec.source_harness as { agent_name?: string } | undefined;
-    setDetailConversion(
-      src?.agent_name
-        ? { source: src.agent_name,
-            notes: (spec.conversion_notes as Record<string, string>) ?? {} }
-        : null,
-    );
-    failureToasted.current = true; // don't re-toast an old failure when merely viewing
-    setDeployment(agent.deployment ?? null);
-    setJob(null);
-    setLaunch({ agentId: agent.id, jobId });
-    setAgentStatus(agent.status);
-    setStep(3);
-  };
 
-  // `/agents/:agentId` and `/agents/:agentId/edit` open one agent straight from
-  // the URL. Read the row directly rather than waiting for the list (a fresh
-  // deploy may not be in it yet); an unknown id falls back to the list.
+  // `/agents/:agentId/edit` opens one agent straight from the URL. Read the row
+  // directly rather than waiting for the list (a fresh deploy may not be in it
+  // yet); an unknown id falls back to the list.
   const routeOpened = useRef<string | null>(null);
   useEffect(() => {
-    if (!agentId || (mode !== "detail" && mode !== "edit")) return;
+    if (!agentId || mode !== "edit") return;
     const key = `${mode}:${agentId}`;
     if (routeOpened.current === key) return;
     routeOpened.current = key;
@@ -1634,28 +1575,17 @@ const deployLock = !canDeploy
       .then((fresh) => {
         if (!alive.current) return;
         const info: AgentInfo = { ...fresh, deployment: fresh.deployments?.[0] };
-        if (mode === "edit") {
-          if (info.system) void openSystemEdit(info);
-          else if (info.method === "studio")
-            navigate(`/create/studio?agent=${info.id}`, { replace: true });
-          else startEdit(info);
-          return;
-        }
-        if (!info.deployment?.job_id) {
-          // nothing to show for a row that never deployed (e.g. an imported
-          // runtime) — the list carries what is known about it
-          toast(t("agents.noDetails", { name: info.name }));
-          navigate("/agents", { replace: true });
-          return;
-        }
-        openDetails(info);
+        if (info.system) void openSystemEdit(info);
+        else if (info.method === "studio")
+          navigate(`/create/studio?agent=${info.id}`, { replace: true });
+        else startEdit(info);
       })
       .catch((err) => {
         if (!alive.current) return;
         toast(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
         navigate("/agents", { replace: true });
       });
-    // openDetails/startEdit/openSystemEdit are stable per mount for this purpose
+    // startEdit/openSystemEdit are stable per mount for this purpose
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, agentId]);
 
@@ -1663,24 +1593,14 @@ const deployLock = !canDeploy
   // it succeeds (a failed one stays on the wizard with its error and RESTART).
   // System-preset saves are pinned to another workspace and stay put.
   useEffect(() => {
-    if (mode !== "new" || detailsMode || !launch || launch.workspaceId) return;
+    if (mode !== "new" || !launch || launch.workspaceId) return;
     if (agentStatus === "active") navigate(`/agents/${launch.agentId}`, { replace: true });
-  }, [mode, detailsMode, launch, agentStatus, navigate]);
+  }, [mode, launch, agentStatus, navigate]);
 
   const doDelete = async (id: string) => {
     try {
       await api.deleteAgent(id);
       toast(t("create.list.deleted"));
-      reloadAgents();
-    } catch (err) {
-      toast(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
-    }
-  };
-
-  const doConvert = async (id: string) => {
-    try {
-      const res = await api.convertAgent(id);
-      toast(t("create.list.convertStarted", { name: res.agent.name }));
       reloadAgents();
     } catch (err) {
       toast(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
@@ -1793,68 +1713,39 @@ const deployLock = !canDeploy
 
   return (
     <section>
-      {isList && step === 1 ? (
-        <>
-          <div className="agents-head">
-            <ViewHead kicker={t("create.kicker")} title={t("create.title")} meta={t("agents.meta")} />
-            <div className="agents-head-actions">
-              <Btn onClick={() => navigate("/agents/import")} data-testid="agents-import">
-                <Search size={14} aria-hidden="true" />
-                {t("agents.importRuntime")}
-              </Btn>
-              <span title={canDeploy ? undefined : t("create.permissionRequired")}>
-                <Btn
-                  primary
-                  disabled={!canDeploy}
-                  onClick={() => navigate("/agents/new")}
-                  data-testid="agents-new"
-                >
-                  + {t("agents.newAgent")}
-                </Btn>
-              </span>
-            </div>
-          </div>
-          <div className="tiles" data-testid="agents-stats">
-            {(["total", "active", "deploying", "failed"] as const).map((k) => (
-              <StatTile
-                key={k}
-                label={t(`agents.stats.${k}`)}
-                value={k === "total" ? agents.length : agents.filter((a) => a.status === k).length}
-              />
-            ))}
-          </div>
-        </>
+      <nav className="agents-crumb" aria-label={t("agents.breadcrumb")}>
+        <Link to="/agents">{t("create.title")}</Link>
+        <span aria-hidden="true"> / </span>
+        <span>
+          {mode === "new"
+            ? t("agents.crumbNew")
+            : mode === "edit"
+              ? t("agents.crumbEdit", { name: editing?.name ?? "" })
+              : (launch && agents.find((a) => a.id === launch.agentId)?.name) ||
+                t("agents.crumbDetail")}
+        </span>
+      </nav>
+      {presetsOnly && step === 1 ? (
+        <ViewHead kicker={t("create.kicker")} title={t("create.system.title")} meta={t("create.system.sub")} />
       ) : (
-        <>
-          {!isList && (
-            <nav className="agents-crumb" aria-label={t("agents.breadcrumb")}>
-              <Link to="/agents">{t("create.title")}</Link>
-              <span aria-hidden="true"> / </span>
-              <span>
-                {mode === "new"
-                  ? t("agents.crumbNew")
-                  : mode === "edit"
-                    ? t("agents.crumbEdit", { name: editing?.name ?? "" })
-                    : (launch && agents.find((a) => a.id === launch.agentId)?.name) ||
-                      t("agents.crumbDetail")}
-              </span>
-            </nav>
-          )}
-          <ViewHead kicker={t("create.kicker")} title={t("create.title")} meta={t("create.meta")} />
-
-          <div className="steps">
-            {([1, 2, 3] as const).map((n) => (
-              <div key={n} className={`step${step === n ? " now" : step > n ? " done" : ""}`}>
-                <span className="n">{step > n ? "✓" : `0${n}`}</span>
-                <b>{t(`create.steps.${n}`)}</b>
-              </div>
-            ))}
-          </div>
-        </>
+        <ViewHead kicker={t("create.kicker")} title={t("create.title")} meta={t("create.meta")} />
       )}
 
-      {step === 1 && !isList && (
+      {(!presetsOnly || step > 1) && (
+      <div className="steps">
+        {([1, 2, 3] as const).map((n) => (
+          <div key={n} className={`step${step === n ? " now" : step > n ? " done" : ""}`}>
+            <span className="n">{step > n ? "✓" : `0${n}`}</span>
+            <b>{t(`create.steps.${n}`)}</b>
+          </div>
+        ))}
+      </div>
+      )}
+
+      {step === 1 && (
         <>
+          {!presetsOnly && (
+          <>
           {!canDeploy && (
             <div className="note" style={{ marginBottom: 14 }}>
               <span className="i">[!]</span>
@@ -1910,24 +1801,8 @@ const deployLock = !canDeploy
               </Link>
             </div>
             <div
-              className={`method${method === "container" ? " sel" : ""}`}
-              style={{ "--i": 2, ...deployLock } as CSSProperties}
-              onClick={() => pickMethod("container")}
-              data-method="container"
-            >
-              <div className="m-badge">{t("create.methods.otherSdk.badge")}</div>
-              <div className="m-icon">▣</div>
-              <h3>{t("create.methods.otherSdk.title")}</h3>
-              <p>{t("create.methods.otherSdk.desc")}</p>
-              <div className="m-specs">
-                <span>CodeBuild → ECR → Runtime</span>
-                <span>{t("create.methods.otherSdk.spec2")}</span>
-                <span>{t("create.methods.otherSdk.spec3")}</span>
-              </div>
-            </div>
-            <div
               className={`method${method === "byoc" ? " sel" : ""}`}
-              style={{ "--i": 3, ...deployLock } as CSSProperties}
+              style={{ "--i": 2, ...deployLock } as CSSProperties}
               onClick={() => pickMethod("byoc")}
               data-method="byoc"
             >
@@ -1961,6 +1836,8 @@ const deployLock = !canDeploy
             </span>
           </div>
 
+          </>
+          )}
           {/* System presets install from the create page (below the method cards),
               as they did before the list split — configure opens the shared editor
               on step 2 right here; details go to the agent's page. */}
@@ -1973,33 +1850,6 @@ const deployLock = !canDeploy
         </>
       )}
 
-      {step === 1 && isList && (
-        <>
-          <div style={{ height: 18 }} />
-          <AgentList
-            agents={agents}
-            onEdit={(a) => {
-              if (a.system) {
-                void openSystemEdit(a); // the shared editor, saved through the maintenance route
-                return;
-              }
-              if (a.method === "studio") navigate(`/create/studio?agent=${a.id}`);
-              else navigate(`/agents/${a.id}/edit`);
-            }}
-            onDetails={(a) => navigate(`/agents/${a.id}`)}
-            onDelete={(a) =>
-              setConfirm({
-                kind: "delete",
-                id: a.id,
-                name: a.name,
-                external: a.method === "discovered_runtime",
-              })
-            }
-            onConvert={(id, name) => setConfirm({ kind: "convert", id, name })}
-            onCreate={canDeploy ? () => navigate("/agents/new") : undefined}
-          />
-        </>
-      )}
 
       {step === 2 && (
         <div className="cfg-grid">
@@ -2013,11 +1863,9 @@ const deployLock = !canDeploy
                 : t(
                     method === "harness"
                       ? "create.configure.title"
-                      : method === "container"
-                        ? "create.configure.titleContainer"
-                        : method === "byoc"
-                          ? "create.configure.titleByoc"
-                          : "create.configure.titleZip",
+                      : method === "byoc"
+                        ? "create.configure.titleByoc"
+                        : "create.configure.titleZip",
                   )
             }
             sub={
@@ -2196,7 +2044,7 @@ const deployLock = !canDeploy
                       data-testid="byoc-image-uri"
                       value={byocImageUri}
                       onChange={(e) => setByocImageUri(e.target.value)}
-                      placeholder="123456789012.dkr.ecr.us-west-2.amazonaws.com/my-agents:v1"
+                      placeholder="123456789012.dkr.ecr.cn-northwest-1.amazonaws.com.cn/my-agents:v1"
                     />
                     <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
                       {t("create.configure.byocImageHint")}
@@ -2364,37 +2212,11 @@ const deployLock = !canDeploy
                 </div>
               </>
             )}
-            {/* The container method is the "Other Agent SDK" entrance: it picks an
-                SDK here instead of a model source. The two blocks are one choice
-                seen from either side — the Claude Agent SDK can only drive Claude
-                models, so its source is pinned (MODEL_SOURCE_BY_METHOD) and the
-                Model source control stays hidden. */}
-            {method === "container" && (
-              <div className="field">
-                <label>{t("create.configure.agentSdk")}</label>
-                <div className="selchips">
-                  <button
-                    type="button"
-                    data-testid="agent-sdk-claude"
-                    className={`selchip${agentSdk === "claude_agent_sdk" ? " on" : ""}`}
-                    style={{ cursor: "pointer" }}
-                    onClick={() => setAgentSdk("claude_agent_sdk")}
-                  >
-                    {t("create.configure.agentSdkClaude")}{" "}
-                    {agentSdk === "claude_agent_sdk" ? "✓" : ""}
-                  </button>
-                </div>
-                <div className="note" style={{ margin: "8px 0 0" }}>
-                  <span className="i">[i]</span>
-                  <span>{t("create.configure.agentSdkNote")}</span>
-                </div>
-              </div>
-            )}
-            {method !== "container" && !isA2a && (
+            {!isA2a && (
               <div className="field">
                 <label>{t("create.configure.modelSource")}</label>
                 <div className="selchips">
-                  {(["bedrock", "mantle"] as const).map((source) => (
+                  {(["bedrock"] as const).map((source) => (
                     <button
                       key={source}
                       type="button"
@@ -2402,27 +2224,15 @@ const deployLock = !canDeploy
                       className={`selchip${modelSource === source ? " on" : ""}`}
                       style={{ cursor: bakedLocked ? "default" : "pointer" }}
                       disabled={bakedLocked}
-                      // a benign re-click keeps a custom id; a real switch re-seeds
                       onClick={() => source !== modelSource && applyModelSource(source)}
                     >
-                      {t(
-                        source === "mantle"
-                          ? "create.configure.modelSourceMantle"
-                          : "create.configure.modelSourceBedrock",
-                      )}{" "}
-                      {modelSource === source ? "✓" : ""}
+                      {t("create.configure.modelSourceBedrock")} {modelSource === source ? "✓" : ""}
                     </button>
                   ))}
                 </div>
                 <div className="note" style={{ margin: "8px 0 0" }}>
                   <span className="i">[i]</span>
-                  <span>
-                    {t(
-                      modelSource === "mantle"
-                        ? "create.configure.modelSourceMantleDesc"
-                        : "create.configure.modelSourceBedrockDesc",
-                    )}
-                  </span>
+                  <span>{t("create.configure.modelSourceBedrockDesc")}</span>
                 </div>
               </div>
             )}
@@ -2448,19 +2258,37 @@ const deployLock = !canDeploy
                     setModelId(picked);
                   }}
                 >
-                  {modelOptionsFor(modelSource, method === "container").map((option) => (
-                    <option
-                      key={option.model_id}
-                      value={option.model_id}
-                      style={{ background: "var(--panel)" }}
-                    >
-                      {option.label} · {option.model_id}
-                    </option>
-                  ))}
+                  {modelOptionsFor(modelSource).map((option) => {
+                    // N-R6-obs1: an unconfigured provider's row is disabled; tooltip = SSM parameter
+                    const reason = modelUnavailableReason(option.model_id);
+                    return (
+                      <option
+                        key={option.model_id}
+                        value={option.model_id}
+                        disabled={!option.available}
+                        title={reason ? t("models.unavailable", reason) : undefined}
+                        style={{ background: "var(--panel)" }}
+                      >
+                        {modelOptionLabel(option, t("models.unavailableShort"), true)}
+                      </option>
+                    );
+                  })}
                   <option value={CUSTOM_MODEL_OPTION} style={{ background: "var(--panel)" }}>
                     {t("create.configure.modelCustom")}
                   </option>
                 </select>
+                {!customModel && (
+                  <div className="note" style={{ margin: "6px 0 0" }} data-testid="model-provider-badge">
+                    <span>
+                      {(() => {
+                        const reason = modelUnavailableReason(modelId);
+                        return reason
+                          ? t("models.unavailable", reason)
+                          : t("models.badge", { provider: t(providerBadgeKey(modelId)) });
+                      })()}
+                    </span>
+                  </div>
+                )}
                 {customModel && (
                   <input
                     id="agent-model"
@@ -2536,15 +2364,20 @@ const deployLock = !canDeploy
                   </option>
                   {modelOptionsFor(modelSource)
                     .filter((option) => !byocModels.includes(option.model_id))
-                    .map((option) => (
-                      <option
-                        key={option.model_id}
-                        value={option.model_id}
-                        style={{ background: "var(--panel)" }}
-                      >
-                        {option.label} · {option.model_id}
-                      </option>
-                    ))}
+                    .map((option) => {
+                      const reason = modelUnavailableReason(option.model_id);
+                      return (
+                        <option
+                          key={option.model_id}
+                          value={option.model_id}
+                          disabled={!option.available}
+                          title={reason ? t("models.unavailable", reason) : undefined}
+                          style={{ background: "var(--panel)" }}
+                        >
+                          {modelOptionLabel(option, t("models.unavailableShort"), true)}
+                        </option>
+                      );
+                    })}
                   <option value={CUSTOM_MODEL_OPTION} style={{ background: "var(--panel)" }}>
                     {t("create.configure.modelCustom")}
                   </option>
@@ -2679,6 +2512,11 @@ const deployLock = !canDeploy
                 {t("create.configure.systemPrompt")}
                 {defaultHint("system_prompt")}
               </label>
+              {method === "harness" && (
+                <div className="dim" style={{ fontSize: 11, marginBottom: 4 }}>
+                  {t("v2.agents.wizard.reservedPlaceholder")}
+                </div>
+              )}
               <textarea
                 id="agent-prompt"
                 className="input mono"
@@ -2737,9 +2575,7 @@ const deployLock = !canDeploy
               <label>
                 {method === "harness"
                   ? t("create.configure.tools")
-                  : method === "container"
-                    ? t("create.configure.sdkTools")
-                    : t("create.configure.templateTools")}
+                  : t("create.configure.templateTools")}
               </label>
               <div className="selchips">
                 {method === "harness" ? (
@@ -2774,28 +2610,7 @@ const deployLock = !canDeploy
                         {server.name} · mcp {selectedMcp.includes(server.name) ? "✓" : "+"}
                       </button>
                     ))}
-                  </>
-                ) : method === "container" ? (
-                  <>
-                    <span className="selchip on">Task · subagents ✓</span>
-                    {remoteMcp.map((server) => (
-                      <button
-                        key={server.name}
-                        type="button"
-                        className={`selchip${selectedMcp.includes(server.name) ? " on" : ""}`}
-                        style={{ cursor: "pointer" }}
-                        title={server.url}
-                        onClick={() =>
-                          setSelectedMcp((prev) =>
-                            prev.includes(server.name)
-                              ? prev.filter((x) => x !== server.name)
-                              : [...prev, server.name],
-                          )
-                        }
-                      >
-                        {server.name} · mcp {selectedMcp.includes(server.name) ? "✓" : "+"}
-                      </button>
-                    ))}
+                    {agentChips()}
                   </>
                 ) : toolkitToolNames.length ? (
                   // A toolkit replaces the template's own two tools, so the chips
@@ -2812,9 +2627,10 @@ const deployLock = !canDeploy
                   </>
                 )}
                 {/* An HTTP zip runtime reaches the shared Gateway through a
-                    generated MCP client; A2A and container still cannot. */}
+                    generated MCP client; A2A still cannot. */}
                 {method === "zip_runtime" && !isA2a && gatewayChips()}
-                {(method === "container" || isA2a) && (
+                {method === "zip_runtime" && !isA2a && agentChips()}
+                {method === "zip_runtime" && isA2a && (
                   <span className="selchip" style={{ opacity: 0.5 }}>
                     {t("create.configure.gatewayToolsSoon")}
                   </span>
@@ -2944,7 +2760,7 @@ const deployLock = !canDeploy
                     onClick={() => {
                       setProtocol("a2a");
                       setA2aSkills((prev) => (prev.length ? prev : A2A_SKILL_SEEDS));
-                      // The A2A template has no Mantle branch — see A2A_MODEL_SOURCE.
+                      // the A2A template stays on the Converse path — see A2A_MODEL_SOURCE.
                       if (modelSource !== A2A_MODEL_SOURCE) applyModelSource(A2A_MODEL_SOURCE);
                     }}
                   >
@@ -3008,19 +2824,6 @@ const deployLock = !canDeploy
                     </Btn>
                   </>
                 )}
-              </div>
-            )}
-            {method === "container" && (
-              <div className="field">
-                <label htmlFor="agent-mcp">{t("create.configure.mcpServers")}</label>
-                <textarea
-                  id="agent-mcp"
-                  className="input mono"
-                  style={{ minHeight: 56, resize: "vertical" }}
-                  value={mcpServers}
-                  onChange={(e) => setMcpServers(e.target.value)}
-                  placeholder='{"docs": {"command": "uvx", "args": ["mcp-server-docs"]}}'
-                />
               </div>
             )}
             {!systemEdit && method !== "byoc" && (
@@ -3234,117 +3037,6 @@ const deployLock = !canDeploy
               </div>
             </div>
             )}
-            {method === "container" && (
-              <div className="field" data-testid="fs-config">
-                <label>{t("create.configure.filesystem")}</label>
-                <div className="selchips">
-                  <button
-                    type="button"
-                    className={`selchip${sessionFs ? " on" : ""}`}
-                    style={{ cursor: "pointer" }}
-                    onClick={() => setSessionFs((v) => !v)}
-                  >
-                    {t("create.configure.fsSession")} {sessionFs ? "✓" : "+"}
-                  </button>
-                  <button
-                    type="button"
-                    className="selchip"
-                    style={{ cursor: "pointer", opacity: s3Mounts.length >= 2 ? 0.4 : 1 }}
-                    disabled={s3Mounts.length >= 2}
-                    onClick={() => setS3Mounts((prev) => [...prev, { arn: "", path: "" }])}
-                  >
-                    {t("create.configure.fsAddS3")}
-                  </button>
-                  <button
-                    type="button"
-                    className="selchip"
-                    style={{ cursor: "pointer", opacity: efsMounts.length >= 2 ? 0.4 : 1 }}
-                    disabled={efsMounts.length >= 2}
-                    onClick={() => setEfsMounts((prev) => [...prev, { arn: "", path: "" }])}
-                  >
-                    {t("create.configure.fsAddEfs")}
-                  </button>
-                </div>
-                {sessionFs && (
-                  <input
-                    className="input mono"
-                    style={{ marginTop: 8 }}
-                    value={sessionMount}
-                    onChange={(e) => setSessionMount(e.target.value)}
-                    placeholder={DEFAULT_SESSION_MOUNT}
-                    aria-label={t("create.configure.fsSessionMount")}
-                  />
-                )}
-                {[
-                  { kind: "s3" as const, rows: s3Mounts, set: setS3Mounts },
-                  { kind: "efs" as const, rows: efsMounts, set: setEfsMounts },
-                ].map(({ kind, rows, set }) =>
-                  rows.map((row, i) => (
-                    <div key={`${kind}-${i}`} style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                      <span className="selchip on" style={{ alignSelf: "center" }}>
-                        {kind === "s3" ? "S3 FILES" : "EFS"}
-                      </span>
-                      <input
-                        className="input mono"
-                        style={{ flex: 2 }}
-                        value={row.arn}
-                        onChange={(e) =>
-                          set((prev) =>
-                            prev.map((r, j) => (j === i ? { ...r, arn: e.target.value } : r)),
-                          )
-                        }
-                        placeholder={t(
-                          kind === "s3"
-                            ? "create.configure.fsS3ArnPlaceholder"
-                            : "create.configure.fsEfsArnPlaceholder",
-                        )}
-                      />
-                      <input
-                        className="input mono"
-                        style={{ flex: 1 }}
-                        value={row.path}
-                        onChange={(e) =>
-                          set((prev) =>
-                            prev.map((r, j) => (j === i ? { ...r, path: e.target.value } : r)),
-                          )
-                        }
-                        placeholder="/mnt/data"
-                      />
-                      <Btn onClick={() => set((prev) => prev.filter((_, j) => j !== i))}>✕</Btn>
-                    </div>
-                  )),
-                )}
-                {byoMounts && (
-                  <div style={{ marginTop: 8 }}>
-                    <label>{t("create.configure.fsVpc")}</label>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <input
-                        className="input mono"
-                        style={{ flex: 1 }}
-                        value={vpcSubnets}
-                        onChange={(e) => setVpcSubnets(e.target.value)}
-                        placeholder="subnet-0abc, subnet-0def"
-                        aria-label={t("create.configure.fsSubnets")}
-                      />
-                      <input
-                        className="input mono"
-                        style={{ flex: 1 }}
-                        value={vpcSgs}
-                        onChange={(e) => setVpcSgs(e.target.value)}
-                        placeholder="sg-0abc"
-                        aria-label={t("create.configure.fsSgs")}
-                      />
-                    </div>
-                  </div>
-                )}
-                <div className="note" style={{ marginTop: 8 }}>
-                  <span className="i">[i]</span>
-                  <span>
-                    {byoMounts ? t("create.configure.fsNoteByo") : t("create.configure.fsNote")}
-                  </span>
-                </div>
-              </div>
-            )}
             {!systemEdit && (
             <>
             {method !== "byoc" && (
@@ -3550,156 +3242,8 @@ const deployLock = !canDeploy
             deployment={deployment}
             job={job}
             agentStatus={agentStatus}
-            detailsMode={detailsMode}
-            onRestart={() => {
-              if (!isList) {
-                navigate("/agents");
-                return;
-              }
-              setStep(1);
-              setLaunch(null);
-              setDeployment(null);
-              setJob(null);
-              resetForm();
-              reloadAgents();
-            }}
+            onRestart={() => navigate("/agents")}
           />
-          {detailsMode && detailSystem && (
-            <>
-              <div style={{ height: 14 }} />
-              <div className="note" data-testid="system-managed-note">
-                <span className="i">◈</span>
-                <span>
-                  {t("create.system.detailNote", {
-                    label: detailSystem.label,
-                    version: detailSystem.skill_version ?? "—",
-                  })}
-                </span>
-              </div>
-            </>
-          )}
-          {detailsMode && launch && (
-            <>
-              {mode === "detail" && (
-                <div className="agents-detail-actions" data-testid="detail-actions">
-                  {(() => {
-                    const row = agents.find((a) => a.id === launch.agentId);
-                    return (
-                      <>
-                        {row?.invoke_capability.eligible && (
-                          <Link className="btn" to={`/chat?agent=${launch.agentId}`}>
-                            {t("agents.detail.chat")}
-                          </Link>
-                        )}
-                        <Link className="btn" to="/observability">
-                          {t("agents.detail.observability")}
-                        </Link>
-                        {row && row.method !== "discovered_runtime" && !row.system && (
-                          <Link className="btn" to={`/agents/${launch.agentId}/edit`}>
-                            {t("create.list.edit")}
-                          </Link>
-                        )}
-                      </>
-                    );
-                  })()}
-                </div>
-              )}
-              <div style={{ height: 14 }} />
-              <VersionsPanel agentId={launch.agentId} />
-            </>
-          )}
-          {detailsMode && detailByoc && (
-            <>
-              <div style={{ height: 14 }} />
-              <Panel title={t("create.list.byocTitle")} data-testid="byoc-panel">
-                <div className="kv">
-                  <span className="k mono">{t("create.list.byocKind")}</span>
-                  <span className="v mono">{detailByoc.artifact_kind}</span>
-                </div>
-                {detailByocModels.length > 0 && (
-                  <div className="kv">
-                    <span className="k mono">{t("create.list.byocModels")}</span>
-                    <span className="v mono" style={{ fontSize: 10.5 }}>
-                      {detailByocModels.map((model, i) => (
-                        <span key={model} style={{ display: "block" }}>
-                          {model}
-                          {i === 0 && (
-                            <span className="dim">
-                              {" "}
-                              · {t("create.list.byocModelPrimary")}
-                            </span>
-                          )}
-                        </span>
-                      ))}
-                    </span>
-                  </div>
-                )}
-                {detailByoc.image_uri && (
-                  <div className="kv">
-                    <span className="k mono">{t("create.list.byocImage")}</span>
-                    <span className="v mono" style={{ fontSize: 10.5 }}>
-                      {detailByoc.image_uri}
-                    </span>
-                  </div>
-                )}
-                {detailByoc.artifact_kind === "code_zip" && (
-                  <div className="kv">
-                    <span className="k mono">{t("create.list.byocEntrypoint")}</span>
-                    <span className="v mono">
-                      {detailByoc.entrypoint ?? "main.py"} ·{" "}
-                      {(detailByoc.python_version ?? "PYTHON_3_13")
-                        .replace("PYTHON_", "Python ")
-                        .replace("_", ".")}
-                    </span>
-                  </div>
-                )}
-                {detailByoc.provenance?.sha256 && (
-                  <div className="kv">
-                    <span className="k mono">sha256</span>
-                    <span className="v mono">{detailByoc.provenance.sha256.slice(0, 16)}…</span>
-                  </div>
-                )}
-                {(detailByoc.provenance?.size_bytes ?? 0) > 0 && (
-                  <div className="kv">
-                    <span className="k mono">{t("create.list.byocSize")}</span>
-                    <span className="v mono">
-                      {((detailByoc.provenance?.size_bytes ?? 0) / 1e6).toFixed(1)}MB
-                      {detailByoc.provenance?.original_filename
-                        ? ` · ${detailByoc.provenance.original_filename}`
-                        : ""}
-                    </span>
-                  </div>
-                )}
-                {detailByoc.provenance?.uploaded_by && (
-                  <div className="kv">
-                    <span className="k mono">{t("create.list.byocUploadedBy")}</span>
-                    <span className="v mono">
-                      {detailByoc.provenance.uploaded_by}
-                      {detailByoc.provenance.uploaded_at
-                        ? ` · ${detailByoc.provenance.uploaded_at}`
-                        : ""}
-                    </span>
-                  </div>
-                )}
-              </Panel>
-            </>
-          )}
-          {detailsMode && detailConversion && (
-            <>
-              <div style={{ height: 14 }} />
-              <Panel title={t("create.list.convertedTitle")} data-testid="conversion-panel">
-                <div className="mono dim" style={{ fontSize: 11, marginBottom: 6 }}>
-                  ⇄ {t("create.list.convertedFrom", { name: detailConversion.source })}
-                </div>
-                {Object.entries(detailConversion.notes).map(([cap, note]) => (
-                  <div className="kv" key={cap}>
-                    <span className="k mono">{cap}</span>
-                    <span className="v mono" style={{ fontSize: 10.5 }}>{note}</span>
-                  </div>
-                ))}
-              </Panel>
-            </>
-          )}
           {detailKbs.length > 0 && (
             <>
               <div style={{ height: 14 }} />
@@ -3740,19 +3284,6 @@ const deployLock = !canDeploy
         onCancel={() => setConfirm(null)}
       />
       <ConfirmDialog
-        open={confirm?.kind === "convert"}
-        title={t("create.list.convertConfirmTitle")}
-        body={t("create.list.convertConfirm", {
-          name: confirm?.kind === "convert" ? confirm.name : "",
-        })}
-        confirmLabel={t("create.list.convert")}
-        onConfirm={() => {
-          if (confirm?.kind === "convert") void doConvert(confirm.id);
-          setConfirm(null);
-        }}
-        onCancel={() => setConfirm(null)}
-      />
-      <ConfirmDialog
         open={confirm?.kind === "delete"}
         title={t(
           confirm?.kind === "delete" && confirm.external
@@ -3779,363 +3310,5 @@ const deployLock = !canDeploy
         onCancel={() => setConfirm(null)}
       />
     </section>
-  );
-}
-
-const STATUS_TONE: Record<string, "good" | "warn" | "crit" | "muted"> = {
-  active: "good",
-  deploying: "warn",
-  failed: "crit",
-};
-
-/** "3 min ago"-style label for the UPDATED column; the absolute stamp rides on `title`. */
-function relativeTime(iso: string | null | undefined, t: TFunction) {
-  if (!iso) return "—";
-  const then = Date.parse(iso.endsWith("Z") || /[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`);
-  if (Number.isNaN(then)) return iso.replace("T", " ").slice(0, 16);
-  const s = Math.max(0, Math.round((Date.now() - then) / 1000));
-  if (s < 45) return t("agents.time.justNow");
-  const m = Math.round(s / 60);
-  if (m < 60) return t("agents.time.minutes", { count: m });
-  const h = Math.round(m / 60);
-  if (h < 24) return t("agents.time.hours", { count: h });
-  const d = Math.round(h / 24);
-  if (d < 30) return t("agents.time.days", { count: d });
-  return iso.replace("T", " ").slice(0, 10);
-}
-
-/** The "···" per-row menu: Edit / Convert / Delete live here so a row shows two
- * buttons. The pop-over is portalled to <body> with fixed coordinates: the
- * table sits in `.table-scroll` (overflow-x:auto ⇒ overflow-y clips too), so an
- * in-flow absolute menu on the last row was cut off (reported 2026-09-18). It
- * opens upward when there is no room below. */
-function RowMenu({ name, children }: { name: string; children: ReactNode }) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
-  const btn = useRef<HTMLButtonElement>(null);
-  const pop = useRef<HTMLDivElement>(null);
-  const MENU_H = 140; // generous upper bound: 3 items + padding
-  const place = () => {
-    const r = btn.current?.getBoundingClientRect();
-    if (!r) return;
-    const below = window.innerHeight - r.bottom;
-    setPos({
-      top: below >= MENU_H ? r.bottom + 4 : Math.max(8, r.top - 4 - MENU_H),
-      right: Math.max(8, window.innerWidth - r.right),
-    });
-  };
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (btn.current?.contains(target) || pop.current?.contains(target)) return;
-      setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    const onMove = () => place();
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    window.addEventListener("scroll", onMove, true);
-    window.addEventListener("resize", onMove);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-      window.removeEventListener("scroll", onMove, true);
-      window.removeEventListener("resize", onMove);
-    };
-  }, [open]);
-  return (
-    <div className="rowmenu">
-      <button
-        ref={btn}
-        type="button"
-        className="rowact"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={t("agents.moreActions", { name })}
-        data-testid={`menu-${name}`}
-        onClick={() => {
-          if (!open) place();
-          setOpen((v) => !v);
-        }}
-      >
-        ···
-      </button>
-      {open &&
-        pos &&
-        createPortal(
-          <div
-            ref={pop}
-            className="rowmenu-pop"
-            role="menu"
-            style={{ position: "fixed", top: pos.top, right: pos.right }}
-            onClick={() => setOpen(false)}
-          >
-            {children}
-          </div>,
-          document.body,
-        )}
-    </div>
-  );
-}
-
-function AgentList({
-  agents,
-  onEdit,
-  onDetails,
-  onDelete,
-  onConvert,
-  onCreate,
-}: {
-  agents: AgentInfo[];
-  onEdit: (a: AgentInfo) => void;
-  onDetails: (a: AgentInfo) => void;
-  onDelete: (a: AgentInfo) => void;
-  onConvert: (id: string, name: string) => void;
-  onCreate?: () => void;
-}) {
-  const { t } = useTranslation();
-  const { can, isAdmin } = useAuth();
-  const permHint = (allowed: boolean) =>
-    allowed ? undefined : t("create.permissionRequired");
-  const canEdit = can("agents.deploy"); // editing re-publishes
-  // a system row opens the shared editor on the maintenance route — administrators
-  // only (the server refuses everyone else's save whatever `perm:agents.*` they hold)
-  const canEditRow = (a: AgentInfo) =>
-    canEdit && a.status !== "deploying" && (!a.system || isAdmin);
-  const canDelete = can("agents.delete");
-  const canConvert = can("agents.convert");
-
-  const [methodFilter, setMethodFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [query, setQuery] = useState("");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
-  useEffect(() => {
-    setPage(1); // filters change the result set — restart from page 1
-  }, [methodFilter, statusFilter, query]);
-
-  const methods = useMemo(() => [...new Set(agents.map((a) => a.method))].sort(), [agents]);
-  const statuses = useMemo(() => [...new Set(agents.map((a) => a.status))].sort(), [agents]);
-  const rows = agents.filter((a) => {
-    if (methodFilter !== "all" && a.method !== methodFilter) return false;
-    if (statusFilter !== "all" && a.status !== statusFilter) return false;
-    const q = query.trim().toLowerCase();
-    return !q || a.name.toLowerCase().includes(q) || a.id.toLowerCase().includes(q);
-  });
-  const currentPage = Math.min(page, Math.max(1, Math.ceil(rows.length / pageSize)));
-  const pageRows = rows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-
-  return (
-    <Panel title={t("create.list.title")} sub={t("create.list.sub")} pad={false}>
-      <div className="filters">
-        <select
-          className="fsel"
-          value={methodFilter}
-          onChange={(e) => setMethodFilter(e.target.value)}
-          aria-label={t("create.list.colMethod")}
-        >
-          <option value="all">{t("create.list.filterMethodAll")}</option>
-          {methods.map((method) => (
-            <option key={method} value={method}>
-              {methodLabel(method)}
-            </option>
-          ))}
-        </select>
-        <select
-          className="fsel"
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          aria-label={t("create.list.colStatus")}
-        >
-          <option value="all">{t("create.list.filterStatusAll")}</option>
-          {statuses.map((status) => (
-            <option key={status} value={status}>
-              {t(`status.${status}`, status.toUpperCase())}
-            </option>
-          ))}
-        </select>
-        <input
-          className="fsearch"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={t("create.list.searchPlaceholder")}
-        />
-      </div>
-      <div className="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>{t("create.list.colName")}</th>
-              <th>{t("create.list.colMethod")}</th>
-              <th>{t("create.list.colStatus")}</th>
-              <th>{t("create.list.colRev")}</th>
-              <th>{t("create.list.colUpdated")}</th>
-              <th style={{ textAlign: "right" }}>{t("create.list.colActions")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pageRows.map((a) => (
-              <tr key={a.id} data-system={a.system ? "true" : undefined}>
-                <td className="pri">
-                  <div className="agent-method-cell">
-                    {a.deployment ? (
-                      <Link className="agent-name-link" to={`/agents/${a.id}`}>
-                        {a.name}
-                      </Link>
-                    ) : (
-                      a.name
-                    )}
-                    {a.system && (
-                      <Chip
-                        tone="blue"
-                        icon="◈"
-                        className="system-chip"
-                        title={t("create.system.protected")}
-                      >
-                        {t("create.system.chip")}
-                      </Chip>
-                    )}
-                  </div>
-                </td>
-                <td>
-                  <div className="agent-method-cell">
-                    <MethodChip method={a.method} />
-                    {a.method === "discovered_runtime" && (
-                      <span className="mono dim">
-                        {String(a.spec.protocol ?? "unknown").toUpperCase()}
-                      </span>
-                    )}
-                  </div>
-                </td>
-                <td>
-                  <div className="agent-method-cell">
-                    <Chip
-                      tone={STATUS_TONE[a.status] ?? "muted"}
-                      icon={a.status === "active" ? "●" : a.status === "failed" ? "✕" : "◐"}
-                      title={a.status === "failed" && a.error ? a.error : undefined}
-                    >
-                      {t(`status.${a.status}`, a.status.toUpperCase())}
-                    </Chip>
-                    {a.status === "failed" && a.deployment && (
-                      <button
-                        type="button"
-                        className="rowact"
-                        data-testid={`reason-${a.name}`}
-                        title={a.error ?? undefined}
-                        onClick={() => onDetails(a)}
-                      >
-                        {t("agents.viewReason")}
-                      </button>
-                    )}
-                  </div>
-                </td>
-                <td className="mono">
-                  {a.method === "discovered_runtime" ? `v${a.version ?? "—"}` : (a.revision ?? "—")}
-                </td>
-                <td className="mono dim" title={(a.updated_at ?? "").replace("T", " ").slice(0, 19)}>
-                  {relativeTime(a.updated_at, t)}
-                </td>
-                <td>
-                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                    {a.invoke_capability.eligible && (
-                      <Link className="rowact" to={`/chat?agent=${a.id}`}>
-                        {t("create.list.chat")}
-                      </Link>
-                    )}
-                    {a.deployment && (
-                      <button type="button" className="rowact" onClick={() => onDetails(a)}>
-                        {t("create.list.details")}
-                      </button>
-                    )}
-                    <RowMenu name={a.name}>
-                      {a.method !== "discovered_runtime" && (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className="rowmenu-item"
-                          data-testid={`edit-${a.name}`}
-                          disabled={!canEditRow(a)}
-                          title={
-                            a.system
-                              ? isAdmin
-                                ? t("create.system.settings.configureHint")
-                                : t("create.system.protected")
-                              : permHint(canEdit)
-                          }
-                          onClick={() => onEdit(a)}
-                        >
-                          {t("create.list.edit")}
-                        </button>
-                      )}
-                      {a.method === "harness" && a.status === "active" && (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className="rowmenu-item"
-                          data-testid={`convert-${a.name}`}
-                          disabled={!canConvert || !!a.system}
-                          title={a.system ? t("create.system.protected") : permHint(canConvert)}
-                          onClick={() => onConvert(a.id, a.name)}
-                        >
-                          {t("create.list.convert")}
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="rowmenu-item danger"
-                        data-testid={`delete-${a.name}`}
-                        disabled={!canDelete || !!a.system}
-                        title={a.system ? t("create.system.protected") : permHint(canDelete)}
-                        onClick={() => onDelete(a)}
-                      >
-                        {t(
-                          a.method === "discovered_runtime"
-                            ? "create.list.remove"
-                            : "create.list.delete",
-                        )}
-                      </button>
-                    </RowMenu>
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={6} className="dim mono" style={{ textAlign: "center" }}>
-                  {agents.length ? (
-                    t("create.list.noMatch")
-                  ) : (
-                    <div className="agents-empty" data-testid="agents-empty">
-                      <b>{t("agents.empty.title")}</b>
-                      <span>{t("create.list.empty")}</span>
-                      {onCreate && (
-                        <Btn primary onClick={onCreate}>
-                          + {t("agents.empty.cta")}
-                        </Btn>
-                      )}
-                    </div>
-                  )}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      <Pager
-        total={rows.length}
-        page={currentPage}
-        size={pageSize}
-        onPage={setPage}
-        onSize={(size) => {
-          setPageSize(size);
-          setPage(1);
-        }}
-      />
-    </Panel>
   );
 }

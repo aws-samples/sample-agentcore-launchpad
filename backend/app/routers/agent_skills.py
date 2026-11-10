@@ -11,23 +11,20 @@ record is created; the registry catalog is untouched.
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
-from app.core.errors import AppError
-from app.routers.registry import (
-    ImportSelection,
-    _drop_staging,
-    _match_bundle,
-    _staging,
-    _sweep_staging,
-)
+from app.assistant.principal import principal_of
+from app.routers.auth import require_identity
+from app.routers.registry import ImportSelection, _drop_staging, _match_bundle
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services.registry_console import _delete_keys, upload_bundle_files
+from app.services import registry_console as console
 from app.services.skill_ingest import (
     SKILL_NAME_RE,
     SkillBundle,
     SkillValidationError,
+    _delete_keys,
+    upload_bundle_files,
     validate_bundle,
 )
 from app.services.workspace import WorkspaceContext
@@ -43,28 +40,25 @@ class AttachRequest(BaseModel):
 @router.post("/import")
 def import_for_agent(
     req: AttachRequest,
+    request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Upload each selected staged bundle to a per-request S3 prefix and return
     attachable ``{name, path}`` entries. Mirrors the registry import semantics:
     per-item failures never abort the batch; staging survives any failure so
     the user can retry without re-uploading."""
-    return import_staged_skills(req.staging_id, req.selections, ws.context)
+    return import_staged_skills(
+        req.staging_id, req.selections, ws.context,
+        principal=principal_of(require_identity(request)),
+    )
 
 
 def import_staged_skills(
     staging_id: str, selections: list[ImportSelection], workspace: WorkspaceContext,
-    *, consume: bool = True,
+    *, principal: str, consume: bool = True,
 ) -> dict[str, Any]:
     """Shared validated upload path for the create wizard and assistant preparation."""
-    _sweep_staging()
-    entry = _staging.get(staging_id)
-    if entry is None:
-        raise AppError(
-            "registry.staging_expired",
-            "staging session expired or unknown — re-inspect the source",
-            status_code=410,
-        )
+    entry = console.take_staging(staging_id, workspace=workspace, principal=principal)
     bucket = workspace.resources.get("artifacts_bucket")
     if not bucket:
         raise RuntimeError(

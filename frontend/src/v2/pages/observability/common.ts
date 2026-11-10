@@ -1,8 +1,8 @@
+import { copyBrowserText } from "../../../lib/browser-compat";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { ObsTraceRow, V2Range } from "../../../lib/api";
-import { fmtCost } from "../../../pages/observability/format";
 import { RANGES } from "../../format";
 
 export type ObsTab = "dashboard" | "sessions" | "traces";
@@ -69,16 +69,6 @@ export function useReportCache(
   }, [hint, report]);
 }
 
-export function copyText(text: string): Promise<void> {
-  try {
-    // navigator.clipboard is undefined in non-secure contexts (http LAN)
-    return navigator.clipboard.writeText(text);
-  } catch (err) {
-    return Promise.reject(err);
-  }
-}
-
-/** "≈$0.019" — advisory estimate; an unknown price (null) renders as "—". */
-export function approxCost(v: number | null | undefined): string {
-  return v == null ? "—" : `≈${fmtCost(v)}`;
+export function copyText(text: string): Promise<boolean> {
+  return copyBrowserText(text);
 }

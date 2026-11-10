@@ -184,3 +184,90 @@ def test_every_public_code_has_a_generic_message(aws_code, status, code, message
         "message": message,
         "detail": {"aws_error_code": aws_code},
     }
+
+
+# --- N17-obs94: the botocore TRANSPORT family (not a ClientError) -----------------------
+# A ReadTimeoutError on InvokeAgentRuntime / DeleteAgentRuntime / StopRuntimeSession used to
+# escape every route as a bare 500 with the endpoint URL (the runtime ARN) in the traceback.
+
+RUNTIME_ENDPOINT = (
+    "https://bedrock-agentcore.cn-northwest-1.example/runtimes/"
+    "arn%3Aaws-cn%3Abedrock-agentcore%3Acn-northwest-1%3A000000000000%3Aruntime%2Fhr/invocations"
+)
+
+
+def make_transport_client() -> TestClient:
+    from botocore.exceptions import (
+        ConnectionClosedError,
+        ConnectTimeoutError,
+        EndpointConnectionError,
+        ParamValidationError,
+        ReadTimeoutError,
+    )
+
+    shapes = {
+        "read_timeout": lambda: ReadTimeoutError(
+            endpoint_url=RUNTIME_ENDPOINT,
+            error="AWSHTTPSConnectionPool(host='x', port=443): Read timed out. (read timeout=60)",
+        ),
+        "connect_timeout": lambda: ConnectTimeoutError(endpoint_url=RUNTIME_ENDPOINT),
+        "endpoint": lambda: EndpointConnectionError(endpoint_url=RUNTIME_ENDPOINT),
+        "closed": lambda: ConnectionClosedError(endpoint_url=RUNTIME_ENDPOINT),
+        "param": lambda: ParamValidationError(report="Missing required parameter: payload"),
+    }
+    app = FastAPI()
+    register_error_handlers(app)
+
+    @app.get("/transport/{shape}")
+    def raise_transport(shape: str):
+        raise shapes[shape]()
+
+    @app.get("/v1/transport/{shape}")
+    def raise_transport_public(shape: str):
+        raise shapes[shape]()
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.mark.parametrize(
+    ("shape", "status", "code", "error_type"),
+    [
+        ("read_timeout", 504, "aws.timeout", "ReadTimeoutError"),
+        ("connect_timeout", 504, "aws.timeout", "ConnectTimeoutError"),
+        ("endpoint", 502, "aws.unreachable", "EndpointConnectionError"),
+        ("closed", 502, "aws.unreachable", "ConnectionClosedError"),
+    ],
+)
+def test_transport_exception_is_an_envelope_never_a_bare_500(shape, status, code, error_type):
+    """N17-obs94: timeouts are 504 `aws.timeout`, a connection that could not be made or was
+    cut is 502 `aws.unreachable`; the message is static and the endpoint URL (the runtime
+    ARN) stays out of the body on the console and on `/v1` alike."""
+    for prefix in ("", "/v1"):
+        res = make_transport_client().get(f"{prefix}/transport/{shape}")
+        assert res.status_code == status, (prefix, res.text)
+        body = res.json()
+        assert body["code"] == code
+        assert body["detail"] == {"error_type": error_type}
+        assert body["message"] and "Traceback" not in res.text
+        assert "runtimes/" not in res.text and "example" not in res.text, res.text
+
+
+def test_non_transport_botocore_error_stays_a_loud_500():
+    """A `ParamValidationError` is a programming fault — re-raised like an unmapped
+    `ClientError` code, never dressed up as an AWS-side answer."""
+    res = make_transport_client().get("/transport/param")
+    assert res.status_code == 500
+    assert "aws." not in res.text
+
+
+def test_mapped_transport_error_predicate():
+    from botocore.exceptions import ParamValidationError, ReadTimeoutError, SSLError
+
+    from app.core.errors import mapped_transport_error
+
+    assert mapped_transport_error(ReadTimeoutError(endpoint_url="https://e/")) == (
+        504, "aws.timeout")
+    assert mapped_transport_error(SSLError(endpoint_url="https://e/", error="handshake")) == (
+        502, "aws.unreachable")
+    assert mapped_transport_error(ParamValidationError(report="x")) is None
+    assert mapped_transport_error(RuntimeError("x")) is None

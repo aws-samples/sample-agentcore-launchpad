@@ -1,0 +1,25 @@
+diff --git a/frontend/src/lib/evaluation.ts b/frontend/src/lib/evaluation.ts
+index 821d4d54..84b454bc 100644
+--- a/frontend/src/lib/evaluation.ts
++++ b/frontend/src/lib/evaluation.ts
+@@ -1,4 +1,5 @@
+ import { evaluatorPolarity } from "./evaluators";
++import { MODEL_CATALOG } from "./models";
+ 
+ export interface EvaluationDatasetInfo {
+   id: string;
+@@ -320,12 +321,8 @@ export const CLOUD_VALUE_PREFIX = "cloud:";
+ export const SIMULATED_SCHEMA = "AGENTCORE_EVALUATION_SIMULATED_V1";
+ export const DEFAULT_EVALUATORS = ["Builtin.Correctness", "Builtin.Helpfulness"];
+ 
+-export const ACTOR_MODELS = [
+-  "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+-  "global.anthropic.claude-sonnet-5",
+-  "global.anthropic.claude-sonnet-4-6",
+-  "global.amazon.nova-2-lite-v1:0",
+-];
++/** Actor-simulator models: the CN catalog (GLM 5.3 default, Kimi K3) — constraint C3. */
++export const ACTOR_MODELS: string[] = MODEL_CATALOG.bedrock.map((m) => m.model_id);
+ 
+ export const ACTIVE_RUN_STATUSES = new Set([
+   "queued",

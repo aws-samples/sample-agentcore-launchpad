@@ -26,17 +26,25 @@ import {
   AUTH_UNAUTHORIZED_EVENT,
   type AuthLoginResult,
   type AuthStatus,
+  type PasswordPolicy,
   type RegisterResult,
 } from "../lib/api";
 import { V2AuthFrame, V2AuthLoading } from "../v2/AuthFrame";
 import { AuthContext } from "./auth-context";
+import { formatApiTime } from "../lib/timestamps";
+
+/** Only a fallback for a status fetch that failed (or a logout before any status was
+ *  read); the server's `password_policy` always wins once it is known (N14-obs3). */
+const DEFAULT_PASSWORD_POLICY: PasswordPolicy = { mode: "strict", min_length: 12 };
 
 const AUTH_DISABLED: AuthStatus = {
   auth_required: false,
   authenticated: true,
   registration_enabled: false,
   registration_requires_approval: false,
+  password_policy: DEFAULT_PASSWORD_POLICY,
   username: null,
+  user_id: null,
   role: null,
   email: null,
   account_expires_at: null,
@@ -48,7 +56,9 @@ const LOGGED_OUT = (previous: AuthStatus | null): AuthStatus => ({
   authenticated: false,
   registration_enabled: previous?.registration_enabled ?? false,
   registration_requires_approval: previous?.registration_requires_approval ?? true,
+  password_policy: previous?.password_policy ?? DEFAULT_PASSWORD_POLICY,
   username: null,
+  user_id: null,
   role: null,
   email: null,
   account_expires_at: null,
@@ -61,7 +71,65 @@ const LOGIN_ERROR_KEYS: Record<string, string> = {
   "auth.account_pending": "auth.accountPending",
   "auth.account_expired": "auth.accountExpired",
   "auth.account_disabled": "auth.accountDisabled",
+  // r12-g login protection: both carry `detail.retry_after` (seconds)
+  "auth.locked": "auth.locked",
+  "auth.rate_limited": "auth.rateLimited",
 };
+
+/** `auth.weak_password` names its rule in `detail.reason` (r12-g). */
+const WEAK_PASSWORD_KEYS: Record<string, string> = {
+  too_short: "auth.errWeakPassword",
+  matches_identity: "auth.errPasswordMatchesIdentity",
+  common: "auth.errPasswordCommon",
+};
+
+/** Seconds the backend asks the caller to wait (`detail.retry_after`), if any. */
+function retryAfterSeconds(detail: unknown): number {
+  if (detail && typeof detail === "object" && "retry_after" in detail) {
+    const value = Number((detail as { retry_after: unknown }).retry_after);
+    if (Number.isFinite(value) && value > 0) return Math.ceil(value);
+  }
+  return 0;
+}
+
+/** Console copy for a sign-in failure; the backend never leaks whether the account exists. */
+export function loginErrorKey(caught: unknown): { key: string; seconds: number } {
+  if (caught instanceof ApiError) {
+    const key = LOGIN_ERROR_KEYS[caught.code];
+    if (key) return { key, seconds: retryAfterSeconds(caught.detail) };
+  }
+  return { key: "auth.loginFailed", seconds: 0 };
+}
+
+/** Console copy for a registration failure, incl. the password-policy reason. The
+ *  `min_length` the server names in `detail` wins; `fallbackMin` is the policy the
+ *  status payload advertised (never a hard-coded number). */
+export function registerErrorKey(
+  caught: unknown,
+  fallbackMin: number = DEFAULT_PASSWORD_POLICY.min_length,
+): {
+  key: string;
+  minLength: number;
+  seconds: number;
+} {
+  if (caught instanceof ApiError) {
+    if (caught.code === "auth.weak_password") {
+      const detail = (caught.detail ?? {}) as { reason?: string; min_length?: number };
+      const minLength = Number(detail.min_length) || fallbackMin;
+      const key = WEAK_PASSWORD_KEYS[detail.reason ?? ""] ?? "auth.errWeakPassword";
+      return { key, minLength, seconds: 0 };
+    }
+    const key = REGISTER_ERROR_KEYS[caught.code];
+    if (key) return { key, minLength: fallbackMin, seconds: retryAfterSeconds(caught.detail) };
+  }
+  return { key: "auth.registerFailed", minLength: fallbackMin, seconds: 0 };
+}
+
+/** The registration hint for the policy the server advertised: the relaxed mode names
+ *  only the length, so the form never claims a rule the backend will not enforce. */
+export function passwordHintKey(policy: PasswordPolicy): string {
+  return policy.mode === "relaxed" ? "auth.passwordHintRelaxed" : "auth.passwordHint";
+}
 
 const REGISTER_ERROR_KEYS: Record<string, string> = {
   "auth.invalid_username": "auth.errInvalidUsername",
@@ -71,6 +139,12 @@ const REGISTER_ERROR_KEYS: Record<string, string> = {
   "auth.email_taken": "auth.errEmailTaken",
   "auth.weak_password": "auth.errWeakPassword",
   "auth.registration_disabled": "auth.errRegistrationDisabled",
+  // r12-g (A-2): one code for a taken username OR email (instant-activation mode only;
+  // under approval mode a collision answers like a pending registration), the
+  // pending-queue cap, and the per-address window (`detail.retry_after`)
+  "auth.registration_rejected": "auth.errRegistrationRejected",
+  "auth.registration_backlog": "auth.errRegistrationBacklog",
+  "auth.rate_limited": "auth.rateLimitedRegister",
 };
 
 export function AuthGate({ children }: { children: ReactNode }) {
@@ -105,7 +179,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
       authenticated: true,
       registration_enabled: result.registration_enabled,
       registration_requires_approval: result.registration_requires_approval,
+      password_policy: result.password_policy ?? DEFAULT_PASSWORD_POLICY,
       username: result.username,
+      user_id: result.user_id,
       role: result.role,
       email: result.email,
       account_expires_at: result.account_expires_at,
@@ -128,6 +204,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return {
       authRequired: status?.auth_required ?? false,
       username: status?.username ?? null,
+      userId: status?.user_id ?? null,
       role: status?.role ?? null,
       email: status?.email ?? null,
       accountExpiresAt: status?.account_expires_at ?? null,
@@ -142,6 +219,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     status?.email,
     status?.permissions,
     status?.role,
+    status?.user_id,
     status?.username,
   ]);
 
@@ -152,6 +230,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
         onLogin={onLogin}
         registrationEnabled={status.registration_enabled}
         requiresApproval={status.registration_requires_approval}
+        passwordPolicy={status.password_policy ?? DEFAULT_PASSWORD_POLICY}
       />
     );
   }
@@ -160,7 +239,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
 function AuthLoading() {
   const { t } = useTranslation();
-  return <V2AuthLoading label={t("auth.checking")} />;
+  return <V2AuthLoading label={t("auth.checking")} reason="auth" />;
 }
 
 /** The console's create → deploy → invoke → observe loop, beside the form. */
@@ -175,10 +254,12 @@ function LoginPage({
   onLogin,
   registrationEnabled,
   requiresApproval,
+  passwordPolicy,
 }: {
   onLogin: (result: AuthLoginResult) => void;
   registrationEnabled: boolean;
   requiresApproval: boolean;
+  passwordPolicy: PasswordPolicy;
 }) {
   const { t } = useTranslation();
   const [mode, setMode] = useState<"signin" | "register">("signin");
@@ -236,7 +317,11 @@ function LoginPage({
             {mode === "signin" ? (
               <SignInForm onLogin={onLogin} prefill={prefill} />
             ) : (
-              <RegisterForm onRegistered={onRegistered} requiresApproval={requiresApproval} />
+              <RegisterForm
+                onRegistered={onRegistered}
+                requiresApproval={requiresApproval}
+                policy={passwordPolicy}
+              />
             )}
           </div>
         </div>
@@ -255,7 +340,7 @@ function Field({ id, label, hint, children }: {
     <div className="v2-field">
       <label htmlFor={id}>{label}</label>
       {children}
-      {hint ? <span className="hint">{hint}</span> : null}
+      {hint ? <span className="hint" data-testid={`${id}-hint`}>{hint}</span> : null}
     </div>
   );
 }
@@ -300,9 +385,8 @@ function SignInForm({
       const result = await api.login(username.trim(), password);
       onLogin(result);
     } catch (caught) {
-      const key =
-        caught instanceof ApiError ? LOGIN_ERROR_KEYS[caught.code] : undefined;
-      setError(t(key ?? "auth.loginFailed"));
+      const { key, seconds } = loginErrorKey(caught);
+      setError(t(key, { seconds }));
     } finally {
       setSubmitting(false);
     }
@@ -354,9 +438,11 @@ function SignInForm({
 function RegisterForm({
   onRegistered,
   requiresApproval,
+  policy,
 }: {
   onRegistered: (result: RegisterResult) => void;
   requiresApproval: boolean;
+  policy: PasswordPolicy;
 }) {
   const { t } = useTranslation();
   const [username, setUsername] = useState("");
@@ -377,6 +463,11 @@ function RegisterForm({
       setError(t("auth.passwordMismatch"));
       return;
     }
+    // the only rule the form can check itself; the server still decides
+    if (password.length < policy.min_length) {
+      setError(t("auth.errWeakPassword", { min: policy.min_length }));
+      return;
+    }
 
     setError("");
     setSubmitting(true);
@@ -384,9 +475,8 @@ function RegisterForm({
       const result = await api.register(username.trim(), email.trim(), password);
       setDone(result);
     } catch (caught) {
-      const key =
-        caught instanceof ApiError ? REGISTER_ERROR_KEYS[caught.code] : undefined;
-      setError(t(key ?? "auth.registerFailed"));
+      const { key, minLength, seconds } = registerErrorKey(caught, policy.min_length);
+      setError(t(key, { min: minLength, seconds }));
     } finally {
       setSubmitting(false);
     }
@@ -426,7 +516,7 @@ function RegisterForm({
               {pending
                 ? t("auth.v2.statusPending")
                 : done.expires_at
-                  ? new Date(done.expires_at).toLocaleString()
+                  ? (formatApiTime(done.expires_at) ?? done.expires_at)
                   : "—"}
             </b>
           </div>
@@ -469,7 +559,11 @@ function RegisterForm({
             disabled={submitting}
           />
         </Field>
-        <Field id="reg-password" label={t("auth.v2.password")} hint={t("auth.passwordHint")}>
+        <Field
+          id="reg-password"
+          label={t("auth.v2.password")}
+          hint={t(passwordHintKey(policy), { min: policy.min_length })}
+        >
           <input
             id="reg-password"
             className="v2-input"

@@ -1,4 +1,8 @@
-"""Regression for the live 1.17/1.56 Memory integration import failure."""
+"""Regression for the live strands-agents 1.56 release that broke generated runtimes.
+
+The CN build's memory path is the self-hosted library (memory-runtime.md), not the SDK's
+AgentCore Memory integration, so no import of that integration is pinned here (N8/C5).
+"""
 
 from packaging.requirements import Requirement
 
@@ -19,12 +23,3 @@ def test_every_generated_strands_path_excludes_the_incompatible_release():
         assert "1.47.0" in strands.specifier
         assert "1.56.0" not in strands.specifier
 
-
-def test_pinned_backend_sdk_can_import_the_runtime_memory_integration():
-    # This import failed before the runtime could open its HTTP listener on AWS.
-    # No client/session is created and no credentials or network are used.
-    from bedrock_agentcore.memory.integrations.strands.session_manager import (
-        AgentCoreMemorySessionManager,
-    )
-
-    assert callable(AgentCoreMemorySessionManager)

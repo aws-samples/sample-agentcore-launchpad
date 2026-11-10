@@ -1,3 +1,4 @@
+import { copyBrowserText } from "../../../lib/browser-compat";
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -533,9 +534,8 @@ export function TasksetEditor({ id }: { id: string | null }) {
               <Button
                 size="sm"
                 onClick={() => {
-                  void navigator.clipboard
-                    ?.writeText(EXAMPLE_TASKS)
-                    .then(() => toast("success", t("skillLab.tasksets.help.copied")));
+                  void copyBrowserText(EXAMPLE_TASKS)
+                    .then((copied) => { if (copied) toast("success", t("skillLab.tasksets.help.copied")); });
                 }}
               >
                 {t("skillLab.tasksets.help.copy")}

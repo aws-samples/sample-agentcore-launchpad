@@ -14,7 +14,14 @@ import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import (
+    ClientError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    NoRegionError,
+    ReadTimeoutError,
+    UnknownServiceError,
+)
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
@@ -23,6 +30,7 @@ from app.deployer import pipeline
 from app.main import create_app
 from app.models.ledger import Job, Workspace
 from app.services import aws_clients, workspace_iam
+from app.services import memory_bootstrap as mb
 from app.services import users as users_service
 from app.services import workspace_bootstrap as wb
 from app.services.workspace import context_for_workspace, merge_workspace_resources
@@ -74,9 +82,6 @@ class FakeIam:
             "trust": "{}",
         }
 
-    def list_roles(self, **_kw):
-        return {"Roles": []}
-
     def create_role(self, RoleName, AssumeRolePolicyDocument, Description, Tags):  # noqa: N803
         if RoleName in self.roles:
             raise _client_error("EntityAlreadyExists", "CreateRole")
@@ -85,8 +90,20 @@ class FakeIam:
         self.created.append(RoleName)
         return {"Role": {"Arn": self.roles[RoleName]["arn"]}}
 
+    # Like the real GetRole, the response carries Tags only when the role has some
+    # (the untagged CDK-made role answers without the key — the ListRoleTags fallback
+    # is what then decides); the trust document comes back URL-decoded as a dict.
     def get_role(self, RoleName):  # noqa: N803
-        return {"Role": {"Arn": self.roles[RoleName]["arn"]}}
+        if RoleName not in self.roles:
+            raise _client_error("NoSuchEntity", "GetRole")
+        role = {"Arn": self.roles[RoleName]["arn"]}
+        if self.roles[RoleName]["tags"]:
+            role["Tags"] = [{"Key": k, "Value": v} for k, v in self.roles[RoleName]["tags"].items()]
+        try:
+            role["AssumeRolePolicyDocument"] = json.loads(self.roles[RoleName]["trust"])
+        except (TypeError, ValueError):
+            pass
+        return {"Role": role}
 
     def list_role_tags(self, RoleName):  # noqa: N803
         return {
@@ -102,6 +119,7 @@ class FakeIam:
 
     def update_assume_role_policy(self, RoleName, PolicyDocument):  # noqa: N803
         self.roles[RoleName]["trust"] = PolicyDocument
+        self.trust_updates = getattr(self, "trust_updates", []) + [RoleName]
 
     def put_role_policy(self, RoleName, PolicyName, PolicyDocument):  # noqa: N803
         self.inline[(RoleName, PolicyName)] = PolicyDocument
@@ -175,104 +193,63 @@ class FakeCodeBuild:
         self.projects: dict[str, dict] = {}
         self.created: list[str] = []
 
-    def list_projects(self):
-        return {"projects": sorted(self.projects)}
-
     def batch_get_projects(self, names):
-        return {"projects": [self.projects[n] for n in names if n in self.projects]}
+        return {
+            "projects": [self.projects[n] for n in names if n in self.projects],
+            "projectsNotFound": [n for n in names if n not in self.projects],
+        }
 
     def create_project(self, **kwargs):
         self.projects[kwargs["name"]] = kwargs
         self.created.append(kwargs["name"])
         return {"project": kwargs}
 
-
-class FakeCognito:
-    def __init__(self) -> None:
-        self.pools: dict[str, dict] = {}
-        self.created_pools: list[str] = []
-        self.created_clients: list[str] = []
-        self.domains: dict[str, str] = {}
-
-    def preexisting_pool(self, name: str) -> str:
-        pool_id = f"{REGION}_{len(self.pools) + 1}"
-        self.pools[pool_id] = {
-            "Name": name,
-            "clients": {},
-            "resource_servers": set(),
-            "groups": set(),
-        }
-        return pool_id
-
-    def list_user_pools(self, MaxResults=None, NextToken=None):  # noqa: N803
-        return {
-            "UserPools": [
-                {"Id": pool_id, "Name": pool["Name"]}
-                for pool_id, pool in self.pools.items()
-            ]
-        }
-
-    def create_user_pool(self, PoolName, **_kwargs):  # noqa: N803
-        pool_id = self.preexisting_pool(PoolName)
-        self.created_pools.append(PoolName)
-        return {"UserPool": {"Id": pool_id, "Name": PoolName}}
-
-    def describe_resource_server(self, UserPoolId, Identifier):  # noqa: N803
-        if Identifier not in self.pools[UserPoolId]["resource_servers"]:
-            raise _client_error("ResourceNotFoundException", "DescribeResourceServer")
-        return {"ResourceServer": {"Identifier": Identifier}}
-
-    def create_resource_server(self, UserPoolId, Identifier, Name, Scopes):  # noqa: N803
-        self.pools[UserPoolId]["resource_servers"].add(Identifier)
-
-    def list_user_pool_clients(self, UserPoolId, MaxResults=None, NextToken=None):  # noqa: N803
-        return {
-            "UserPoolClients": [
-                {"ClientId": client["ClientId"], "ClientName": name}
-                for name, client in self.pools[UserPoolId]["clients"].items()
-            ]
-        }
-
-    def create_user_pool_client(self, UserPoolId, ClientName, **kwargs):  # noqa: N803
-        client = {"ClientId": f"cid-{ClientName}", "ClientSecret": "s3cr3t", **kwargs}
-        self.pools[UserPoolId]["clients"][ClientName] = client
-        self.created_clients.append(ClientName)
-        return {"UserPoolClient": client}
-
-    def describe_user_pool_client(self, UserPoolId, ClientId):  # noqa: N803
-        for client in self.pools[UserPoolId]["clients"].values():
-            if client["ClientId"] == ClientId:
-                return {"UserPoolClient": client}
-        raise _client_error("ResourceNotFoundException", "DescribeUserPoolClient")
-
-    def create_group(self, UserPoolId, GroupName, Description=None):  # noqa: N803
-        if GroupName in self.pools[UserPoolId]["groups"]:
-            raise _client_error("GroupExistsException", "CreateGroup")
-        self.pools[UserPoolId]["groups"].add(GroupName)
-
-    def describe_user_pool_domain(self, Domain):  # noqa: N803
-        # Cognito answers an unknown domain with an empty description, not an error.
-        if Domain not in self.domains:
-            return {"DomainDescription": {}}
-        return {"DomainDescription": {"Domain": Domain, "UserPoolId": self.domains[Domain]}}
-
-    def create_user_pool_domain(self, Domain, UserPoolId):  # noqa: N803
-        self.domains[Domain] = UserPoolId
-        return {"CloudFrontDomain": "d123.cloudfront.net"}
+    def update_project(self, **kwargs):
+        self.projects[kwargs["name"]].update(kwargs)
+        self.updated = getattr(self, "updated", [])
+        self.updated.append(kwargs["name"])
 
 
 class FakeControl:
-    """bedrock-agentcore-control: gateways, memories, OAuth providers."""
+    """bedrock-agentcore-control: gateways, memories, api-key credential providers."""
 
     def __init__(self) -> None:
         self.gateways: dict[str, dict] = {}
         self.memories: dict[str, dict] = {}
-        self.providers: dict[str, str] = {}
         self.created_gateways: list[str] = []
         self.updated_memories: list[tuple[str, list[str]]] = []
         self.created_memories: list[str] = []
-        self.created_providers: list[str] = []
         self.updated: list[str] = []
+        self.providers: dict[str, dict] = {}
+        self.provider_calls: list[str] = []
+
+    def _provider(self, name: str) -> dict:
+        return {
+            "name": name,
+            "credentialProviderArn": (
+                f"arn:aws-cn:bedrock-agentcore:{REGION}:{ACCOUNT}:token-vault/default/"
+                f"apikeycredentialprovider/{name}"
+            ),
+            "apiKeySecretArn": (
+                f"arn:aws-cn:secretsmanager:{REGION}:{ACCOUNT}:secret:"
+                f"bedrock-agentcore-identity!default/apikey/{name}-AbCdEf"
+            ),
+        }
+
+    def get_api_key_credential_provider(self, name):
+        self.provider_calls.append(f"get:{name}")
+        if name not in self.providers:
+            raise _client_error("ResourceNotFoundException", "GetApiKeyCredentialProvider")
+        return self.providers[name]
+
+    def create_api_key_credential_provider(self, name, apiKey):  # noqa: N803
+        self.provider_calls.append(f"create:{name}")
+        self.providers[name] = self._provider(name)
+        return self.providers[name]
+
+    def update_api_key_credential_provider(self, name, apiKey):  # noqa: N803
+        self.provider_calls.append(f"update:{name}")
+        return self.providers[name]
 
     def preexisting_gateway(self, name: str) -> str:
         gateway_id = f"{name}-{len(self.gateways) + 1}"
@@ -300,9 +277,8 @@ class FakeControl:
     def create_gateway(self, name, **kwargs):
         gateway_id = self.preexisting_gateway(name)
         self.gateways[gateway_id]["roleArn"] = kwargs.get("roleArn", "")
-        self.gateways[gateway_id]["authorizerConfiguration"] = kwargs.get(
-            "authorizerConfiguration", {}
-        )
+        self.gateways[gateway_id]["authorizerType"] = kwargs.get("authorizerType", "")
+        self.gateways[gateway_id].pop("authorizerConfiguration", None)
         self.created_gateways.append(name)
         return {"gatewayId": gateway_id}
 
@@ -357,20 +333,6 @@ class FakeControl:
     def get_memory(self, memoryId):  # noqa: N803
         return {"memory": self.memories[memoryId]}
 
-    def list_oauth2_credential_providers(self, maxResults=None):  # noqa: N803
-        return {
-            "credentialProviders": [
-                {"name": name, "credentialProviderArn": arn}
-                for name, arn in self.providers.items()
-            ]
-        }
-
-    def create_oauth2_credential_provider(self, name, **kwargs):
-        arn = f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:token-vault/default/{name}"
-        self.providers[name] = arn
-        self.created_providers.append(name)
-        return {"credentialProviderArn": arn}
-
 
 class FakeRegistry:
     def __init__(self) -> None:
@@ -416,10 +378,30 @@ class FakeXray:
 
 
 class FakeLogs:
-    """A fresh region has no CloudWatch Logs resource policies at all."""
+    """A fresh region has no CloudWatch Logs resource policies at all — and no log
+    groups (the D20 `policy` stage creates the decisions group)."""
 
     def __init__(self) -> None:
         self.policies: dict[str, str] = {}
+        self.groups: dict[str, int | None] = {}
+        self.created: list[str] = []
+
+    def create_log_group(self, logGroupName):  # noqa: N803
+        if logGroupName in self.groups:
+            raise ClientError(
+                {"Error": {"Code": "ResourceAlreadyExistsException", "Message": "exists"}},
+                "CreateLogGroup",
+            )
+        self.groups[logGroupName] = None
+        self.created.append(logGroupName)
+
+    def put_retention_policy(self, logGroupName, retentionInDays):  # noqa: N803
+        if logGroupName not in self.groups:
+            raise ClientError(
+                {"Error": {"Code": "ResourceNotFoundException", "Message": "no group"}},
+                "PutRetentionPolicy",
+            )
+        self.groups[logGroupName] = retentionInDays
 
     def describe_resource_policies(self):
         return {
@@ -434,6 +416,23 @@ class FakeLogs:
         return {}
 
 
+class FakeSsm:
+    """`ssm` for the D21 (M1-b) registry pass of the model-credential stage: no
+    `launchpad-*-api-key` parameter exists unless a test stores one as (value, version)."""
+
+    def __init__(self) -> None:
+        self.parameters: dict[str, tuple[str, int]] = {}
+        self.calls: list[str] = []
+
+    def get_parameter(self, Name, WithDecryption=False):  # noqa: N803
+        self.calls.append(Name)
+        assert WithDecryption is True
+        if Name not in self.parameters:
+            raise _client_error("ParameterNotFound", "GetParameter")
+        value, version = self.parameters[Name]
+        return {"Parameter": {"Name": Name, "Value": value, "Version": version}}
+
+
 class FakeAws:
     def __init__(self) -> None:
         self.sts = FakeSts()
@@ -441,11 +440,11 @@ class FakeAws:
         self.s3 = FakeS3()
         self.ecr = FakeEcr()
         self.codebuild = FakeCodeBuild()
-        self.cognito = FakeCognito()
         self.control = FakeControl()
         self.registry = FakeRegistry()
         self.xray = FakeXray()
         self.logs = FakeLogs()
+        self.ssm = FakeSsm()
         self.expect_region = REGION
         self.services = {
             "sts": self.sts,
@@ -453,11 +452,11 @@ class FakeAws:
             "s3": self.s3,
             "ecr": self.ecr,
             "codebuild": self.codebuild,
-            "cognito-idp": self.cognito,
             "bedrock-agentcore-control": self.control,
             "agent-registry-control": self.registry,
             "xray": self.xray,
             "logs": self.logs,
+            "ssm": self.ssm,  # D21 M1-b: the model-credential stage's registry pass
         }
 
     def client(self, service, ctx, cache_token=None, **cfg):
@@ -476,9 +475,14 @@ def aws(monkeypatch) -> FakeAws:
     return fake
 
 
+@pytest.fixture(autouse=True)
+def global_bedrock_key(monkeypatch):
+    monkeypatch.setenv("LAUNCHPAD_GLOBAL_BEDROCK_API_KEY", "global-bedrock-key")
+
+
 def _fast() -> wb.Timeouts:
     return wb.Timeouts(
-        memory_s=1, gateway_s=1, iam_attempts=2, iam_delay_s=0, sleeper=lambda _s: None
+        gateway_s=1, iam_attempts=2, iam_delay_s=0, sleeper=lambda _s: None
     )
 
 
@@ -557,6 +561,20 @@ def _stub_skill_lab_stage(monkeypatch):
     monkeypatch.setitem(wb.STAGES, "skill-lab", lambda _ctx: "stubbed")
 
 
+@pytest.fixture(autouse=True)
+def default_records(monkeypatch) -> list:
+    """The registry stage's default-record import (N10-bug1) speaks MCP to the gateway
+    and uploads the sample skill to S3 through the console code (its own fakes live in
+    test_registry_attachables.py). Here it is a recorder returning no records unless a
+    test replaces it; the stage's identifier bookkeeping is what this suite asserts."""
+    from app.services import registry_console
+
+    calls: list = []
+    monkeypatch.setattr(registry_console, "ensure_default_records",
+                        lambda ws, log=None, auto_approve=False: calls.append(ws) or [])
+    return calls
+
+
 # ── stages ─────────────────────────────────────────────────────────────────
 
 
@@ -568,19 +586,26 @@ class TestStages:
             wb.STAGES[name](ctx)
 
         resources = _row().resources
+        # model-credential records 2 extra keys (name, secret_arn) that are not
+        # required for deploy/invoke (only the ARN is) but are still recorded; this
+        # workspace is not the hub's own account+region, so memory degrades (N6 R2).
         assert set(resources) == set(wb.REQUIRED_RESOURCE_KEYS) | {
-            "registry_id",
-            "registry_arn",
-            "registry_unavailable_reason",
-            "user_pool_domain",
+            "model_credential_name",
+            "model_credential_secret_arn",
+            "model_credentials",  # N-R6: per-provider map (name/arn/configured, no secret)
+            "memory_unavailable_reason",
+            # D20 P1-d: the CloudWatch decisions log group the audit sink mirrors into
+            "policy_log_group",
+            "policy_log_group_unavailable_reason",
         }
+        assert resources["policy_log_group"] == "/launchpad/policy/decisions"
+        assert aws.logs.groups == {"/launchpad/policy/decisions": 90}
         assert resources["artifacts_bucket"] == f"launchpad-artifacts-{ACCOUNT}-{REGION}"
         assert resources["ecr_repo"] == "launchpad-agents"
         assert resources["codebuild_project"] == "launchpad-agent-builder"
         assert resources["execution_role_arn"].endswith(
             f"role/launchpad-agent-execution-role-{REGION}"
         )
-        assert resources["user_pool_domain"] == f"launchpad-{ACCOUNT}-{REGION}"
         assert _row().bootstrap_status == "ready"
 
     def test_every_stage_is_idempotent(self, aws):
@@ -599,18 +624,12 @@ class TestStages:
         assert aws.iam.created == [
             f"launchpad-agent-execution-role-{REGION}",
             f"launchpad-gateway-role-{REGION}",
-            f"launchpad-kb-role-{REGION}",
             f"launchpad-codebuild-role-{REGION}",
         ]
         assert len(aws.s3.created) == 1
         assert aws.ecr.created == ["launchpad-agents"]
         assert aws.codebuild.created == ["launchpad-agent-builder"]
-        assert aws.cognito.created_pools == ["launchpad-users"]
-        assert aws.cognito.created_clients == ["launchpad-console", "launchpad-agent-m2m"]
         assert aws.control.created_gateways == ["launchpad-gw"]
-        assert aws.control.created_memories == ["launchpad_memory"]
-        assert aws.control.created_providers == ["launchpad-gw-m2m"]
-        assert aws.registry.created == ["launchpad-registry"]
 
     def test_the_bucket_carries_the_cdk_posture(self, aws):
         _register()
@@ -621,6 +640,77 @@ class TestStages:
         assert applied["versioning"] == {"Status": "Enabled"}
         assert applied["public_access_block"]["BlockPublicAcls"] is True
         assert "aws:SecureTransport" in applied["policy"]
+
+    def test_codebuild_project_gets_the_cn_mirror_env_vars(self, aws):
+        _register()
+        wb.STAGES["storage"](_ctx())
+        wb.STAGES["codebuild"](_ctx())
+        env = {
+            e["name"]: e["value"]
+            for e in aws.codebuild.projects["launchpad-agent-builder"]["environment"][
+                "environmentVariables"
+            ]
+        }
+        # N11-r3-bug7: the project resolves from the BUILD mirror (NJU), never the host
+        # mirror (tuna 4xx-blocks CodeBuild's egress), plus the fallback index.
+        build_index = get_settings().codebuild_pip_index_url
+        assert build_index != get_settings().pip_index_url
+        assert env["PIP_INDEX_URL"] == build_index
+        assert env["UV_INDEX_URL"] == build_index
+        # uv 0.9.10 deprecates UV_INDEX_URL in favor of UV_DEFAULT_INDEX —
+        # both must carry the mirror.
+        assert env["UV_DEFAULT_INDEX"] == build_index
+        assert env["PIP_FALLBACK_INDEX_URL"] == get_settings().codebuild_pip_fallback_index_url
+        assert env["NPM_CONFIG_REGISTRY"] == get_settings().npm_registry
+        assert "BASE_IMAGE" not in env  # disabled by default (R4)
+        assert "PIP_EXTRA_INDEX_URL" not in env and "UV_INDEX" not in env  # N11-obs25 opt-in
+
+    def test_codebuild_project_ignores_the_host_mirror_setting(self, aws, monkeypatch):
+        """N11-r3-bug7: changing the host mirror must not move the build mirror."""
+        settings = get_settings()
+        monkeypatch.setattr(
+            wb, "get_settings",
+            lambda: settings.model_copy(update={
+                "pip_index_url": "https://host-only.example.invalid/simple",
+                "codebuild_pip_index_url": "https://build.example.invalid/simple",
+                "codebuild_pip_fallback_index_url": "https://build-2.example.invalid/simple",
+            }),
+        )
+        _register()
+        wb.STAGES["storage"](_ctx())
+        wb.STAGES["codebuild"](_ctx())
+        env = {
+            e["name"]: e["value"]
+            for e in aws.codebuild.projects["launchpad-agent-builder"]["environment"][
+                "environmentVariables"
+            ]
+        }
+        assert env["PIP_INDEX_URL"] == "https://build.example.invalid/simple"
+        assert env["UV_DEFAULT_INDEX"] == "https://build.example.invalid/simple"
+        assert env["PIP_FALLBACK_INDEX_URL"] == "https://build-2.example.invalid/simple"
+        assert "host-only" not in str(env)
+
+    def test_codebuild_project_gets_the_optional_extra_index_when_configured(
+        self, aws, monkeypatch
+    ):
+        settings = get_settings()
+        monkeypatch.setattr(
+            wb, "get_settings",
+            lambda: settings.model_copy(
+                update={"pip_extra_index_url": "https://mirror.nju.edu.cn/pypi/web/simple"}),
+        )
+        _register()
+        wb.STAGES["storage"](_ctx())
+        wb.STAGES["codebuild"](_ctx())
+        env = {
+            e["name"]: e["value"]
+            for e in aws.codebuild.projects["launchpad-agent-builder"]["environment"][
+                "environmentVariables"
+            ]
+        }
+        assert env["PIP_EXTRA_INDEX_URL"] == "https://mirror.nju.edu.cn/pypi/web/simple"
+        assert env["UV_INDEX"] == "https://mirror.nju.edu.cn/pypi/web/simple"
+        assert env["PIP_INDEX_URL"] == settings.codebuild_pip_index_url  # N11-r3-bug7
 
     def test_us_east_1_gets_no_location_constraint(self, aws):
         """create_bucket rejects a LocationConstraint naming us-east-1."""
@@ -634,27 +724,78 @@ class TestStages:
     def test_the_gateway_stage_creates_no_demo_targets(self, aws):
         _register()
         ctx = _ctx()
-        for name in ("iam", "storage", "cognito"):
-            wb.STAGES[name](ctx)
+        wb.STAGES["iam"](ctx)
         detail = wb.STAGES["gateway"](ctx)
 
         assert "no demo targets" in detail
-        # the m2m client is allowed on the gateway, and nothing else touched it
-        assert aws.control.updated == [_row().resources["gateway_id"]]
-        allowed = aws.control.gateways[_row().resources["gateway_id"]][
-            "authorizerConfiguration"
-        ]["customJWTAuthorizer"]["allowedClients"]
-        assert allowed == ["cid-launchpad-console", "cid-launchpad-agent-m2m"]
+        assert aws.control.created_gateways == ["launchpad-gw"]
+        # no M2M allowed-clients list to maintain under IAM inbound auth
+        assert aws.control.updated == []
+        assert aws.control.gateways[_row().resources["gateway_id"]]["authorizerType"] == (
+            "AWS_IAM"
+        )
 
-    def test_registry_denial_is_tolerated_like_the_hub(self, aws):
+    def test_the_registry_stage_records_only_the_local_id(self, aws, default_records):
         _register()
-        aws.registry.denied = True
-        detail = wb.STAGES["registry"](_ctx())
+        ctx = _ctx()
+        detail = wb.STAGES["registry"](ctx)
+        assert detail.startswith("local-")
+        assert ctx.resources["registry_id"] == f"local-{ctx.workspace_id}"
+        assert "registry_unavailable_reason" not in ctx.resources
+        assert "registry_arn" not in ctx.resources
+        assert wb.STAGE_ORDER.index("registry") == wb.STAGE_ORDER.index("gateway") + 1
+        # N10-bug1: the stage ends with the default-record import on THIS workspace
+        assert [ws.id for ws in default_records] == [ctx.workspace_id]
+        assert detail.endswith("0 default record(s) · 0 new · 0 approved")
 
-        assert "unavailable" in detail
-        resources = _row().resources
-        assert resources["registry_id"] == ""
-        assert resources["registry_unavailable_reason"]
+    def test_the_registry_stage_imports_the_defaults_and_counts_them(self, aws, monkeypatch):
+        from app.services import registry_console
+
+        _register()
+        ctx = _ctx()
+        lines: list[str] = []
+        ctx.log = lines.append
+        seen: dict = {}
+        monkeypatch.setattr(
+            registry_console, "ensure_default_records",
+            lambda ws, log=None, auto_approve=False: seen.update(auto_approve=auto_approve) or [
+            {"name": "hr-database", "type": "MCP", "record_id": "r1", "created": True,
+             "status": "APPROVED"},
+            {"name": "expense-report-writer", "type": "AGENT_SKILLS", "record_id": "r2",
+             "created": True, "status": "PENDING_APPROVAL"},
+            ],
+        )
+
+        detail = wb.STAGES["registry"](ctx)
+
+        assert detail == (f"local-{ctx.workspace_id} · local ledger · 2 default record(s) · "
+                          "2 new · 1 approved")
+        assert seen == {"auto_approve": True}  # N17-obs257: the bootstrap job approves
+        assert ctx.resources["registry_id"] == f"local-{ctx.workspace_id}"
+
+    def test_the_registry_stage_degrades_when_the_import_fails(self, aws, monkeypatch):
+        """No registry backend (503 feature.unavailable), a gateway that does not answer
+        yet, S3 denied: the identifier is still recorded and the stage stays green with
+        the reason — the records are one sync-defaults call away."""
+        from app.core.errors import AppError
+        from app.services import registry_console
+
+        _register()
+        ctx = _ctx()
+        lines: list[str] = []
+        ctx.log = lines.append
+
+        def boom(ws, log=None, auto_approve=False):
+            raise AppError("gateway.rpc_error", "tools/list refused", status_code=502)
+
+        monkeypatch.setattr(registry_console, "ensure_default_records", boom)
+
+        detail = wb.STAGES["registry"](ctx)
+
+        assert detail == (f"local-{ctx.workspace_id} · local ledger · "
+                          "defaults not imported (AppError)")
+        assert ctx.resources["registry_id"] == f"local-{ctx.workspace_id}"
+        assert any("POST /api/registry/sync-defaults" in line for line in lines)
 
     def test_observability_enables_transaction_search_in_the_new_region(self, aws):
         """Every trace/session/token view reads the `aws/spans` group this fills,
@@ -697,6 +838,87 @@ class TestStages:
         assert _row().bootstrap_status == "registered"
 
 
+class TestModelCredentialStage:
+    def test_is_ordered_right_after_iam_and_required(self):
+        assert wb.STAGE_ORDER.index("model-credential") == wb.STAGE_ORDER.index("iam") + 1
+        assert "model_credential_arn" in wb.REQUIRED_RESOURCE_KEYS
+
+    @pytest.mark.siliconflow(registry=True)
+    def test_creates_then_rotates(self, aws):
+        _register()
+        detail = wb.STAGES["model-credential"](_ctx())
+        # N-R6: the optional SiliconFlow provider is reported, not created, without its key
+        assert detail == ("launchpad-global-bedrock · created; "
+                          "launchpad-siliconflow · not configured")
+        assert aws.control.provider_calls == [
+            "get:launchpad-global-bedrock",
+            "create:launchpad-global-bedrock",
+        ]
+        resources = context_for_workspace(WS_ID).resources
+        assert resources["model_credential_name"] == "launchpad-global-bedrock"
+        assert resources["model_credential_arn"].endswith(
+            "apikeycredentialprovider/launchpad-global-bedrock"
+        )
+        assert resources["model_credential_secret_arn"].startswith(
+            f"arn:aws-cn:secretsmanager:{REGION}"
+        )
+        assert "global-bedrock-key" not in json.dumps(resources)
+
+        detail = wb.STAGES["model-credential"](_ctx())
+        assert detail == ("launchpad-global-bedrock · reused (key rotated); "
+                          "launchpad-siliconflow · not configured")
+        assert aws.control.provider_calls[-1] == "update:launchpad-global-bedrock"
+
+    def test_missing_env_var_is_an_operator_error(self, aws, monkeypatch):
+        monkeypatch.delenv("LAUNCHPAD_GLOBAL_BEDROCK_API_KEY")
+        _register()
+        with pytest.raises(wb.BootstrapError, match="LAUNCHPAD_GLOBAL_BEDROCK_API_KEY"):
+            wb.STAGES["model-credential"](_ctx())
+        assert aws.control.provider_calls == []
+
+
+class TestMemoryStage:
+    def test_is_ordered_after_registry_and_optional(self):
+        assert wb.STAGE_ORDER.index("memory") == wb.STAGE_ORDER.index("registry") + 1
+        assert "memory_id" not in wb.REQUIRED_RESOURCE_KEYS
+        assert "kb_role_arn" not in wb.REQUIRED_RESOURCE_KEYS
+
+    def test_a_foreign_workspace_degrades_with_a_reason(self, aws):
+        _register()
+        ctx = _ctx()
+        detail = wb.STAGES["memory"](ctx)
+        assert detail.startswith("unavailable")
+        assert "hub" in _row().resources["memory_unavailable_reason"]
+        assert "memory_id" not in _row().resources
+
+    def test_a_hub_colocated_workspace_inherits_the_substrate(self, aws, monkeypatch):
+        from tests.test_memory_bootstrap import OUTPUTS, SecOS
+
+        settings = get_settings()
+        fake = SecOS()
+        monkeypatch.setattr(settings, "account_id", ACCOUNT, raising=False)
+        monkeypatch.setattr(settings, "region", REGION, raising=False)
+        memory_res = mb.memory_resources(
+            OUTPUTS, bucket="hub-bkt", store_id="launchpad_memory-default"
+        )
+        monkeypatch.setattr(
+            settings, "resources", {**settings.resources, **memory_res}, raising=False
+        )
+        monkeypatch.setattr(wb.aws_clients, "opensearch_http", lambda ctx, endpoint: fake)
+        _register(resources={"execution_role_arn": f"arn:aws-cn:iam::{ACCOUNT}:role/exec"})
+        ctx = _ctx()
+        detail = wb.STAGES["memory"](ctx)
+        res = _row().resources
+        assert res["memory_id"] == f"launchpad_memory-{WS_ID}"
+        assert res["memory_os_endpoint"] == OUTPUTS["MemoryDomainEndpoint"]
+        assert res["memory_unavailable_reason"] == ""
+        assert "created" in detail or "reused" in detail
+        assert (
+            fake.security["/_plugins/_security/api/rolesmapping/launchpad_memory_rw"]["users"][0]
+            == f"arn:aws-cn:iam::{ACCOUNT}:role/exec"
+        )
+
+
 class TestRolePolicyFidelity:
     """The roles are a transcription of `infra/stacks/base_stack.py`, and the
     workspace's own account/region are the only ones they may name. A wrong
@@ -705,18 +927,12 @@ class TestRolePolicyFidelity:
 
     # base_stack.py:201-400 (exec_role.add_to_policy calls, in order)
     EXECUTION_SIDS = (
-        "BedrockModels",
-        "BedrockMantleInference",
-        "BedrockMantleCallWithBearerToken",
-        "MarketplaceOperationsFromBedrockMantleFor3pModels",
         "AgentCoreDataPlane",
         "EcrPull",
         "EcrAuth",
         "SkillBundleObjects",
         "SkillBundleList",
-        "ABTestOrchestration",
-        "ManagedKbRetrieval",
-        "ManagedKbAgenticRetrieval",
+        "GatewayAndRuntimeRead",
         "IdentityVaultSecrets",
         "Telemetry",
     )
@@ -725,11 +941,7 @@ class TestRolePolicyFidelity:
     GATEWAY_SIDS = (
         "IdentityVault",
         "InvokeRuntimeTargets",
-        "ConfigurationBundleRead",
-        "PolicyEngineEvaluation",
         "IdentitySecrets",
-        "ManagedKbRetrieval",
-        "ManagedKbAgenticRetrieval",
     )
 
     def _documents(self) -> dict[str, dict]:
@@ -740,7 +952,6 @@ class TestRolePolicyFidelity:
                 ACCOUNT, REGION, bucket, repo_arn
             ),
             "gateway": workspace_iam.gateway_role_policy(ACCOUNT, REGION),
-            "kb": workspace_iam.kb_role_policy(bucket),
             "codebuild": workspace_iam.codebuild_role_policy(
                 ACCOUNT, REGION, bucket, repo_arn, "launchpad-agent-builder"
             ),
@@ -758,12 +969,6 @@ class TestRolePolicyFidelity:
         actions = {a for s in document["Statement"] for a in _actions(s)}
         assert "lambda:InvokeFunction" not in actions
         assert "execute-api:Invoke" not in actions
-
-    def test_the_kb_role_covers_the_buckets_kb_prefix_only(self):
-        statements = self._documents()["kb"]["Statement"]
-        assert tuple(s["Sid"] for s in statements) == ("KbDataObjects", "KbDataList")
-        assert statements[0]["Resource"].endswith("/kb/*")
-        assert statements[1]["Condition"] == {"StringLike": {"s3:prefix": "kb/*"}}
 
     def test_every_arn_names_this_workspaces_account_and_region(self):
         """The failure this catches: an ARN built from hub settings instead of the
@@ -809,9 +1014,6 @@ class TestRolePolicyFidelity:
         assert json.loads(
             aws.iam.inline[(f"launchpad-gateway-role-{REGION}", "launchpad-gateway")]
         ) == expected["gateway"]
-        assert json.loads(
-            aws.iam.inline[(f"launchpad-kb-role-{REGION}", "launchpad-kb")]
-        ) == expected["kb"]
         assert json.loads(
             aws.iam.inline[
                 (f"launchpad-codebuild-role-{REGION}", "launchpad-agent-builder")
@@ -860,6 +1062,77 @@ class TestValidateAccess:
             wb.STAGES["validate-access"](_ctx())
         assert "cannot assume this workspace's role" in str(exc.value)
 
+    def test_the_probes_name_the_resources_the_later_stages_own(self, aws, monkeypatch):
+        """N17-obs130: an unfiltered list (`describe_repositories(maxResults=1)`,
+        `list_projects()`, `list_roles(MaxItems=1)`) is authorised against the wildcard
+        resource, which the hub's resource-scoped ops policy never grants — so the probes ask
+        BY NAME for exactly the repository / project / role the storage, codebuild and iam
+        stages create, and a not-found answer is the proof the permission is in place."""
+        _register()
+        calls: list[tuple[str, dict]] = []
+
+        def recording(service, method):
+            inner = getattr(getattr(aws, service), method)
+
+            def call(**kw):
+                calls.append((f"{service}.{method}", kw))
+                return inner(**kw)
+
+            return call
+
+        for service, method in (("ecr", "describe_repositories"),
+                                ("codebuild", "batch_get_projects"), ("iam", "get_role")):
+            monkeypatch.setattr(getattr(aws, service), method, recording(service, method))
+        logged: list[str] = []
+        ctx = _ctx()
+        ctx.log = logged.append
+        detail = wb.STAGES["validate-access"](ctx)  # nothing exists yet: three not-founds
+        assert detail == f"{REGION} usable · 5 services probed"
+        assert calls == [
+            ("ecr.describe_repositories", {"repositoryNames": [wb.ecr_repo_name()]}),
+            ("codebuild.batch_get_projects", {"names": [wb.codebuild_project_name()]}),
+            ("iam.get_role", {"RoleName": workspace_iam.regional_role_name(
+                workspace_iam.EXECUTION_ROLE_BASE, REGION)}),
+            # the foreign-deployment check asks for the same project again (by name too)
+            ("codebuild.batch_get_projects", {"names": [wb.codebuild_project_name()]}),
+        ]
+        assert [m for m in logged if "not created yet" in m] == [
+            "ecr DescribeRepositories: not created yet — the probe's permission is in place",
+            "iam GetRole: not created yet — the probe's permission is in place",
+        ]
+        # and the same probes pass once the resources exist (a resumed bootstrap; an existing
+        # CodeBuild project the row does not own is the foreign-deployment refusal, tested below)
+        aws.ecr.create_repository(repositoryName=wb.ecr_repo_name())
+        aws.iam.preexisting(workspace_iam.regional_role_name(
+            workspace_iam.EXECUTION_ROLE_BASE, REGION))
+        logged.clear()
+        assert wb.STAGES["validate-access"](ctx) == f"{REGION} usable · 5 services probed"
+        assert not [m for m in logged if "not created yet" in m]
+
+    def test_the_probes_never_use_the_unfiltered_list_shapes(self):
+        """The three wildcard-resource calls N17-obs130 named must stay out of the probe
+        table: `_PROBES` is what the permission manifest is checked against."""
+        operations = {(service, operation) for service, operation, _call in wb._PROBES}
+        assert operations == {
+            ("bedrock-agentcore-control", "ListGateways"), ("s3", "ListBuckets"),
+            ("ecr", "DescribeRepositories"), ("codebuild", "BatchGetProjects"), ("iam", "GetRole"),
+        }
+        assert not operations & {("ecr", "ListRepositories"), ("codebuild", "ListProjects"),
+                                 ("iam", "ListRoles")}
+
+    def test_a_denied_by_name_probe_still_fails_with_the_denial_sentence(self, aws, monkeypatch):
+        _register()
+        monkeypatch.setattr(
+            aws.iam,
+            "get_role",
+            lambda **_kw: (_ for _ in ()).throw(_client_error("AccessDenied", "GetRole")),
+        )
+        with pytest.raises(wb.BootstrapError) as exc:
+            wb.STAGES["validate-access"](_ctx())
+        message = str(exc.value)
+        assert message.startswith(f"iam GetRole failed in {REGION}: AccessDenied")
+        assert "the hub's credentials must be able to provision this workspace" in message
+
     def test_a_region_without_the_service_is_named_as_unsupported(self, aws, monkeypatch):
         _register()
         monkeypatch.setattr(
@@ -873,6 +1146,194 @@ class TestValidateAccess:
             wb.STAGES["validate-access"](_ctx())
         message = str(exc.value)
         assert "bedrock-agentcore-control" in message and "region not supported" in message
+
+    # -- N17-obs132: the three verdict classes of a probe failure -----------------------
+
+    @staticmethod
+    def _probe_ctx() -> tuple[wb.BootstrapContext, list[float], list[str]]:
+        slept: list[float] = []
+        logged: list[str] = []
+        ctx = _ctx()
+        ctx.timeouts.sleeper = slept.append
+        ctx.log = logged.append
+        return ctx, slept, logged
+
+    @staticmethod
+    def _raising(exc_factory, calls: list[int]):
+        def call(**_kw):
+            calls.append(1)
+            raise exc_factory()
+
+        return call
+
+    @pytest.mark.parametrize(
+        "exc_factory",
+        [
+            lambda: UnknownServiceError(service_name="ecr", known_service_names=["s3"]),
+            lambda: NoRegionError(),
+            lambda: _client_error("UnrecognizedClientException", "DescribeRepositories"),
+        ],
+        ids=["UnknownServiceError", "NoRegionError", "UnrecognizedClientException"],
+    )
+    def test_a_missing_endpoint_is_the_region_verdict_without_a_retry(self, aws, monkeypatch,
+                                                                    exc_factory):
+        """Class 1 — endpoint RESOLUTION failed (no such service / no region in botocore's
+        tables) or the service's own 'not here' code: the region sentence, at once (a retry
+        cannot make a region appear). N17-obs200 moved `EndpointConnectionError` out of this
+        class — it is raised after resolution succeeded."""
+        _register()
+        calls: list[int] = []
+        monkeypatch.setattr(aws.ecr, "describe_repositories", self._raising(exc_factory, calls))
+        ctx, slept, _logged = self._probe_ctx()
+        with pytest.raises(wb.BootstrapError) as exc:
+            wb.STAGES["validate-access"](ctx)
+        message = str(exc.value)
+        assert message.startswith(f"ecr is not usable in {REGION} (DescribeRepositories: ")
+        assert "region not supported" in message
+        assert "transient" not in message
+        assert calls == [1] and slept == []
+
+    @pytest.mark.parametrize(
+        ("exc_factory", "named"),
+        [
+            (lambda: ReadTimeoutError(endpoint_url="https://ecr.secret-host.example/x"),
+             "ReadTimeoutError"),
+            (lambda: ConnectTimeoutError(endpoint_url="https://ecr.secret-host.example/x"),
+             "ConnectTimeoutError"),
+            (lambda: _client_error("ThrottlingException", "DescribeRepositories"),
+             "ClientError: ThrottlingException (DescribeRepositories)"),
+            (lambda: _client_error("SlowDown", "DescribeRepositories"),
+             "ClientError: SlowDown (DescribeRepositories)"),
+            (lambda: _client_error("InternalError", "DescribeRepositories"),
+             "ClientError: InternalError (DescribeRepositories)"),
+            # an unknown code with a 5xx status is a server-side failure too
+            (lambda: ClientError({"Error": {"Code": "SomethingNew", "Message": "x"},
+                                  "ResponseMetadata": {"HTTPStatusCode": 503}},
+                                 "DescribeRepositories"),
+             "ClientError: SomethingNew (DescribeRepositories)"),
+        ],
+        ids=["ReadTimeoutError", "ConnectTimeoutError", "ThrottlingException", "SlowDown",
+             "InternalError", "unknown-code-503"],
+    )
+    def test_a_transient_failure_is_retried_once_then_named_as_transient(self, aws, monkeypatch,
+                                                                        exc_factory, named):
+        """Class 2 — a transport timeout, a throttle or a 5xx: ONE bounded retry (the injectable
+        sleeper, `Timeouts.probe_retry_delay_s`), then a BootstrapError that names the service,
+        the operation and the redacted cause and says "transient — retry" — never the region
+        sentence, never botocore's message (the endpoint URL)."""
+        _register()
+        calls: list[int] = []
+        monkeypatch.setattr(aws.ecr, "describe_repositories", self._raising(exc_factory, calls))
+        ctx, slept, logged = self._probe_ctx()
+        with pytest.raises(wb.BootstrapError) as exc:
+            wb.STAGES["validate-access"](ctx)
+        message = str(exc.value)
+        assert message.startswith(f"ecr DescribeRepositories failed in {REGION} after 2 attempts")
+        assert f"({named})" in message and "transient — retry" in message
+        assert "region not supported" not in message
+        assert "the hub's credentials must be able" not in message
+        assert "secret-host" not in message  # redacted_error: type / code only, never the text
+        assert calls == [1, 1]
+        assert slept == [ctx.timeouts.probe_retry_delay_s]
+        assert [m for m in logged if "retrying once" in m] == [
+            f"ecr DescribeRepositories: transient failure ({named}) — retrying once in "
+            f"{ctx.timeouts.probe_retry_delay_s:g}s"
+        ]
+
+    # -- N17-obs200: the fourth verdict — the endpoint resolved but cannot be reached -------
+
+    def test_an_unreachable_endpoint_is_retried_once_then_named_as_network_not_region(
+            self, aws, monkeypatch):
+        """Class 4 — `EndpointConnectionError` (resolution succeeded, connect failed: a DNS /
+        network outage on the hub's side, even to a supported region): ONE bounded retry like a
+        transient, then a DISTINCT sentence that says unreachable from this host — network/DNS,
+        not the region — with the host redacted to the service and the region; never the region
+        sentence, never the plain transient one, never the denial."""
+        _register()
+        calls: list[int] = []
+        monkeypatch.setattr(
+            aws.ecr, "describe_repositories",
+            self._raising(lambda: EndpointConnectionError(
+                endpoint_url="https://api.ecr.secret-host.example/x"), calls),
+        )
+        ctx, slept, logged = self._probe_ctx()
+        with pytest.raises(wb.BootstrapError) as exc:
+            wb.STAGES["validate-access"](ctx)
+        message = str(exc.value)
+        assert message.startswith(
+            f"ecr endpoint (ecr · {REGION}) unreachable from this host after 2 attempts "
+            "(DescribeRepositories: EndpointConnectionError) — network/DNS, not the region")
+        assert "region not supported" not in message
+        assert "transient — retry" not in message
+        assert "the hub's credentials must be able" not in message
+        assert "secret-host" not in message and "https://" not in message  # redacted host
+        assert calls == [1, 1]
+        assert slept == [ctx.timeouts.probe_retry_delay_s]
+        assert [m for m in logged if "retrying once" in m] == [
+            "ecr DescribeRepositories: endpoint unreachable (EndpointConnectionError) — "
+            f"retrying once in {ctx.timeouts.probe_retry_delay_s:g}s"
+        ]
+
+    def test_an_unreachable_endpoint_that_clears_on_the_retry_passes_the_stage(self, aws,
+                                                                               monkeypatch):
+        _register()
+        inner = aws.ecr.describe_repositories
+        calls: list[int] = []
+
+        def flaky(**kw):
+            calls.append(1)
+            if len(calls) == 1:
+                raise EndpointConnectionError(endpoint_url="https://ecr.example/x")
+            return inner(**kw)
+
+        monkeypatch.setattr(aws.ecr, "describe_repositories", flaky)
+        ctx, slept, _logged = self._probe_ctx()
+        assert wb.STAGES["validate-access"](ctx) == f"{REGION} usable · 5 services probed"
+        assert calls == [1, 1] and len(slept) == 1
+
+    def test_a_transient_failure_that_clears_on_the_retry_passes_the_stage(self, aws,
+                                                                           monkeypatch):
+        _register()
+        inner = aws.ecr.describe_repositories
+        calls: list[int] = []
+
+        def flaky(**kw):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ReadTimeoutError(endpoint_url="https://ecr.example/x")
+            return inner(**kw)
+
+        monkeypatch.setattr(aws.ecr, "describe_repositories", flaky)
+        ctx, slept, _logged = self._probe_ctx()
+        assert wb.STAGES["validate-access"](ctx) == f"{REGION} usable · 5 services probed"
+        assert calls == [1, 1] and len(slept) == 1
+
+    def test_a_denial_is_never_retried(self, aws, monkeypatch):
+        """Class 3 — the service answered: a refusal is final (the AccessDenied propagation
+        retry is the stage-level `retry_access_denied`, not the probe's)."""
+        _register()
+        calls: list[int] = []
+        monkeypatch.setattr(
+            aws.ecr, "describe_repositories",
+            self._raising(lambda: _client_error("AccessDeniedException", "DescribeRepositories"),
+                          calls),
+        )
+        ctx, slept, _logged = self._probe_ctx()
+        with pytest.raises(wb.BootstrapError) as exc:
+            wb.STAGES["validate-access"](ctx)
+        assert str(exc.value).startswith(
+            f"ecr DescribeRepositories failed in {REGION}: AccessDeniedException")
+        assert calls == [1] and slept == []
+
+    def test_the_transient_region_and_unreachable_code_sets_are_disjoint(self):
+        sets = (wb._TRANSIENT_CODES, wb._REGION_UNSUPPORTED_CODES, wb._ENDPOINT_UNREACHABLE_CODES)
+        for i, a in enumerate(sets):
+            for b in sets[i + 1:]:
+                assert not a & b
+        assert {"ReadTimeoutError", "ConnectTimeoutError"} <= wb._TRANSIENT_CODES
+        # N17-obs200: the region set holds the endpoint-RESOLUTION failures only
+        assert {"UnknownServiceError", "NoRegionError"} <= wb._REGION_UNSUPPORTED_CODES
+        assert wb._ENDPOINT_UNREACHABLE_CODES == {"EndpointConnectionError"}
 
     def test_an_existing_launchpad_gateway_is_refused_not_adopted(self, aws):
         """The cautionary case: this account runs an independent production
@@ -888,22 +1349,12 @@ class TestValidateAccess:
     @pytest.mark.parametrize(
         ("seed", "expected"),
         [
-            ("memory", "memory launchpad_memory-*"),
-            ("registry", "registry launchpad-registry"),
-            ("pool", "Cognito user pool launchpad-users"),
             ("project", "CodeBuild project launchpad-agent-builder"),
         ],
     )
     def test_every_marker_resource_triggers_the_refusal(self, aws, seed, expected):
         _register()
-        if seed == "memory":
-            aws.control.preexisting_memory("launchpad_memory")
-        elif seed == "registry":
-            aws.registry.preexisting("launchpad-registry")
-        elif seed == "pool":
-            aws.cognito.preexisting_pool("launchpad-users")
-        else:
-            aws.codebuild.projects["launchpad-agent-builder"] = {"name": "x"}
+        aws.codebuild.projects["launchpad-agent-builder"] = {"name": "x"}
 
         with pytest.raises(wb.ForeignResourceError) as exc:
             wb.STAGES["validate-access"](_ctx())
@@ -912,48 +1363,14 @@ class TestValidateAccess:
     def test_resources_this_workspace_already_recorded_are_its_own(self, aws):
         """Which is what makes validate-access re-runnable after a partial run."""
         gateway_id = aws.control.preexisting_gateway("launchpad-gw")
-        memory_id = aws.control.preexisting_memory("launchpad_memory")
-        aws.registry.preexisting("launchpad-registry")
-        pool_id = aws.cognito.preexisting_pool("launchpad-users")
         aws.codebuild.projects["launchpad-agent-builder"] = {"name": "x"}
         _register(
             resources={
                 "gateway_id": gateway_id,
-                "memory_id": memory_id,
-                "registry_id": "launchpad-registry-xyz",
-                "user_pool_id": pool_id,
                 "codebuild_project": "launchpad-agent-builder",
             }
         )
         assert "usable" in wb.STAGES["validate-access"](_ctx())
-
-    def test_a_registry_denial_does_not_block_the_refusal_check(self, aws):
-        _register()
-        aws.registry.denied = True
-        assert "usable" in wb.STAGES["validate-access"](_ctx())
-
-    def test_a_credential_denial_is_not_read_as_a_tolerated_registry_denial(
-        self, aws, monkeypatch
-    ):
-        """The refusal check tolerates AccessDenied from the registry, and a failed
-        credential refresh says AccessDenied too — swallowing that would skip the
-        registry marker instead of reporting a role that cannot be assumed."""
-        _register()
-        calls = {"n": 0}
-
-        def list_registries(**_kw):
-            # the probe calls this first and has its own guard; the second call is
-            # the one inside the foreign-deployment check
-            calls["n"] += 1
-            if calls["n"] > 1:
-                raise _client_error("AccessDenied", "AssumeRole")
-            return {"registries": []}
-
-        monkeypatch.setattr(aws.registry, "list_registries", list_registries)
-        with pytest.raises(wb.BootstrapError) as exc:
-            wb.STAGES["validate-access"](_ctx())
-        assert "cannot assume this workspace's role" in str(exc.value)
-
 
 class TestIamAdoption:
     def test_an_untagged_role_of_the_same_name_is_refused(self, aws):
@@ -981,6 +1398,58 @@ class TestIamAdoption:
         assert aws.iam.roles[name]["tags"]["launchpad:workspace"] == WS_ID
         assert name in aws.iam.retagged
 
+    # N11-r3-bug5 (live, default env 2026-10-10): the second `make bootstrap` found the
+    # Skill Lab worker role from the first run, fell back to ListRoleTags, and the ops
+    # role was denied → the stage failed after the AccessDenied retries.
+    def test_a_tagged_role_is_adopted_from_get_role_without_listing_tags(self, aws, monkeypatch):
+        _register()
+        name = f"launchpad-agent-execution-role-{REGION}"
+        aws.iam.preexisting(name, {"launchpad:workspace": WS_ID})
+        monkeypatch.setattr(
+            aws.iam, "list_role_tags",
+            lambda **_kw: (_ for _ in ()).throw(_client_error("AccessDenied", "ListRoleTags")),
+        )
+        wb.STAGES["iam"](_ctx())  # GetRole already carried the tag; no listing needed
+        assert name not in aws.iam.created
+
+    def test_a_denied_tag_listing_adopts_with_a_warning_instead_of_failing(self, aws, monkeypatch):
+        _register()
+        name = f"launchpad-agent-execution-role-{REGION}"
+        aws.iam.preexisting(name)  # GetRole answers without Tags → fallback → denied
+        monkeypatch.setattr(
+            aws.iam, "list_role_tags",
+            lambda **_kw: (_ for _ in ()).throw(_client_error("AccessDenied", "ListRoleTags")),
+        )
+        logs: list[str] = []
+        from app.services import workspace_iam
+
+        arn = workspace_iam.ensure_role(
+            aws.iam, workspace_id=WS_ID, role_name=name, trust_policy={"Version": "2012-10-17"},
+            inline_policies={}, description="d", log=logs.append,
+        )
+        assert arn.endswith(name)
+        assert any(line.startswith("WARNING: adopting role") for line in logs)
+        assert name not in aws.iam.retagged  # unverified → not re-stamped either
+
+    def test_an_identical_trust_policy_is_not_rewritten_on_adopt(self, aws):
+        from app.services import workspace_iam
+
+        trust = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {"Effect": "Allow", "Action": "sts:AssumeRole", "Principal": {"Service": "x"}}
+            ],
+        }
+        kwargs = dict(
+            workspace_id=WS_ID, role_name="launchpad-skill-lab-worker-r",
+            trust_policy=trust, inline_policies={}, description="d",
+        )
+        workspace_iam.ensure_role(aws.iam, **kwargs)
+        workspace_iam.ensure_role(aws.iam, **kwargs)  # second bootstrap: adopt
+        assert getattr(aws.iam, "trust_updates", []) == []
+        workspace_iam.ensure_role(aws.iam, **{**kwargs, "trust_policy": {**trust, "Id": "v2"}})
+        assert aws.iam.trust_updates == ["launchpad-skill-lab-worker-r"]
+
 
 # ── the runner ─────────────────────────────────────────────────────────────
 
@@ -1000,14 +1469,71 @@ class TestRunner:
         # JSONL events, one per stage at least
         assert job.log.count("stage started") == len(wb.STAGE_ORDER)
 
+    def test_a_stage_denied_right_after_an_iam_change_is_retried(self, aws, monkeypatch):
+        """N11-obs11: IAM is eventually consistent — a stage denied once and allowed on
+        the next call must not fail the job. The runner re-runs the (idempotent) stage
+        after the back-off; the retry is visible in the job log."""
+        from botocore.exceptions import ClientError
+
+        _register()
+        calls: list[int] = []
+        slept: list[float] = []
+        real_gateway = wb.STAGES["gateway"]
+
+        def flaky(ctx):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ClientError(
+                    {"Error": {"Code": "AccessDeniedException", "Message": "not authorized"}},
+                    "CreateGateway",
+                )
+            return real_gateway(ctx)
+
+        monkeypatch.setitem(wb.STAGES, "gateway", flaky)
+        timeouts = _fast()
+        timeouts.sleeper = slept.append
+        timeouts.access_denied_delay_s = 12
+        job_id = _queue_job()
+
+        wb.execute_bootstrap_job(job_id, timeouts=timeouts)
+
+        job = _job_row(job_id)
+        assert job.status == "succeeded", job.error
+        assert _stage_status(job)["gateway"] == "succeeded"
+        assert len(calls) == 2 and slept == [12]
+        assert "retry 1/2 in 12s" in job.log
+        assert len(aws.control.gateways) == 1  # the re-run adopted, not duplicated
+
+    def test_a_stage_still_denied_after_the_last_attempt_fails_the_job(self, aws, monkeypatch):
+        from botocore.exceptions import ClientError
+
+        _register()
+        calls: list[int] = []
+
+        def denied(_ctx):
+            calls.append(1)
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "m"}}, "CreateGateway")
+
+        monkeypatch.setitem(wb.STAGES, "gateway", denied)
+        timeouts = _fast()
+        timeouts.access_denied_attempts = 2
+        job_id = _queue_job()
+
+        wb.execute_bootstrap_job(job_id, timeouts=timeouts)
+
+        job = _job_row(job_id)
+        assert job.status == "failed" and len(calls) == 2
+        assert _stage_status(job)["gateway"] == "failed"
+        assert "AccessDenied" in job.error
+
     def test_a_failed_stage_fails_the_row_and_keeps_partial_resources(
         self, aws, monkeypatch
     ):
         _register()
         monkeypatch.setattr(
-            aws.cognito,
-            "create_user_pool",
-            lambda **_kw: (_ for _ in ()).throw(RuntimeError("pool refused")),
+            aws.control,
+            "create_gateway",
+            lambda **_kw: (_ for _ in ()).throw(RuntimeError("gateway refused")),
         )
         job_id = _queue_job()
 
@@ -1015,18 +1541,19 @@ class TestRunner:
 
         job = _job_row(job_id)
         assert job.status == "failed"
-        assert "pool refused" in (job.error or "")
+        assert "gateway refused" in (job.error or "")
         assert _stage_status(job) == {
             "validate-access": "succeeded",
             "iam": "succeeded",
+            "model-credential": "succeeded",
             "storage": "succeeded",
             "codebuild": "succeeded",
-            "cognito": "failed",
-            "gateway": "pending",
-            "memory": "pending",
+            "gateway": "failed",
             "registry": "pending",
+            "memory": "pending",
             "skill-lab": "pending",
             "observability": "pending",
+            "policy": "pending",
             "finalize": "pending",
         }
         row = _row()
@@ -1064,9 +1591,9 @@ class TestRunner:
         # the same monkeypatch, and undo() would revert that too
         with monkeypatch.context() as patched:
             patched.setattr(
-                aws.cognito,
-                "create_user_pool",
-                lambda **_kw: (_ for _ in ()).throw(RuntimeError("pool refused")),
+                aws.control,
+                "create_gateway",
+                lambda **_kw: (_ for _ in ()).throw(RuntimeError("gateway refused")),
             )
             wb.execute_bootstrap_job(_queue_job(), timeouts=_fast())
         assert _row().bootstrap_status == "failed"
@@ -1076,14 +1603,15 @@ class TestRunner:
         assert _stage_status(_job_row(second)) == {
             "validate-access": "succeeded",
             "iam": "succeeded",
+            "model-credential": "succeeded",
             "storage": "succeeded",
             "codebuild": "succeeded",
-            "cognito": "pending",
             "gateway": "pending",
-            "memory": "pending",
             "registry": "pending",
+            "memory": "pending",
             "skill-lab": "pending",
             "observability": "pending",
+            "policy": "pending",
             "finalize": "pending",
         }
 
@@ -1094,7 +1622,7 @@ class TestRunner:
         # the skipped stages did not provision a second set of anything
         assert aws.iam.created == roles_after_first_run
         assert len(aws.s3.created) == 1
-        assert aws.cognito.created_pools == ["launchpad-users"]
+        assert aws.control.created_gateways == ["launchpad-gw"]
 
     def test_a_resumed_job_reads_the_previous_runs_identifiers(self, aws, monkeypatch):
         """The context is rebuilt from the row, so a stage after the interruption
@@ -1103,7 +1631,7 @@ class TestRunner:
         with monkeypatch.context() as patched:
             patched.setitem(
                 wb.STAGES,
-                "cognito",
+                "codebuild",
                 lambda _ctx: (_ for _ in ()).throw(RuntimeError("stop")),
             )
             wb.execute_bootstrap_job(_queue_job(), timeouts=_fast())
@@ -1111,7 +1639,7 @@ class TestRunner:
         second = _queue_job()
         wb.execute_bootstrap_job(second, timeouts=_fast())
 
-        # the gateway stage needs iam's + cognito's output; it only had the row
+        # the gateway stage needs iam's output; it only had the row
         assert _row().resources["gateway_id"] in aws.control.gateways
         assert aws.control.gateways[_row().resources["gateway_id"]]["roleArn"].endswith(
             f"launchpad-gateway-role-{REGION}"
@@ -1287,7 +1815,7 @@ class TestBootstrapRoute:
         monkeypatch.setattr(
             wb,
             "create_bootstrap_job",
-            lambda _db, row: (_ for _ in ()).throw(wb.BootstrapConflict(row.id)),
+            lambda _db, row, **_kw: (_ for _ in ()).throw(wb.BootstrapConflict(row.id)),
         )
         response = client.post(f"/api/workspaces/{WS_ID}/bootstrap")
 
@@ -1344,3 +1872,62 @@ class TestBootstrapRouteIsAdminOnly:
         with TestClient(gated_app, client=("127.0.0.1", 4321)) as client:
             assert client.post("/api/auth/login", json=ADMIN_CREDS).status_code == 200
             assert client.post(f"/api/workspaces/{WS_ID}/bootstrap").status_code == 202
+
+
+# ── D21 (M1-b): the model-credential stage's registry pass (SSM-backed providers) ─────────
+
+
+@pytest.mark.siliconflow(registry=True)
+def test_model_credential_stage_registers_a_registry_provider_from_its_ssm_parameter(aws):
+    """The built-in SiliconFlow row is `credential_source: ssm`: the stage reads
+    `launchpad-siliconflow-api-key` from the WORKSPACE's SSM, creates the Identity provider
+    there and records `source: ssm` + the parameter version — the value never lands on the
+    row. Without the parameter the env pass's "not configured" answer stands (the
+    `TestModelCredentialStage` strings above)."""
+    _register()
+    aws.ssm.parameters["launchpad-siliconflow-api-key"] = ("sf-KEY-0123456789", 4)
+    detail = wb.STAGES["model-credential"](_ctx())
+    assert detail == ("launchpad-global-bedrock · created; "
+                      "launchpad-siliconflow · created · SSM v4")
+    assert aws.ssm.calls == ["launchpad-siliconflow-api-key"]
+    assert aws.control.provider_calls[-2:] == ["get:launchpad-siliconflow",
+                                               "create:launchpad-siliconflow"]
+    resources = context_for_workspace(WS_ID).resources
+    record = resources["model_credentials"]["siliconflow"]
+    assert record["configured"] is True and record["key_version"] == 4
+    assert record["source"] == "ssm" and record["name"] == "launchpad-siliconflow"
+    assert record["arn"].endswith("apikeycredentialprovider/launchpad-siliconflow")
+    assert resources["model_credentials"]["bedrock"]["configured"] is True
+    assert "sf-KEY-0123456789" not in json.dumps(resources)
+
+    # second pass, parameter unchanged (D21-obs5): the spoke's own map holds v4 → Identity
+    # is only read, the stage says "up to date"; the env-sourced Bedrock key has no version
+    # to compare and keeps rotating in place (that path never journals)
+    detail = wb.STAGES["model-credential"](_ctx())
+    assert detail == ("launchpad-global-bedrock · reused (key rotated); "
+                      "launchpad-siliconflow · reused (up to date) · SSM v4")
+    assert aws.control.provider_calls[-1] == "get:launchpad-siliconflow"
+    assert "update:launchpad-siliconflow" not in aws.control.provider_calls
+    # third pass: rotation in place, idempotent resource map apart from the version
+    aws.ssm.parameters["launchpad-siliconflow-api-key"] = ("sf-KEY-rotated", 5)
+    detail = wb.STAGES["model-credential"](_ctx())
+    assert detail == ("launchpad-global-bedrock · reused (key rotated); "
+                      "launchpad-siliconflow · reused (key rotated) · SSM v5")
+    assert aws.control.provider_calls[-1] == "update:launchpad-siliconflow"
+    assert context_for_workspace(WS_ID).resources["model_credentials"]["siliconflow"][
+        "key_version"] == 5
+    # D21-obs4: a SPOKE pass never writes the hub-global row's key_version / journal — the
+    # version lives on the spoke's own resource map (above); the hub pass owns the row.
+    from sqlalchemy import select
+
+    from app.models.model_registry import ModelProvider
+    from app.services import model_registry
+
+    db = SessionLocal()
+    try:
+        row = db.scalar(select(ModelProvider).where(ModelProvider.name == "siliconflow"))
+        assert row.key_version is None and row.key_modified_at is None
+        assert not [c for c in model_registry.list_changes(db, limit=50)
+                    if c.operation == "provider.credential"]
+    finally:
+        db.close()

@@ -1,0 +1,1684 @@
+{
+ "session_id": "audit-lg-session-20261023160657-0001-multiturn",
+ "records": [
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb8623456b2bbb2b477f4c5d14e83a",
+   "spanId": "4b5f5c96aacec520",
+   "parentSpanId": "a401d54d62934a5b",
+   "flags": 256,
+   "name": "ScriptedModel.chat",
+   "kind": "CLIENT",
+   "startTimeUnixNano": 1792771621975044047,
+   "endTimeUnixNano": 1792771622006295890,
+   "durationNano": 31251843,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "traceloop.association.properties.ls_model_type": "chat",
+    "aws.remote.resource.identifier": "unknown",
+    "gen_ai.response.model": "unknown",
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "gen_ai.provider.name": "langchain",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "aws.remote.operation": "UnknownRemoteOperation",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "aws.local.operation": "UnmappedOperation",
+    "aws.span.kind": "CLIENT",
+    "gen_ai.request.model": "unknown",
+    "traceloop.association.properties.lc_versions": "{\"langchain-core\": \"1.7.0\", \"langchain\": \"1.4.7\"}",
+    "telemetry.extended": "true",
+    "traceloop.workflow.name": "travel_agent",
+    "aws.genai.span_kind": "LLM",
+    "traceloop.association.properties.langgraph_node": "model",
+    "aws.remote.service": "UnknownRemoteService",
+    "traceloop.entity.path": "model",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "traceloop.association.properties.ls_provider": "scriptedmodel",
+    "aws.remote.resource.type": "GenAI::Model",
+    "gen_ai.operation.name": "chat",
+    "traceloop.association.properties.langgraph_step": 1,
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:c9fdf681-31ef-ab14-32ce-a9b20f5f040a",
+    "traceloop.association.properties.ls_integration": "langchain_chat_model",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "traceloop.association.properties.checkpoint_ns": "model:c9fdf681-31ef-ab14-32ce-a9b20f5f040a"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771622006295890,
+   "observedTimeUnixNano": 1792771623279601223,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"hello, what can you do?\"}]}]"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"ANSWER-T1: I can search flights and check the weather.\"}], \"finish_reason\": \"\"}]"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb8623456b2bbb2b477f4c5d14e83a",
+   "spanId": "4b5f5c96aacec520",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb8623456b2bbb2b477f4c5d14e83a",
+   "spanId": "a401d54d62934a5b",
+   "parentSpanId": "c7e180ea05ff793f",
+   "flags": 256,
+   "name": "execute_task model",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1792771621973520758,
+   "endTimeUnixNano": 1792771622006833513,
+   "durationNano": 33312755,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "gen_ai.task.status": "success",
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "gen_ai.provider.name": "langgraph",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.task.output": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T1: I can search flights and check the weather.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0456-721d-8ec0-ea89ca88057b-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:1\"]}}",
+    "gen_ai.task.name": "model",
+    "traceloop.entity.name": "model",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\", \"id\": \"1df4494b-4a3e-4e4a-8050-418ae053e9ee\"}}]}, \"tags\": [\"graph:step:1\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 1, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:c9fdf681-31ef-ab14-32ce-a9b20f5f040a\"}, \"kwargs\": {\"name\": \"model\"}}",
+    "traceloop.span.kind": "task",
+    "traceloop.workflow.name": "travel_agent",
+    "aws.genai.span_kind": "TASK",
+    "traceloop.association.properties.langgraph_node": "model",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "gen_ai.task.parent.id": "01a16984-0452-76ea-a487-a62ee13bfe54",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.id": "01a16984-0455-7317-b097-3d0bcac92fe3",
+    "traceloop.association.properties.langgraph_step": 1,
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:c9fdf681-31ef-ab14-32ce-a9b20f5f040a",
+    "traceloop.association.properties.ls_integration": "langchain_create_agent",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771622006833513,
+   "observedTimeUnixNano": 1792771623279811788,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\", \"id\": \"1df4494b-4a3e-4e4a-8050-418ae053e9ee\"}}]}, \"tags\": [\"graph:step:1\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 1, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:c9fdf681-31ef-ab14-32ce-a9b20f5f040a\"}, \"kwargs\": {\"name\": \"model\"}}"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T1: I can search flights and check the weather.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0456-721d-8ec0-ea89ca88057b-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:1\"]}}"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb8623456b2bbb2b477f4c5d14e83a",
+   "spanId": "a401d54d62934a5b",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb8623456b2bbb2b477f4c5d14e83a",
+   "spanId": "c7e180ea05ff793f",
+   "parentSpanId": "2b030b2f527e042d",
+   "flags": 256,
+   "name": "travel_agent.workflow",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1792771621970774041,
+   "endTimeUnixNano": 1792771622008010494,
+   "durationNano": 37236453,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "traceloop.span.kind": "workflow",
+    "gen_ai.task.status": "success",
+    "traceloop.workflow.name": "travel_agent",
+    "gen_ai.agent.name": "travel_agent",
+    "aws.genai.span_kind": "AGENT",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "gen_ai.provider.name": "langgraph",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.task.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\", \"id\": \"1df4494b-4a3e-4e4a-8050-418ae053e9ee\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T1: I can search flights and check the weather.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0456-721d-8ec0-ea89ca88057b-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"kwargs\": {\"tags\": []}}",
+    "traceloop.entity.name": "travel_agent",
+    "gen_ai.operation.name": "invoke_agent",
+    "traceloop.association.properties.ls_integration": "langchain_create_agent",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.agent.id": "01a16984-0452-76ea-a487-a62ee13bfe54",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\"}}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\"}, \"kwargs\": {\"name\": \"travel_agent\"}}"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771622008010494,
+   "observedTimeUnixNano": 1792771623279937529,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\"}}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\"}, \"kwargs\": {\"name\": \"travel_agent\"}}"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\", \"id\": \"1df4494b-4a3e-4e4a-8050-418ae053e9ee\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T1: I can search flights and check the weather.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0456-721d-8ec0-ea89ca88057b-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"kwargs\": {\"tags\": []}}"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb8623456b2bbb2b477f4c5d14e83a",
+   "spanId": "c7e180ea05ff793f",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb8623456b2bbb2b477f4c5d14e83a",
+   "spanId": "2b030b2f527e042d",
+   "parentSpanId": "4cbf7a78c2232b4a",
+   "flags": 256,
+   "name": "invoke_agent travel_agent",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1792771621686498835,
+   "endTimeUnixNano": 1792771622008076560,
+   "durationNano": 321577725,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "gen_ai.workflow.edges": [
+     "model -> tools",
+     "tools -> model"
+    ],
+    "gen_ai.operation.name": "invoke_agent",
+    "gen_ai.agent.name": "travel_agent",
+    "gen_ai.workflow.nodes": [
+     "model",
+     "tools"
+    ],
+    "aws.genai.span_kind": "AGENT",
+    "gen_ai.conversation.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.provider.name": "langgraph",
+    "aws.local.environment": "bedrock-agentcore:default"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.starlette",
+    "version": "0.65b0"
+   },
+   "traceId": "6adb8623456b2bbb2b477f4c5d14e83a",
+   "spanId": "4cbf7a78c2232b4a",
+   "parentSpanId": "5322d7790b16c630",
+   "flags": 768,
+   "name": "POST /invocations",
+   "kind": "SERVER",
+   "startTimeUnixNano": 1792771621685520825,
+   "endTimeUnixNano": 1792771622009103948,
+   "durationNano": 323583123,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "net.peer.port": 42176,
+    "telemetry.extended": "true",
+    "http.target": "/invocations",
+    "http.flavor": "1.1",
+    "http.url": "http://5ad0b4c1-fd66-deed-7812-eda4bec144de.lambda-microvm.cn-northwest-1.on.amazonwebservices.com.cn/invocations",
+    "net.peer.ip": "127.0.0.1",
+    "http.host": "127.0.0.1:8080",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "http.status_code": 200,
+    "aws.local.operation": "POST /invocations",
+    "aws.span.kind": "SERVER",
+    "http.server_name": "5ad0b4c1-fd66-deed-7812-eda4bec144de.lambda-microvm.cn-northwest-1.on.amazonwebservices.com.cn",
+    "net.host.port": 8080,
+    "http.route": "/invocations",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "http.method": "POST",
+    "http.response.status_code": 200,
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "http.scheme": "http"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "0d2105a8d97ce8ed",
+   "parentSpanId": "dee6f7b89270150b",
+   "flags": 256,
+   "name": "ScriptedModel.chat",
+   "kind": "CLIENT",
+   "startTimeUnixNano": 1792771623835350042,
+   "endTimeUnixNano": 1792771623835911238,
+   "durationNano": 561196,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "traceloop.association.properties.ls_model_type": "chat",
+    "aws.remote.resource.identifier": "unknown",
+    "gen_ai.response.model": "unknown",
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "gen_ai.provider.name": "langchain",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "aws.remote.operation": "UnknownRemoteOperation",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "aws.local.operation": "UnmappedOperation",
+    "aws.span.kind": "CLIENT",
+    "gen_ai.request.model": "unknown",
+    "traceloop.association.properties.lc_versions": "{\"langchain-core\": \"1.7.0\", \"langchain\": \"1.4.7\"}",
+    "telemetry.extended": "true",
+    "traceloop.workflow.name": "travel_agent",
+    "aws.genai.span_kind": "LLM",
+    "traceloop.association.properties.langgraph_node": "model",
+    "aws.remote.service": "UnknownRemoteService",
+    "traceloop.entity.path": "model",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "traceloop.association.properties.ls_provider": "scriptedmodel",
+    "aws.remote.resource.type": "GenAI::Model",
+    "gen_ai.operation.name": "chat",
+    "traceloop.association.properties.langgraph_step": 4,
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:da321612-79ed-5e13-3c67-8f983e72aa44",
+    "traceloop.association.properties.ls_integration": "langchain_chat_model",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "traceloop.association.properties.checkpoint_ns": "model:da321612-79ed-5e13-3c67-8f983e72aa44"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771623835911238,
+   "observedTimeUnixNano": 1792771628351796203,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"hello, what can you do?\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"ANSWER-T1: I can search flights and check the weather.\"}]}, {\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"Find me flights SEA to NYC on 2025-03-15\"}]}]"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"PREAMBLE-T2: Let me search for flights.\"}, {\"type\": \"tool_call\", \"id\": \"call_flights_1\", \"name\": \"search_flights\", \"arguments\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}}], \"finish_reason\": \"\"}]"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "0d2105a8d97ce8ed",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "dee6f7b89270150b",
+   "parentSpanId": "8b0eab51e9ee282b",
+   "flags": 256,
+   "name": "execute_task model",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1792771623834517326,
+   "endTimeUnixNano": 1792771623836348679,
+   "durationNano": 1831353,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "gen_ai.task.status": "success",
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "gen_ai.provider.name": "langgraph",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.task.output": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T2: Let me search for flights.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0b9b-76bc-b976-63cab60d96b9-0\", \"tool_calls\": [{\"name\": \"search_flights\", \"args\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"id\": \"call_flights_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:4\"]}}",
+    "gen_ai.task.name": "model",
+    "traceloop.entity.name": "model",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\", \"id\": \"1df4494b-4a3e-4e4a-8050-418ae053e9ee\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T1: I can search flights and check the weather.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0456-721d-8ec0-ea89ca88057b-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\", \"id\": \"353e316c-2c59-4d11-8773-88c7c8a567de\"}}]}, \"tags\": [\"graph:step:4\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 4, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:da321612-79ed-5e13-3c67-8f983e72aa44\"}, \"kwargs\": {\"name\": \"model\"}}",
+    "traceloop.span.kind": "task",
+    "traceloop.workflow.name": "travel_agent",
+    "aws.genai.span_kind": "TASK",
+    "traceloop.association.properties.langgraph_node": "model",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "gen_ai.task.parent.id": "01a16984-0b98-7065-bd29-7a42f7c8970e",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.id": "01a16984-0b9a-752f-b6f9-9db155a904ba",
+    "traceloop.association.properties.langgraph_step": 4,
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:da321612-79ed-5e13-3c67-8f983e72aa44",
+    "traceloop.association.properties.ls_integration": "langchain_create_agent",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771623836348679,
+   "observedTimeUnixNano": 1792771628351985270,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\", \"id\": \"1df4494b-4a3e-4e4a-8050-418ae053e9ee\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T1: I can search flights and check the weather.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0456-721d-8ec0-ea89ca88057b-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\", \"id\": \"353e316c-2c59-4d11-8773-88c7c8a567de\"}}]}, \"tags\": [\"graph:step:4\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 4, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:da321612-79ed-5e13-3c67-8f983e72aa44\"}, \"kwargs\": {\"name\": \"model\"}}"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T2: Let me search for flights.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0b9b-76bc-b976-63cab60d96b9-0\", \"tool_calls\": [{\"name\": \"search_flights\", \"args\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"id\": \"call_flights_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:4\"]}}"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "dee6f7b89270150b",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "2e97ccf16108563d",
+   "parentSpanId": "8b6ec9909c1e95fa",
+   "flags": 256,
+   "name": "execute_tool search_flights",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1792771623838064752,
+   "endTimeUnixNano": 1792771623838777896,
+   "durationNano": 713144,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "gen_ai.task.status": "success",
+    "gen_ai.tool.description": "Search for available flights between cities.",
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_push",
+     "0",
+     "False"
+    ],
+    "gen_ai.provider.name": "langgraph",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "traceloop.entity.name": "search_flights",
+    "gen_ai.tool.name": "search_flights",
+    "traceloop.span.kind": "tool",
+    "traceloop.workflow.name": "travel_agent",
+    "gen_ai.tool.type": "function",
+    "aws.genai.span_kind": "TOOL",
+    "traceloop.association.properties.langgraph_node": "tools",
+    "traceloop.entity.path": "tools",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "__pregel_push"
+    ],
+    "gen_ai.operation.name": "execute_tool",
+    "traceloop.association.properties.langgraph_step": 5,
+    "traceloop.association.properties.langgraph_checkpoint_ns": "tools:9b6942b3-445e-aff3-aef4-160f021f70a8",
+    "traceloop.association.properties.ls_integration": "langchain_create_agent",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "gen_ai.tool.call.arguments": "{\"input_str\": \"{'origin': 'SEA', 'destination': 'NYC', 'date': '2025-03-15'}\", \"tags\": [\"seq:step:1\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 5, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:9b6942b3-445e-aff3-aef4-160f021f70a8\", \"checkpoint_ns\": \"tools:9b6942b3-445e-aff3-aef4-160f021f70a8\"}, \"inputs\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"kwargs\": {\"color\": \"green\", \"name\": null, \"tool_call_id\": \"call_flights_1\"}}",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "traceloop.association.properties.checkpoint_ns": "tools:9b6942b3-445e-aff3-aef4-160f021f70a8",
+    "gen_ai.tool.call.result": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\", \\\"flights\\\": [\\\"AL-101 08:00\\\", \\\"AL-205 13:30\\\"]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"tool_call_id\": \"call_flights_1\", \"status\": \"success\"}}, \"kwargs\": {\"tags\": [\"seq:step:1\"], \"color\": \"green\", \"name\": \"search_flights\"}}"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771623838777896,
+   "observedTimeUnixNano": 1792771628352117846,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "{\"input_str\": \"{'origin': 'SEA', 'destination': 'NYC', 'date': '2025-03-15'}\", \"tags\": [\"seq:step:1\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 5, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:9b6942b3-445e-aff3-aef4-160f021f70a8\", \"checkpoint_ns\": \"tools:9b6942b3-445e-aff3-aef4-160f021f70a8\"}, \"inputs\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"kwargs\": {\"color\": \"green\", \"name\": null, \"tool_call_id\": \"call_flights_1\"}}"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\", \\\"flights\\\": [\\\"AL-101 08:00\\\", \\\"AL-205 13:30\\\"]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"tool_call_id\": \"call_flights_1\", \"status\": \"success\"}}, \"kwargs\": {\"tags\": [\"seq:step:1\"], \"color\": \"green\", \"name\": \"search_flights\"}}"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "2e97ccf16108563d",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "8b6ec9909c1e95fa",
+   "parentSpanId": "8b0eab51e9ee282b",
+   "flags": 256,
+   "name": "execute_task tools",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1792771623836958137,
+   "endTimeUnixNano": 1792771623839307233,
+   "durationNano": 2349096,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "gen_ai.task.status": "success",
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_push",
+     "0",
+     "False"
+    ],
+    "gen_ai.provider.name": "langgraph",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.task.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\", \\\"flights\\\": [\\\"AL-101 08:00\\\", \\\"AL-205 13:30\\\"]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"id\": \"bddd3a39-ccd4-44a1-a902-b94f1df1f3aa\", \"tool_call_id\": \"call_flights_1\", \"status\": \"success\"}}]}, \"kwargs\": {\"tags\": [\"graph:step:5\"]}}",
+    "gen_ai.task.name": "tools",
+    "traceloop.entity.name": "tools",
+    "gen_ai.task.input": "{\"inputs\": [{\"name\": \"search_flights\", \"args\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"id\": \"call_flights_1\", \"type\": \"tool_call\"}], \"tags\": [\"graph:step:5\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 5, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:9b6942b3-445e-aff3-aef4-160f021f70a8\"}, \"kwargs\": {\"name\": \"tools\"}}",
+    "traceloop.span.kind": "task",
+    "traceloop.workflow.name": "travel_agent",
+    "aws.genai.span_kind": "TASK",
+    "traceloop.association.properties.langgraph_node": "tools",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "__pregel_push"
+    ],
+    "gen_ai.task.parent.id": "01a16984-0b98-7065-bd29-7a42f7c8970e",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.id": "01a16984-0b9c-70a5-bcf6-9027e2d18158",
+    "traceloop.association.properties.langgraph_step": 5,
+    "traceloop.association.properties.langgraph_checkpoint_ns": "tools:9b6942b3-445e-aff3-aef4-160f021f70a8",
+    "traceloop.association.properties.ls_integration": "langchain_create_agent",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771623839307233,
+   "observedTimeUnixNano": 1792771628352243391,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "{\"inputs\": [{\"name\": \"search_flights\", \"args\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"id\": \"call_flights_1\", \"type\": \"tool_call\"}], \"tags\": [\"graph:step:5\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 5, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:9b6942b3-445e-aff3-aef4-160f021f70a8\"}, \"kwargs\": {\"name\": \"tools\"}}"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\", \\\"flights\\\": [\\\"AL-101 08:00\\\", \\\"AL-205 13:30\\\"]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"id\": \"bddd3a39-ccd4-44a1-a902-b94f1df1f3aa\", \"tool_call_id\": \"call_flights_1\", \"status\": \"success\"}}]}, \"kwargs\": {\"tags\": [\"graph:step:5\"]}}"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "8b6ec9909c1e95fa",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "37913f52e08bb9f7",
+   "parentSpanId": "5d1563cd459b20d0",
+   "flags": 256,
+   "name": "ScriptedModel.chat",
+   "kind": "CLIENT",
+   "startTimeUnixNano": 1792771623840688649,
+   "endTimeUnixNano": 1792771623841102451,
+   "durationNano": 413802,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "traceloop.association.properties.ls_model_type": "chat",
+    "aws.remote.resource.identifier": "unknown",
+    "gen_ai.response.model": "unknown",
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "gen_ai.provider.name": "langchain",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "aws.remote.operation": "UnknownRemoteOperation",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "aws.local.operation": "UnmappedOperation",
+    "aws.span.kind": "CLIENT",
+    "gen_ai.request.model": "unknown",
+    "traceloop.association.properties.lc_versions": "{\"langchain-core\": \"1.7.0\", \"langchain\": \"1.4.7\"}",
+    "telemetry.extended": "true",
+    "traceloop.workflow.name": "travel_agent",
+    "aws.genai.span_kind": "LLM",
+    "traceloop.association.properties.langgraph_node": "model",
+    "aws.remote.service": "UnknownRemoteService",
+    "traceloop.entity.path": "model",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "traceloop.association.properties.ls_provider": "scriptedmodel",
+    "aws.remote.resource.type": "GenAI::Model",
+    "gen_ai.operation.name": "chat",
+    "traceloop.association.properties.langgraph_step": 6,
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:b413d38f-f4b4-0b9b-1c31-c366869fcffb",
+    "traceloop.association.properties.ls_integration": "langchain_chat_model",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "traceloop.association.properties.checkpoint_ns": "model:b413d38f-f4b4-0b9b-1c31-c366869fcffb"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771623841102451,
+   "observedTimeUnixNano": 1792771628352361362,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"hello, what can you do?\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"ANSWER-T1: I can search flights and check the weather.\"}]}, {\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"Find me flights SEA to NYC on 2025-03-15\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"PREAMBLE-T2: Let me search for flights.\"}, {\"type\": \"tool_call\", \"id\": \"call_flights_1\", \"name\": \"search_flights\", \"arguments\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}}]}, {\"role\": \"tool\", \"parts\": [{\"type\": \"tool_call_response\", \"id\": \"call_flights_1\", \"response\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\", \\\"flights\\\": [\\\"AL-101 08:00\\\", \\\"AL-205 13:30\\\"]}\"}]}]"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"FINAL-T2: two flights SEA->NYC on 2025-03-15: AL-101 08:00 and AL-205 13:30.\"}], \"finish_reason\": \"\"}]"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "37913f52e08bb9f7",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "5d1563cd459b20d0",
+   "parentSpanId": "8b0eab51e9ee282b",
+   "flags": 256,
+   "name": "execute_task model",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1792771623839858829,
+   "endTimeUnixNano": 1792771623841429469,
+   "durationNano": 1570640,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "gen_ai.task.status": "success",
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "gen_ai.provider.name": "langgraph",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.task.output": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T2: two flights SEA->NYC on 2025-03-15: AL-101 08:00 and AL-205 13:30.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0ba0-73e6-a249-703e65935772-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:6\"]}}",
+    "gen_ai.task.name": "model",
+    "traceloop.entity.name": "model",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\", \"id\": \"1df4494b-4a3e-4e4a-8050-418ae053e9ee\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T1: I can search flights and check the weather.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0456-721d-8ec0-ea89ca88057b-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\", \"id\": \"353e316c-2c59-4d11-8773-88c7c8a567de\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T2: Let me search for flights.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0b9b-76bc-b976-63cab60d96b9-0\", \"tool_calls\": [{\"name\": \"search_flights\", \"args\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"id\": \"call_flights_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\", \\\"flights\\\": [\\\"AL-101 08:00\\\", \\\"AL-205 13:30\\\"]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"id\": \"bddd3a39-ccd4-44a1-a902-b94f1df1f3aa\", \"tool_call_id\": \"call_flights_1\", \"status\": \"success\"}}]}, \"tags\": [\"graph:step:6\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 6, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:b413d38f-f4b4-0b9b-1c31-c366869fcffb\"}, \"kwargs\": {\"name\": \"model\"}}",
+    "traceloop.span.kind": "task",
+    "traceloop.workflow.name": "travel_agent",
+    "aws.genai.span_kind": "TASK",
+    "traceloop.association.properties.langgraph_node": "model",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "gen_ai.task.parent.id": "01a16984-0b98-7065-bd29-7a42f7c8970e",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.id": "01a16984-0b9f-71ac-a624-5bff6b28e4ab",
+    "traceloop.association.properties.langgraph_step": 6,
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:b413d38f-f4b4-0b9b-1c31-c366869fcffb",
+    "traceloop.association.properties.ls_integration": "langchain_create_agent",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771623841429469,
+   "observedTimeUnixNano": 1792771628352478053,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\", \"id\": \"1df4494b-4a3e-4e4a-8050-418ae053e9ee\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T1: I can search flights and check the weather.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0456-721d-8ec0-ea89ca88057b-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\", \"id\": \"353e316c-2c59-4d11-8773-88c7c8a567de\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T2: Let me search for flights.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0b9b-76bc-b976-63cab60d96b9-0\", \"tool_calls\": [{\"name\": \"search_flights\", \"args\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"id\": \"call_flights_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\", \\\"flights\\\": [\\\"AL-101 08:00\\\", \\\"AL-205 13:30\\\"]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"id\": \"bddd3a39-ccd4-44a1-a902-b94f1df1f3aa\", \"tool_call_id\": \"call_flights_1\", \"status\": \"success\"}}]}, \"tags\": [\"graph:step:6\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 6, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:b413d38f-f4b4-0b9b-1c31-c366869fcffb\"}, \"kwargs\": {\"name\": \"model\"}}"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T2: two flights SEA->NYC on 2025-03-15: AL-101 08:00 and AL-205 13:30.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0ba0-73e6-a249-703e65935772-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:6\"]}}"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "5d1563cd459b20d0",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "8b0eab51e9ee282b",
+   "parentSpanId": "05facb3eec469094",
+   "flags": 256,
+   "name": "travel_agent.workflow",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1792771623832375824,
+   "endTimeUnixNano": 1792771623842772716,
+   "durationNano": 10396892,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "traceloop.span.kind": "workflow",
+    "gen_ai.task.status": "success",
+    "traceloop.workflow.name": "travel_agent",
+    "gen_ai.agent.name": "travel_agent",
+    "aws.genai.span_kind": "AGENT",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "gen_ai.provider.name": "langgraph",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.task.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\", \"id\": \"1df4494b-4a3e-4e4a-8050-418ae053e9ee\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T1: I can search flights and check the weather.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0456-721d-8ec0-ea89ca88057b-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\", \"id\": \"353e316c-2c59-4d11-8773-88c7c8a567de\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T2: Let me search for flights.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0b9b-76bc-b976-63cab60d96b9-0\", \"tool_calls\": [{\"name\": \"search_flights\", \"args\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"id\": \"call_flights_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\", \\\"flights\\\": [\\\"AL-101 08:00\\\", \\\"AL-205 13:30\\\"]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"id\": \"bddd3a39-ccd4-44a1-a902-b94f1df1f3aa\", \"tool_call_id\": \"call_flights_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T2: two flights SEA->NYC on 2025-03-15: AL-101 08:00 and AL-205 13:30.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0ba0-73e6-a249-703e65935772-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"kwargs\": {\"tags\": []}}",
+    "traceloop.entity.name": "travel_agent",
+    "gen_ai.operation.name": "invoke_agent",
+    "traceloop.association.properties.ls_integration": "langchain_create_agent",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.agent.id": "01a16984-0b98-7065-bd29-7a42f7c8970e",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\"}}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\"}, \"kwargs\": {\"name\": \"travel_agent\"}}"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771623842772716,
+   "observedTimeUnixNano": 1792771628352588796,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\"}}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\"}, \"kwargs\": {\"name\": \"travel_agent\"}}"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\", \"id\": \"1df4494b-4a3e-4e4a-8050-418ae053e9ee\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T1: I can search flights and check the weather.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0456-721d-8ec0-ea89ca88057b-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\", \"id\": \"353e316c-2c59-4d11-8773-88c7c8a567de\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T2: Let me search for flights.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0b9b-76bc-b976-63cab60d96b9-0\", \"tool_calls\": [{\"name\": \"search_flights\", \"args\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"id\": \"call_flights_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\", \\\"flights\\\": [\\\"AL-101 08:00\\\", \\\"AL-205 13:30\\\"]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"id\": \"bddd3a39-ccd4-44a1-a902-b94f1df1f3aa\", \"tool_call_id\": \"call_flights_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T2: two flights SEA->NYC on 2025-03-15: AL-101 08:00 and AL-205 13:30.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0ba0-73e6-a249-703e65935772-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"kwargs\": {\"tags\": []}}"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "8b0eab51e9ee282b",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "05facb3eec469094",
+   "parentSpanId": "d208fe2aeafd262d",
+   "flags": 256,
+   "name": "invoke_agent travel_agent",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1792771623831238096,
+   "endTimeUnixNano": 1792771623842833457,
+   "durationNano": 11595361,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "gen_ai.workflow.edges": [
+     "model -> tools",
+     "tools -> model"
+    ],
+    "gen_ai.operation.name": "invoke_agent",
+    "gen_ai.agent.name": "travel_agent",
+    "gen_ai.workflow.nodes": [
+     "model",
+     "tools"
+    ],
+    "aws.genai.span_kind": "AGENT",
+    "gen_ai.conversation.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.provider.name": "langgraph",
+    "aws.local.environment": "bedrock-agentcore:default"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.starlette",
+    "version": "0.65b0"
+   },
+   "traceId": "6adb862716cfd48f38d11eb952678002",
+   "spanId": "d208fe2aeafd262d",
+   "parentSpanId": "3d3c020161690aae",
+   "flags": 768,
+   "name": "POST /invocations",
+   "kind": "SERVER",
+   "startTimeUnixNano": 1792771623830535749,
+   "endTimeUnixNano": 1792771623843748051,
+   "durationNano": 13212302,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "net.peer.port": 42176,
+    "telemetry.extended": "true",
+    "http.target": "/invocations",
+    "http.flavor": "1.1",
+    "http.url": "http://5ad0b4c1-fd66-deed-7812-eda4bec144de.lambda-microvm.cn-northwest-1.on.amazonwebservices.com.cn/invocations",
+    "net.peer.ip": "127.0.0.1",
+    "http.host": "127.0.0.1:8080",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "http.status_code": 200,
+    "aws.local.operation": "POST /invocations",
+    "aws.span.kind": "SERVER",
+    "http.server_name": "5ad0b4c1-fd66-deed-7812-eda4bec144de.lambda-microvm.cn-northwest-1.on.amazonwebservices.com.cn",
+    "net.host.port": 8080,
+    "http.route": "/invocations",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "http.method": "POST",
+    "http.response.status_code": 200,
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "http.scheme": "http"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb862952578c4c5a36c172088ca6b7",
+   "spanId": "839a9657a183c839",
+   "parentSpanId": "0c93ac45e3d8034a",
+   "flags": 256,
+   "name": "ScriptedModel.chat",
+   "kind": "CLIENT",
+   "startTimeUnixNano": 1792771625693923151,
+   "endTimeUnixNano": 1792771625694415007,
+   "durationNano": 491856,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "traceloop.association.properties.ls_model_type": "chat",
+    "aws.remote.resource.identifier": "unknown",
+    "gen_ai.response.model": "unknown",
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "gen_ai.provider.name": "langchain",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "aws.remote.operation": "UnknownRemoteOperation",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "aws.local.operation": "UnmappedOperation",
+    "aws.span.kind": "CLIENT",
+    "gen_ai.request.model": "unknown",
+    "traceloop.association.properties.lc_versions": "{\"langchain-core\": \"1.7.0\", \"langchain\": \"1.4.7\"}",
+    "telemetry.extended": "true",
+    "traceloop.workflow.name": "travel_agent",
+    "aws.genai.span_kind": "LLM",
+    "traceloop.association.properties.langgraph_node": "model",
+    "aws.remote.service": "UnknownRemoteService",
+    "traceloop.entity.path": "model",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "traceloop.association.properties.ls_provider": "scriptedmodel",
+    "aws.remote.resource.type": "GenAI::Model",
+    "gen_ai.operation.name": "chat",
+    "traceloop.association.properties.langgraph_step": 9,
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:02b13bbb-6d1d-5627-356e-0aff08ab510d",
+    "traceloop.association.properties.ls_integration": "langchain_chat_model",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "traceloop.association.properties.checkpoint_ns": "model:02b13bbb-6d1d-5627-356e-0aff08ab510d"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771625694415007,
+   "observedTimeUnixNano": 1792771628352748153,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"hello, what can you do?\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"ANSWER-T1: I can search flights and check the weather.\"}]}, {\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"Find me flights SEA to NYC on 2025-03-15\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"PREAMBLE-T2: Let me search for flights.\"}, {\"type\": \"tool_call\", \"id\": \"call_flights_1\", \"name\": \"search_flights\", \"arguments\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}}]}, {\"role\": \"tool\", \"parts\": [{\"type\": \"tool_call_response\", \"id\": \"call_flights_1\", \"response\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\", \\\"flights\\\": [\\\"AL-101 08:00\\\", \\\"AL-205 13:30\\\"]}\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"FINAL-T2: two flights SEA->NYC on 2025-03-15: AL-101 08:00 and AL-205 13:30.\"}]}, {\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"And the weather in NYC?\"}]}]"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"tool_call\", \"id\": \"call_weather_1\", \"name\": \"get_weather\", \"arguments\": {\"city\": \"NYC\"}}], \"finish_reason\": \"\"}]"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb862952578c4c5a36c172088ca6b7",
+   "spanId": "839a9657a183c839",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb862952578c4c5a36c172088ca6b7",
+   "spanId": "0c93ac45e3d8034a",
+   "parentSpanId": "a37489b82667b8fa",
+   "flags": 256,
+   "name": "execute_task model",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1792771625692817578,
+   "endTimeUnixNano": 1792771625694802537,
+   "durationNano": 1984959,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "gen_ai.task.status": "success",
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "gen_ai.provider.name": "langgraph",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.task.output": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-12dd-774d-ae2a-809add35ea82-0\", \"tool_calls\": [{\"name\": \"get_weather\", \"args\": {\"city\": \"NYC\"}, \"id\": \"call_weather_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:9\"]}}",
+    "gen_ai.task.name": "model",
+    "traceloop.entity.name": "model",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\", \"id\": \"1df4494b-4a3e-4e4a-8050-418ae053e9ee\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T1: I can search flights and check the weather.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0456-721d-8ec0-ea89ca88057b-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\", \"id\": \"353e316c-2c59-4d11-8773-88c7c8a567de\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T2: Let me search for flights.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0b9b-76bc-b976-63cab60d96b9-0\", \"tool_calls\": [{\"name\": \"search_flights\", \"args\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"id\": \"call_flights_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\", \\\"flights\\\": [\\\"AL-101 08:00\\\", \\\"AL-205 13:30\\\"]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"id\": \"bddd3a39-ccd4-44a1-a902-b94f1df1f3aa\", \"tool_call_id\": \"call_flights_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T2: two flights SEA->NYC on 2025-03-15: AL-101 08:00 and AL-205 13:30.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0ba0-73e6-a249-703e65935772-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"And the weather in NYC?\", \"type\": \"human\", \"id\": \"5dafd9a0-164d-41e2-93b3-d5d8ec905ccd\"}}]}, \"tags\": [\"graph:step:9\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 9, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:02b13bbb-6d1d-5627-356e-0aff08ab510d\"}, \"kwargs\": {\"name\": \"model\"}}",
+    "traceloop.span.kind": "task",
+    "traceloop.workflow.name": "travel_agent",
+    "aws.genai.span_kind": "TASK",
+    "traceloop.association.properties.langgraph_node": "model",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "gen_ai.task.parent.id": "01a16984-12da-76fc-95aa-52bfb60a5b0f",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.id": "01a16984-12dc-7106-a4a5-d479d4c62021",
+    "traceloop.association.properties.langgraph_step": 9,
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:02b13bbb-6d1d-5627-356e-0aff08ab510d",
+    "traceloop.association.properties.ls_integration": "langchain_create_agent",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771625694802537,
+   "observedTimeUnixNano": 1792771628352862917,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\", \"id\": \"1df4494b-4a3e-4e4a-8050-418ae053e9ee\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T1: I can search flights and check the weather.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0456-721d-8ec0-ea89ca88057b-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\", \"id\": \"353e316c-2c59-4d11-8773-88c7c8a567de\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T2: Let me search for flights.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0b9b-76bc-b976-63cab60d96b9-0\", \"tool_calls\": [{\"name\": \"search_flights\", \"args\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"id\": \"call_flights_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\", \\\"flights\\\": [\\\"AL-101 08:00\\\", \\\"AL-205 13:30\\\"]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"id\": \"bddd3a39-ccd4-44a1-a902-b94f1df1f3aa\", \"tool_call_id\": \"call_flights_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T2: two flights SEA->NYC on 2025-03-15: AL-101 08:00 and AL-205 13:30.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0ba0-73e6-a249-703e65935772-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"And the weather in NYC?\", \"type\": \"human\", \"id\": \"5dafd9a0-164d-41e2-93b3-d5d8ec905ccd\"}}]}, \"tags\": [\"graph:step:9\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 9, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:02b13bbb-6d1d-5627-356e-0aff08ab510d\"}, \"kwargs\": {\"name\": \"model\"}}"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-12dd-774d-ae2a-809add35ea82-0\", \"tool_calls\": [{\"name\": \"get_weather\", \"args\": {\"city\": \"NYC\"}, \"id\": \"call_weather_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:9\"]}}"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb862952578c4c5a36c172088ca6b7",
+   "spanId": "0c93ac45e3d8034a",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb862952578c4c5a36c172088ca6b7",
+   "spanId": "22722da239de4027",
+   "parentSpanId": "2f30cb2072f73a80",
+   "flags": 256,
+   "name": "execute_tool get_weather",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1792771625696150230,
+   "endTimeUnixNano": 1792771625696831745,
+   "durationNano": 681515,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "gen_ai.task.status": "success",
+    "gen_ai.tool.description": "Current weather for a city.",
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_push",
+     "0",
+     "False"
+    ],
+    "gen_ai.provider.name": "langgraph",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "traceloop.entity.name": "get_weather",
+    "gen_ai.tool.name": "get_weather",
+    "traceloop.span.kind": "tool",
+    "traceloop.workflow.name": "travel_agent",
+    "gen_ai.tool.type": "function",
+    "aws.genai.span_kind": "TOOL",
+    "traceloop.association.properties.langgraph_node": "tools",
+    "traceloop.entity.path": "tools",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "__pregel_push"
+    ],
+    "gen_ai.operation.name": "execute_tool",
+    "traceloop.association.properties.langgraph_step": 10,
+    "traceloop.association.properties.langgraph_checkpoint_ns": "tools:1f61981c-414d-86e6-e9c0-599fd7e8169f",
+    "traceloop.association.properties.ls_integration": "langchain_create_agent",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "gen_ai.tool.call.arguments": "{\"input_str\": \"{'city': 'NYC'}\", \"tags\": [\"seq:step:1\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 10, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:1f61981c-414d-86e6-e9c0-599fd7e8169f\", \"checkpoint_ns\": \"tools:1f61981c-414d-86e6-e9c0-599fd7e8169f\"}, \"inputs\": {\"city\": \"NYC\"}, \"kwargs\": {\"color\": \"green\", \"name\": null, \"tool_call_id\": \"call_weather_1\"}}",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "traceloop.association.properties.checkpoint_ns": "tools:1f61981c-414d-86e6-e9c0-599fd7e8169f",
+    "gen_ai.tool.call.result": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"city\\\": \\\"NYC\\\", \\\"weather\\\": \\\"sunny\\\", \\\"temp_c\\\": 21}\", \"type\": \"tool\", \"name\": \"get_weather\", \"tool_call_id\": \"call_weather_1\", \"status\": \"success\"}}, \"kwargs\": {\"tags\": [\"seq:step:1\"], \"color\": \"green\", \"name\": \"get_weather\"}}"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771625696831745,
+   "observedTimeUnixNano": 1792771628352979148,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "{\"input_str\": \"{'city': 'NYC'}\", \"tags\": [\"seq:step:1\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 10, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:1f61981c-414d-86e6-e9c0-599fd7e8169f\", \"checkpoint_ns\": \"tools:1f61981c-414d-86e6-e9c0-599fd7e8169f\"}, \"inputs\": {\"city\": \"NYC\"}, \"kwargs\": {\"color\": \"green\", \"name\": null, \"tool_call_id\": \"call_weather_1\"}}"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"city\\\": \\\"NYC\\\", \\\"weather\\\": \\\"sunny\\\", \\\"temp_c\\\": 21}\", \"type\": \"tool\", \"name\": \"get_weather\", \"tool_call_id\": \"call_weather_1\", \"status\": \"success\"}}, \"kwargs\": {\"tags\": [\"seq:step:1\"], \"color\": \"green\", \"name\": \"get_weather\"}}"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb862952578c4c5a36c172088ca6b7",
+   "spanId": "22722da239de4027",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb862952578c4c5a36c172088ca6b7",
+   "spanId": "2f30cb2072f73a80",
+   "parentSpanId": "a37489b82667b8fa",
+   "flags": 256,
+   "name": "execute_task tools",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1792771625695373620,
+   "endTimeUnixNano": 1792771625697573279,
+   "durationNano": 2199659,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "gen_ai.task.status": "success",
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_push",
+     "0",
+     "False"
+    ],
+    "gen_ai.provider.name": "langgraph",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.task.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"city\\\": \\\"NYC\\\", \\\"weather\\\": \\\"sunny\\\", \\\"temp_c\\\": 21}\", \"type\": \"tool\", \"name\": \"get_weather\", \"id\": \"3347ec63-b627-4e0c-99ee-ade55271924c\", \"tool_call_id\": \"call_weather_1\", \"status\": \"success\"}}]}, \"kwargs\": {\"tags\": [\"graph:step:10\"]}}",
+    "gen_ai.task.name": "tools",
+    "traceloop.entity.name": "tools",
+    "gen_ai.task.input": "{\"inputs\": [{\"name\": \"get_weather\", \"args\": {\"city\": \"NYC\"}, \"id\": \"call_weather_1\", \"type\": \"tool_call\"}], \"tags\": [\"graph:step:10\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 10, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:1f61981c-414d-86e6-e9c0-599fd7e8169f\"}, \"kwargs\": {\"name\": \"tools\"}}",
+    "traceloop.span.kind": "task",
+    "traceloop.workflow.name": "travel_agent",
+    "aws.genai.span_kind": "TASK",
+    "traceloop.association.properties.langgraph_node": "tools",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "__pregel_push"
+    ],
+    "gen_ai.task.parent.id": "01a16984-12da-76fc-95aa-52bfb60a5b0f",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.id": "01a16984-12df-703c-b845-4c0c598ca8af",
+    "traceloop.association.properties.langgraph_step": 10,
+    "traceloop.association.properties.langgraph_checkpoint_ns": "tools:1f61981c-414d-86e6-e9c0-599fd7e8169f",
+    "traceloop.association.properties.ls_integration": "langchain_create_agent",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771625697573279,
+   "observedTimeUnixNano": 1792771628353094666,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "{\"inputs\": [{\"name\": \"get_weather\", \"args\": {\"city\": \"NYC\"}, \"id\": \"call_weather_1\", \"type\": \"tool_call\"}], \"tags\": [\"graph:step:10\"], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\", \"langgraph_step\": 10, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:1f61981c-414d-86e6-e9c0-599fd7e8169f\"}, \"kwargs\": {\"name\": \"tools\"}}"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"city\\\": \\\"NYC\\\", \\\"weather\\\": \\\"sunny\\\", \\\"temp_c\\\": 21}\", \"type\": \"tool\", \"name\": \"get_weather\", \"id\": \"3347ec63-b627-4e0c-99ee-ade55271924c\", \"tool_call_id\": \"call_weather_1\", \"status\": \"success\"}}]}, \"kwargs\": {\"tags\": [\"graph:step:10\"]}}"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb862952578c4c5a36c172088ca6b7",
+   "spanId": "2f30cb2072f73a80",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb862952578c4c5a36c172088ca6b7",
+   "spanId": "a37489b82667b8fa",
+   "parentSpanId": "b8cde7196bd9c692",
+   "flags": 256,
+   "name": "travel_agent.workflow",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1792771625690595307,
+   "endTimeUnixNano": 1792771625698675766,
+   "durationNano": 8080459,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "traceloop.span.kind": "workflow",
+    "gen_ai.task.status": "success",
+    "traceloop.workflow.name": "travel_agent",
+    "gen_ai.agent.name": "travel_agent",
+    "aws.genai.span_kind": "AGENT",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.lc_agent_name": "travel_agent",
+    "gen_ai.provider.name": "langgraph",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "traceloop.association.properties.thread_id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.task.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\", \"id\": \"1df4494b-4a3e-4e4a-8050-418ae053e9ee\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T1: I can search flights and check the weather.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0456-721d-8ec0-ea89ca88057b-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\", \"id\": \"353e316c-2c59-4d11-8773-88c7c8a567de\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T2: Let me search for flights.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0b9b-76bc-b976-63cab60d96b9-0\", \"tool_calls\": [{\"name\": \"search_flights\", \"args\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"id\": \"call_flights_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\", \\\"flights\\\": [\\\"AL-101 08:00\\\", \\\"AL-205 13:30\\\"]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"id\": \"bddd3a39-ccd4-44a1-a902-b94f1df1f3aa\", \"tool_call_id\": \"call_flights_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T2: two flights SEA->NYC on 2025-03-15: AL-101 08:00 and AL-205 13:30.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0ba0-73e6-a249-703e65935772-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"And the weather in NYC?\", \"type\": \"human\", \"id\": \"5dafd9a0-164d-41e2-93b3-d5d8ec905ccd\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-12dd-774d-ae2a-809add35ea82-0\", \"tool_calls\": [{\"name\": \"get_weather\", \"args\": {\"city\": \"NYC\"}, \"id\": \"call_weather_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"city\\\": \\\"NYC\\\", \\\"weather\\\": \\\"sunny\\\", \\\"temp_c\\\": 21}\", \"type\": \"tool\", \"name\": \"get_weather\", \"id\": \"3347ec63-b627-4e0c-99ee-ade55271924c\", \"tool_call_id\": \"call_weather_1\", \"status\": \"success\"}}]}, \"kwargs\": {\"tags\": []}}",
+    "traceloop.entity.name": "travel_agent",
+    "gen_ai.operation.name": "invoke_agent",
+    "traceloop.association.properties.ls_integration": "langchain_create_agent",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.agent.id": "01a16984-12da-76fc-95aa-52bfb60a5b0f",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"And the weather in NYC?\", \"type\": \"human\"}}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\"}, \"kwargs\": {\"name\": \"travel_agent\"}}"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain"
+   },
+   "timeUnixNano": 1792771625698675766,
+   "observedTimeUnixNano": 1792771628353199904,
+   "severityNumber": 9,
+   "severityText": "",
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"And the weather in NYC?\", \"type\": \"human\"}}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"langchain_create_agent\", \"lc_agent_name\": \"travel_agent\", \"thread_id\": \"audit-lg-session-20261023160657-0001-multiturn\"}, \"kwargs\": {\"name\": \"travel_agent\"}}"
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"hello, what can you do?\", \"type\": \"human\", \"id\": \"1df4494b-4a3e-4e4a-8050-418ae053e9ee\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T1: I can search flights and check the weather.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0456-721d-8ec0-ea89ca88057b-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\", \"id\": \"353e316c-2c59-4d11-8773-88c7c8a567de\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T2: Let me search for flights.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0b9b-76bc-b976-63cab60d96b9-0\", \"tool_calls\": [{\"name\": \"search_flights\", \"args\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"id\": \"call_flights_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\", \\\"flights\\\": [\\\"AL-101 08:00\\\", \\\"AL-205 13:30\\\"]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"id\": \"bddd3a39-ccd4-44a1-a902-b94f1df1f3aa\", \"tool_call_id\": \"call_flights_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T2: two flights SEA->NYC on 2025-03-15: AL-101 08:00 and AL-205 13:30.\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-0ba0-73e6-a249-703e65935772-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"And the weather in NYC?\", \"type\": \"human\", \"id\": \"5dafd9a0-164d-41e2-93b3-d5d8ec905ccd\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"type\": \"ai\", \"name\": \"travel_agent\", \"id\": \"lc_run--01a16984-12dd-774d-ae2a-809add35ea82-0\", \"tool_calls\": [{\"name\": \"get_weather\", \"args\": {\"city\": \"NYC\"}, \"id\": \"call_weather_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"city\\\": \\\"NYC\\\", \\\"weather\\\": \\\"sunny\\\", \\\"temp_c\\\": 21}\", \"type\": \"tool\", \"name\": \"get_weather\", \"id\": \"3347ec63-b627-4e0c-99ee-ade55271924c\", \"tool_call_id\": \"call_weather_1\", \"status\": \"success\"}}]}, \"kwargs\": {\"tags\": []}}"
+      }
+     ]
+    }
+   },
+   "attributes": {
+    "event.name": "opentelemetry.instrumentation.langchain",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn"
+   },
+   "flags": 1,
+   "traceId": "6adb862952578c4c5a36c172088ca6b7",
+   "spanId": "a37489b82667b8fa",
+   "eventName": "opentelemetry.instrumentation.langchain",
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "traceId": "6adb862952578c4c5a36c172088ca6b7",
+   "spanId": "b8cde7196bd9c692",
+   "parentSpanId": "8d8a662be3ad6068",
+   "flags": 256,
+   "name": "invoke_agent travel_agent",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1792771625689486271,
+   "endTimeUnixNano": 1792771625698731897,
+   "durationNano": 9245626,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "gen_ai.workflow.edges": [
+     "model -> tools",
+     "tools -> model"
+    ],
+    "gen_ai.operation.name": "invoke_agent",
+    "gen_ai.agent.name": "travel_agent",
+    "gen_ai.workflow.nodes": [
+     "model",
+     "tools"
+    ],
+    "aws.genai.span_kind": "AGENT",
+    "gen_ai.conversation.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "gen_ai.provider.name": "langgraph",
+    "aws.local.environment": "bedrock-agentcore:default"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "opentelemetry.instrumentation.starlette",
+    "version": "0.65b0"
+   },
+   "traceId": "6adb862952578c4c5a36c172088ca6b7",
+   "spanId": "8d8a662be3ad6068",
+   "parentSpanId": "c3126cdd5b8570b7",
+   "flags": 768,
+   "name": "POST /invocations",
+   "kind": "SERVER",
+   "startTimeUnixNano": 1792771625688844338,
+   "endTimeUnixNano": 1792771625699471461,
+   "durationNano": 10627123,
+   "attributes": {
+    "aws.local.service": "audit_lg_langgraph.DEFAULT",
+    "net.peer.port": 42176,
+    "telemetry.extended": "true",
+    "http.target": "/invocations",
+    "http.flavor": "1.1",
+    "http.url": "http://5ad0b4c1-fd66-deed-7812-eda4bec144de.lambda-microvm.cn-northwest-1.on.amazonwebservices.com.cn/invocations",
+    "net.peer.ip": "127.0.0.1",
+    "http.host": "127.0.0.1:8080",
+    "aws.local.environment": "bedrock-agentcore:default",
+    "http.status_code": 200,
+    "aws.local.operation": "POST /invocations",
+    "aws.span.kind": "SERVER",
+    "http.server_name": "5ad0b4c1-fd66-deed-7812-eda4bec144de.lambda-microvm.cn-northwest-1.on.amazonwebservices.com.cn",
+    "net.host.port": 8080,
+    "http.route": "/invocations",
+    "PlatformType": "AWS::BedrockAgentCore",
+    "http.method": "POST",
+    "http.response.status_code": 200,
+    "session.id": "audit-lg-session-20261023160657-0001-multiturn",
+    "http.scheme": "http"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "resource": {
+    "attributes": {
+     "service.name": "audit_lg_langgraph.DEFAULT"
+    }
+   }
+  }
+ ]
+}

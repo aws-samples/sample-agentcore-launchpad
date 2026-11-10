@@ -1,0 +1,142 @@
+{
+  "now": 1793022100,
+  "verify_as": {
+    "workspace_id": "default",
+    "env": "",
+    "agent_id": "ag_hrhelp01"
+  },
+  "cases": [
+    {
+      "name": "user_member_chat",
+      "claims": {
+        "iss": "launchpad-hub",
+        "v": 1,
+        "ws": "default",
+        "env": "",
+        "agt": "ag_hrhelp01",
+        "aud": [
+          "ag_hrhelp01"
+        ],
+        "sid": "0f6c2a1e9b7d4c3a8e5f1b2d3c4a5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
+        "psid": "f14bbb2902e26ca568e11a334b37cc9d1339ddcebc49a1204d919e2e22c1c1fa-v3-g0",
+        "tsv": 3,
+        "jti": "jti-0001-user-member",
+        "iat": 1793022000,
+        "exp": 1793022900,
+        "ch": "chat",
+        "p": {
+          "kind": "user",
+          "id": "hr-intern",
+          "label": "hr-intern",
+          "role": "member",
+          "user_id": "u_hrintern01"
+        }
+      }
+    },
+    {
+      "name": "user_admin_console",
+      "claims": {
+        "iss": "launchpad-hub",
+        "v": 1,
+        "ws": "default",
+        "env": "",
+        "agt": "ag_hrhelp01",
+        "aud": [
+          "ag_hrhelp01",
+          "ag_peer0001"
+        ],
+        "sid": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b",
+        "psid": "d2fc6c380ec481fd73d05640626ef35d740a0e59a5033370c8cc3f8af982de60-v3-g1",
+        "tsv": 3,
+        "jti": "jti-0002-user-admin",
+        "iat": 1793022000,
+        "exp": 1793022900,
+        "ch": "console",
+        "p": {
+          "kind": "user",
+          "id": "demo-admin",
+          "label": "demo-admin",
+          "role": "admin",
+          "user_id": "u_demoadmin1"
+        }
+      }
+    },
+    {
+      "name": "api_key_v1_no_role",
+      "claims": {
+        "iss": "launchpad-hub",
+        "v": 1,
+        "ws": "default",
+        "env": "",
+        "agt": "ag_hrhelp01",
+        "aud": [
+          "ag_hrhelp01"
+        ],
+        "sid": "2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c",
+        "psid": "e3d86cacc238713e9fb1f3bc0177c1cd4e8de5896eabfaccb2569e6fcfb64e4d-v0-g0",
+        "tsv": 0,
+        "jti": "jti-0003-api-key",
+        "iat": 1793022000,
+        "exp": 1793022900,
+        "ch": "v1",
+        "p": {
+          "kind": "api_key",
+          "id": "key_demo0001",
+          "label": "demo-key"
+        }
+      }
+    },
+    {
+      "name": "system_eval",
+      "claims": {
+        "iss": "launchpad-hub",
+        "v": 1,
+        "ws": "default",
+        "env": "",
+        "agt": "ag_hrhelp01",
+        "aud": [
+          "ag_hrhelp01"
+        ],
+        "sid": "3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d",
+        "psid": "a4b47066eaace5eda4368d098140c873e0c3f23ca4118bfbe56f3570ac63b97c-v3-g0",
+        "tsv": 3,
+        "jti": "jti-0004-system-eval",
+        "iat": 1793022000,
+        "exp": 1793022900,
+        "ch": "eval",
+        "p": {
+          "kind": "system",
+          "id": "eval",
+          "label": "system:eval"
+        }
+      }
+    },
+    {
+      "name": "user_member_byoc_5min",
+      "claims": {
+        "iss": "launchpad-hub",
+        "v": 1,
+        "ws": "default",
+        "env": "",
+        "agt": "ag_hrhelp01",
+        "aud": [
+          "ag_hrhelp01"
+        ],
+        "sid": "4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e",
+        "psid": "921d58555569000e5f1b0bceafb5db479b8858909ce410b39119f624fcb54d71-v3-g0",
+        "tsv": 3,
+        "jti": "jti-0005-byoc",
+        "iat": 1793022000,
+        "exp": 1793022300,
+        "ch": "chat",
+        "p": {
+          "kind": "user",
+          "id": "hr-intern",
+          "label": "hr-intern",
+          "role": "member",
+          "user_id": "u_hrintern01"
+        }
+      }
+    }
+  ]
+}

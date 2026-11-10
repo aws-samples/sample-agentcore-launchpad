@@ -4,23 +4,15 @@ import ast
 import asyncio
 import base64
 import copy
-import mimetypes
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import strands
 
-from app.schemas.agent import AgentSpec
-from app.services.harness_convert import (
-    ConversionError,
-    graft_mantle_attachment_model,
-    graft_runtime_attachments,
-)
+from app.services.harness_convert import ConversionError, graft_runtime_attachments
 from app.templates.attachment_support import has_attachment_contract, render_attachment_source
 from app.templates.studio_agent import adapt_studio_code
 
-from .test_claude_sdk_template import _import_rendered as import_claude
 from .test_strands_template import SPEC
 from .test_strands_template import _import_rendered as import_strands
 
@@ -135,40 +127,6 @@ def test_strands_invalid_attachment_has_no_ack_or_model_call(tmp_path, monkeypat
                 )
             )
         )
-
-
-def test_claude_async_messages_ack_and_text_memory(tmp_path, monkeypatch):
-    module = import_claude(
-        AgentSpec(name="claude-attachments", method="container", system_prompt="help"),
-        tmp_path,
-        monkeypatch,
-        "attachment_claude",
-    )
-    queried = []
-    saved = []
-    model_input = []
-    memory = SimpleNamespace(
-        context_for=lambda text: queried.append(text) or "memory",
-        save_turn=lambda prompt, result: saved.append((prompt, result)),
-    )
-    monkeypatch.setattr(module, "_create_memory", lambda *args: memory)
-
-    async def query(*, prompt, options):
-        model_input.extend(await collect(prompt))
-        hook = options.hooks["UserPromptSubmit"][0].hooks[0]
-        await hook({"prompt": "SDK multimodal prompt representation"}, None, {})
-        yield module.AssistantMessage(content=[module.TextBlock(text="answer")], model="claude")
-
-    monkeypatch.setattr(module, "query", query)
-    events = asyncio.run(collect(module.invoke({"prompt": "read files", "attachments": FILES})))
-    assert events[0] == ACK
-    assert events[1] == {"event": "delta", "text": "answer"}
-    content = model_input[0]["message"]["content"]
-    assert content[0] == {"type": "text", "text": "read files"}
-    assert [block["type"] for block in content[1:]] == ["image", "document"]
-    assert [base64.b64decode(block["source"]["data"]) for block in content[1:]] == [IMAGE, PDF]
-    assert queried == ["read files"]
-    assert saved == [("read files", "answer")]
 
 
 @pytest.mark.parametrize("attachments", [None, []])
@@ -313,79 +271,3 @@ def test_conversion_rejects_modified_existing_graft():
             graft_runtime_attachments(damaged)
 
 
-def stock_responses_formatter():
-    """Run the installed SDK's pure formatter without requiring its OpenAI extra."""
-    source = (Path(strands.__file__).parent / "models" / "openai_responses.py").read_text()
-    tree = ast.parse(source)
-    nodes = [
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "_encode_media_to_data_url"
-        or isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Name)
-            and target.id
-            in ("_MAX_MEDIA_SIZE_BYTES", "_MAX_MEDIA_SIZE_LABEL", "_DEFAULT_MIME_TYPE")
-            for target in node.targets
-        )
-    ]
-    model = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "OpenAIResponsesModel"
-    )
-    model.bases = []
-    model.body = [
-        node
-        for node in model.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_format_request_message_content"
-    ]
-    namespace = {"base64": base64, "mimetypes": mimetypes}
-    code = "from __future__ import annotations\n" + ast.unparse(
-        ast.Module(body=[*nodes, model], type_ignores=[])
-    )
-    exec(compile(code, "stock_responses_formatter.py", "exec"), namespace)
-    return namespace["OpenAIResponsesModel"]
-
-
-def test_mantle_formatter_preserves_pdf_image_and_text():
-    base = stock_responses_formatter()
-    model = helper_namespace()["_launchpad_mantle_model_class"](base)
-    content = helper_namespace()["_launchpad_strands_input"]("read", FILES)
-    pdf = model._format_request_message_content(content[-1])
-    assert pdf == {
-        "type": "input_file",
-        "filename": "attachment-2.pdf",
-        "file_data": "data:application/pdf;base64," + FILES[1]["data"],
-    }
-    for block, role in ((content[0], "user"), (content[0], "assistant"), (content[1], "user")):
-        assert model._format_request_message_content(block, role=role) == (
-            base._format_request_message_content(block, role=role)
-        )
-
-
-@pytest.mark.parametrize("model_class", ["OpenAIResponsesModel", "MantleCompatResponsesModel"])
-def test_converted_mantle_model_graft_preserves_constructor_and_is_idempotent(model_class):
-    source = f"""def load_model():
-    return {model_class}(model_id="original", params={{"store": False}})
-"""
-    grafted = graft_mantle_attachment_model(source)
-    assert graft_mantle_attachment_model(grafted) == grafted
-    captured = {}
-
-    class Base(stock_responses_formatter()):
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    namespace = {model_class: Base}
-    exec(compile(grafted, "model_load.py", "exec"), namespace)
-    model = namespace["load_model"]()
-    block = helper_namespace()["_launchpad_strands_input"]("read", FILES)[-1]
-    assert model._format_request_message_content(block)["file_data"].endswith(FILES[1]["data"])
-    assert captured == {"model_id": "original", "params": {"store": False}}
-
-
-def test_converted_mantle_model_graft_rejects_unknown_model():
-    with pytest.raises(ConversionError, match="constructor"):
-        graft_mantle_attachment_model("def load_model():\n    return UnknownModel()\n")

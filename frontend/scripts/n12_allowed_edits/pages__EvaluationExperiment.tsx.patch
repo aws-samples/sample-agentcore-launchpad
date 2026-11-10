@@ -1,0 +1,49 @@
+diff --git a/frontend/src/pages/EvaluationExperiment.tsx b/frontend/src/pages/EvaluationExperiment.tsx
+index 95aca8a0..1e1e9671 100644
+--- a/frontend/src/pages/EvaluationExperiment.tsx
++++ b/frontend/src/pages/EvaluationExperiment.tsx
+@@ -233,7 +233,7 @@ function ConfigurationExperimentView() {
+   // 3rd-party provider reflecting on the pinned run with a Bedrock model. The
+   // list comes from the backend so a new provider needs no console change.
+   const [recProviders, setRecProviders] = useState<RecommendProviderInfo[]>([]);
+-  const [recProviderId, setRecProviderId] = useState("agentcore");
++  const [recProviderId, setRecProviderId] = useState("gepa_lite");
+   // "" = the provider's default; CUSTOM_MODEL_OPTION reveals the free-text input
+   const [recModelChoice, setRecModelChoice] = useState("");
+   const [recModelCustom, setRecModelCustom] = useState("");
+@@ -475,7 +475,7 @@ function ConfigurationExperimentView() {
+     const prefs = exp?.id ? loadRecPrefs(exp.id) : {};
+     const lastRec = exp?.artifacts.recommend;
+     setRecSourceRunId(prefs.source ?? lastRec?.trace_source?.run_id ?? "");
+-    setRecProviderId(prefs.provider ?? lastRec?.provider ?? lastRec?.tool_provider ?? "agentcore");
++    setRecProviderId(prefs.provider ?? lastRec?.provider ?? lastRec?.tool_provider ?? "gepa_lite");
+     setRecModelChoice(prefs.model ?? "");
+     setRecModelCustom(prefs.customModel ?? "");
+     setConfirmCleanup(false);
+@@ -1108,7 +1108,7 @@ function ConfigurationExperimentView() {
+     }
+   };
+   const recProvider = recProviders.find((p) => p.id === recProviderId)
+-    ?? recProviders.find((p) => p.id === "agentcore");
++    ?? recProviders.find((p) => p.id === "gepa_lite");
+   const recProviderIsAws = !recProvider || recProvider.id === "agentcore";
+   const recModelId = recModelChoice === CUSTOM_MODEL_OPTION
+     ? recModelCustom.trim()
+@@ -1199,7 +1199,7 @@ function ConfigurationExperimentView() {
+             id="rec-provider-select"
+             data-testid="rec-provider-select"
+             className="input mono"
+-            value={recProvider?.id ?? "agentcore"}
++            value={recProvider?.id ?? "gepa_lite"}
+             onChange={(e) => {
+               setRecProviderId(e.target.value);
+               setRecModelChoice("");
+@@ -1248,7 +1248,7 @@ function ConfigurationExperimentView() {
+                   data-testid="rec-model-custom"
+                   className="input mono"
+                   style={{ marginTop: 6 }}
+-                  placeholder="global.anthropic.claude-sonnet-5"
++                  placeholder="global.zai.glm-5.3"
+                   value={recModelCustom}
+                   onChange={(e) => {
+                     setRecModelCustom(e.target.value);

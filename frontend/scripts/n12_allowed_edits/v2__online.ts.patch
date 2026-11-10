@@ -1,0 +1,13 @@
+diff --git a/frontend/src/v2/online.ts b/frontend/src/v2/online.ts
+index 5ef04ddb..57b03812 100644
+--- a/frontend/src/v2/online.ts
++++ b/frontend/src/v2/online.ts
+@@ -42,7 +42,7 @@ export const MAX_FILTERS = 5;
+ const FILTER_KEY_RE = /^[a-zA-Z0-9._-]{1,256}$/;
+ const SAMPLING_DEFAULT: Record<OnlineEvalMode, string> = { scores: "10", insights: "100" };
+ /** Agents an online config can watch (an imported runtime has no platform spans). */
+-const ELIGIBLE_METHODS = new Set<AgentInfo["method"]>(["zip_runtime", "studio", "container", "harness", "byoc"]);
++const ELIGIBLE_METHODS = new Set<AgentInfo["method"]>(["zip_runtime", "studio", "harness", "byoc"]);
+ 
+ export const eligibleAgent = (a: AgentInfo) => a.status === "active" && ELIGIBLE_METHODS.has(a.method);
+ export const isTransient = (row: OnlineEvalConfigRow) => TRANSIENT.has(row.status ?? "");

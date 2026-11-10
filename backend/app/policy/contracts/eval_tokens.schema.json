@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/eval_tokens/v2",
+  "title": "D5 eval / canary principal token s3://<artifacts>/evaluations/<job_id>/tokens.json (I9 v2, amendment 10: ONE hub-signed System::\"eval\" | \"canary\" token per job); bearer material: never logged, deleted at the job's terminal state",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "launchpad.policy.eval-tokens/2"
+    },
+    "job_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "written_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "token": {
+      "type": "string",
+      "maxLength": 4096,
+      "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+    }
+  },
+  "required": [
+    "schema",
+    "job_id",
+    "written_at",
+    "token"
+  ],
+  "additionalProperties": false
+}

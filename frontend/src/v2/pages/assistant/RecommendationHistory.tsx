@@ -48,7 +48,9 @@ export function RecommendationHistory({
         <div key={rec.id} className="v2-assistant-sub-row" data-testid="v2-assistant-next-rec-history-row">
           <span className="mono">{t("assistantNext.run.runLine", { id: shortId(rec.run_id) })}</span>
           <span>{rec.kind === "system_prompt" ? t("expPage.recTypePrompt") : t("expPage.recTypeTools")}</span>
-          <Tag tone={STATUS_TONE[rec.status] ?? "gray"}>{rec.status}</Tag>
+          <Tag tone={STATUS_TONE[rec.status] ?? "gray"} title={rec.status}>
+            {t(`v2.rec.status.${rec.status}`, { defaultValue: rec.status })}
+          </Tag>
           {rec.accepted && (
             <Tag tone="green" dot>
               {t("assistantNext.recommend.historyAccepted", { v: rec.accepted.previous_version ?? "—" })}

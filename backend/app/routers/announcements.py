@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 from sqlalchemy.orm import Session
 
-from app.core.db import get_db
+from app.core.db import SQLITE_MAX_INT, get_db
 from app.routers.auth import Identity, require_identity
 from app.services import announcements
 
@@ -80,7 +80,7 @@ class AnnouncementEdit(AnnouncementContent):
 @router.get("")
 def published(
     limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=SQLITE_MAX_INT),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     return announcements.list_announcements(db, admin=False, limit=limit, offset=offset)
@@ -89,7 +89,7 @@ def published(
 @router.get("/manage")
 def managed(
     limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=SQLITE_MAX_INT),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     return announcements.list_announcements(db, admin=True, limit=limit, offset=offset)
@@ -149,7 +149,7 @@ def unpublish(
 @router.delete("/{announcement_id}")
 def delete(
     announcement_id: str,
-    expected_revision: int = Query(ge=1),
+    expected_revision: int = Query(ge=1, le=SQLITE_MAX_INT),
     db: Session = Depends(get_db),
 ) -> dict[str, bool]:
     return announcements.delete(db, announcement_id, expected_revision)

@@ -1,0 +1,84 @@
+{
+  "stacks": [
+    "launchpad-base",
+    "launchpad-memory"
+  ],
+  "launchpad-base": {
+    "resources": {
+      "AgentBuilder68DAC9CB": {
+        "type": "AWS::CodeBuild::Project",
+        "name": "launchpad-agent-builder"
+      },
+      "AgentExecutionRole8AD76C36": {
+        "type": "AWS::IAM::Role",
+        "name": "launchpad-agent-execution-role-cn-northwest-1"
+      },
+      "AgentsRepoC5F881FE": {
+        "type": "AWS::ECR::Repository",
+        "name": "launchpad-agents"
+      },
+      "ArtifactsBucket2AAC5544": {
+        "type": "AWS::S3::Bucket",
+        "name": "launchpad-artifacts-111111111111-cn-northwest-1"
+      },
+      "GatewayRole0A0569CA": {
+        "type": "AWS::IAM::Role",
+        "name": "launchpad-gateway-role-cn-northwest-1"
+      },
+      "HrDatabaseCB6A2375": {
+        "type": "AWS::Lambda::Function",
+        "name": "launchpad-hr-database"
+      },
+      "OfficeFacts563FC41A": {
+        "type": "AWS::Lambda::Function",
+        "name": "launchpad-office-facts"
+      },
+      "OfficeFactsApi3847A9A0": {
+        "type": "AWS::ApiGateway::RestApi",
+        "name": "launchpad-office-facts"
+      },
+      "OfficeFactsApiOfficeFactsKey0CC9575F": {
+        "type": "AWS::ApiGateway::ApiKey",
+        "name": "launchpad-office-facts"
+      },
+      "OfficeFactsApiOfficeFactsPlan9DE212B0": {
+        "type": "AWS::ApiGateway::UsagePlan",
+        "name": "launchpad-office-facts"
+      }
+    },
+    "exports": {
+      "ExportsOutputFnGetAttAgentExecutionRole8AD76C36ArnC6916E3F": "launchpad-base:ExportsOutputFnGetAttAgentExecutionRole8AD76C36ArnC6916E3F",
+      "ExportsOutputFnGetAttArtifactsBucket2AAC5544ArnD57FAE19": "launchpad-base:ExportsOutputFnGetAttArtifactsBucket2AAC5544ArnD57FAE19",
+      "ExportsOutputRefArtifactsBucket2AAC55442DB5E6C9": "launchpad-base:ExportsOutputRefArtifactsBucket2AAC55442DB5E6C9"
+    }
+  },
+  "launchpad-memory": {
+    "resources": {
+      "MemoryAdminRoleD8CA3FB1": {
+        "type": "AWS::IAM::Role",
+        "name": "launchpad-memory-admin-cn-northwest-1"
+      },
+      "MemoryDeadLetterQueue6121088F": {
+        "type": "AWS::SQS::Queue",
+        "name": "launchpad-memory-extract-dlq-cn-northwest-1"
+      },
+      "MemoryDomain252B4750": {
+        "type": "AWS::OpenSearchService::Domain",
+        "name": "lp-memory-cn-northwest-1"
+      },
+      "MemoryExtractor5AC73336": {
+        "type": "AWS::Lambda::Function",
+        "name": "launchpad-memory-extractor-cn-northwest-1"
+      },
+      "MemoryExtractorRole52A53226": {
+        "type": "AWS::IAM::Role",
+        "name": "launchpad-memory-extractor-cn-northwest-1"
+      },
+      "MemoryQueue4814398B": {
+        "type": "AWS::SQS::Queue",
+        "name": "launchpad-memory-extract-cn-northwest-1"
+      }
+    },
+    "exports": {}
+  }
+}

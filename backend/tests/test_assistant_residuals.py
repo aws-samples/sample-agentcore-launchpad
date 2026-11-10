@@ -2,7 +2,7 @@
 """SE-039 residual regressions (host review 2): versioned session cookie, principal
 substitution, winner re-read, content-event provenance, whole-ASGI disconnect
 cleanup, stale-claim takeover without publication, ingress/normalized byte caps,
-durable job eligibility, pinned Harness stage execution and existing-only KB gateway.
+durable job eligibility and pinned Harness stage execution.
 Hermetic: temp ledger, sockets refused, AWS client factory refused."""
 
 import asyncio
@@ -17,14 +17,11 @@ from fastapi.testclient import TestClient
 from app.assistant import proposal as contract
 from app.assistant import service
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
-from app.deployer import harness as harness_deployer
 from app.deployer import pipeline
-from app.deployer.pipeline import StageContext
 from app.models.assistant import AssistantConversation, AssistantProposal
-from app.models.ledger import Agent, Job, User, Workspace
+from app.models.ledger import ChatSession, Job, User, Workspace
 from app.routers import auth as auth_module
-from app.services import kb_gateway as kbgw
-from app.services import observability, registry_console
+from app.services import observability
 from app.services import users as users_service
 from app.services.workspace import workspace_context
 
@@ -33,10 +30,7 @@ from .test_assistant import (  # noqa: F401 — shared hermetic fixtures + helpe
     BASE,
     CATALOG,
     GW_ARN,
-    KB_AUTHORIZER,
-    KB_GATEWAY_LIVE,
     MEMBER_CREDS,
-    OAUTH,
     RESOURCES,
     VALID_PROPOSAL,
     _activate,
@@ -57,10 +51,10 @@ from .test_assistant import (  # noqa: F401 — shared hermetic fixtures + helpe
     no_network,
     no_real_deploy,
     ready,
+    sse_lines,
 )
 
 _REAL_EXECUTE = pipeline.execute_deploy_job
-
 
 # ---------------------------------------------------------------------------
 # versioned cookie bound to the immutable user id
@@ -114,6 +108,28 @@ def test_principal_substitution_during_the_catalog_read_is_refused(gated, harnes
     cid = _open(member)
     r1 = _propose(member, harness, cid)
     old_id = ids[MEMBER_CREDS["username"]]
+    # the service-level equality check, independent of the cookie: the re-resolved
+    # approver is another principal under the same username
+    db = SessionLocal()
+    try:
+        conv = db.get(AssistantConversation, cid)
+        row = db.get(Workspace, DEFAULT_WORKSPACE_ID)
+        from app.routers.auth import Identity
+
+        other = Identity(username=MEMBER_CREDS["username"], role="member", user_id="f" * 32)
+        with pytest.raises(Exception) as exc:
+            service.approve_proposal(
+                db, conv, row, workspace_context(row),
+                Identity(username=MEMBER_CREDS["username"], role="member", user_id=old_id),
+                revision=1, content_hash=r1["content_hash"],
+                recheck=lambda s: (other, s.get(Workspace, DEFAULT_WORKSPACE_ID)),
+            )
+        assert getattr(exc.value, "code", "") == "assistant.conversation_not_found"
+        assert db.query(AssistantProposal).one().status == "draft"
+    finally:
+        db.close()
+    assert _count(Job) == 0
+
     original = service.fetch_catalog
     swapped: dict = {}
 
@@ -131,27 +147,13 @@ def test_principal_substitution_during_the_catalog_read_is_refused(gated, harnes
 
     monkeypatch.setattr(service, "fetch_catalog", swap_account)
     res = _approve(member, cid, r1)
-    assert res.status_code in (401, 404), res.text  # cookie names a gone id, or not owner
+    # cookie names a gone id, not the owner, or the conversation left with the account
+    # (N-ARCH-obs6 cascade) — never a 500 and never an approval
+    assert res.status_code in (401, 404), res.text
     assert _count(Job) == 0 and swapped["new_id"] != old_id
-    # and the service-level equality check, independent of the cookie
-    monkeypatch.setattr(service, "fetch_catalog", original)
     db = SessionLocal()
     try:
-        conv = db.get(AssistantConversation, cid)
-        row = db.get(Workspace, DEFAULT_WORKSPACE_ID)
-        from app.routers.auth import Identity
-
-        other = Identity(username=MEMBER_CREDS["username"], role="member",
-                         user_id=swapped["new_id"])
-        with pytest.raises(Exception) as exc:
-            service.approve_proposal(
-                db, conv, row, workspace_context(row),
-                Identity(username=MEMBER_CREDS["username"], role="member", user_id=old_id),
-                revision=1, content_hash=r1["content_hash"],
-                recheck=lambda s: (other, s.get(Workspace, DEFAULT_WORKSPACE_ID)),
-            )
-        assert getattr(exc.value, "code", "") == "assistant.conversation_not_found"
-        assert db.query(AssistantProposal).one().status == "draft"
+        assert db.query(AssistantProposal).filter_by(status="approved").count() == 0
     finally:
         db.close()
 
@@ -193,16 +195,18 @@ def test_losing_exact_approval_with_drifted_catalog_returns_the_winners_outcome(
     slow = results["slow"]
     assert slow.status_code == 200 and slow.json()["job_id"] == fast.json()["job_id"]
     assert _count(Job) == 1
-    # a DIFFERENT unapproved revision still cannot ride on the winner
+    # a DIFFERENT unapproved revision still cannot ride on the winner — and (N16-obs40) is
+    # refused as a second creation BEFORE the catalog is read at all
     r2 = client.put(f"{BASE}/conversations/{cid}/proposal",
                     json={"content": {**VALID_PROPOSAL, "name": "hr-two"}}).json()["proposal"]
-    monkeypatch.setattr(service, "fetch_catalog", lambda ws: (_ for _ in ()).throw(
-        AssertionError("should refuse before catalog")) if False else _catalog())
-    drifted = _catalog()
-    drifted["tools"][1]["url"] = "https://mcp.deepwiki.example/OTHER"
-    monkeypatch.setattr(service, "fetch_catalog", lambda ws: drifted)
+
+    def never(ws):
+        raise AssertionError("a second creation approval must refuse before the catalog read")
+
+    monkeypatch.setattr(service, "fetch_catalog", never)
     res = _approve(client, cid, r2)
-    assert res.status_code == 409 and res.json()["code"] == "assistant.bindings_changed"
+    assert res.status_code == 409 and res.json()["code"] == "assistant.already_approved"
+    assert res.json()["detail"]["job_id"] == fast.json()["job_id"]
     assert _count(Job) == 1
 
 
@@ -223,8 +227,10 @@ def test_trace_detail_hides_a_private_session_named_only_by_a_content_event(
             "startTimeUnixNano": "1", "endTimeUnixNano": "2", "durationNano": "1",
             "attributes": {"gen_ai.system": "x"},  # NO session.id on the span
             "resource": {"attributes": {
+                "service.name": "arch.DEFAULT",
                 "aws.log.group.names": "/aws/bedrock-agentcore/runtimes/r"}}}
-    event = {"spanId": "s1", "attributes": {"session.id": sid},
+    event = {"traceId": trace_id, "spanId": "s1", "attributes": {"session.id": sid},
+             "resource": {"attributes": {"service.name": "arch.DEFAULT"}},
              "body": {"input": {"messages": [{"role": "user", "content": "CUSTOMER_SECRET_039"}]}}}
 
     def fake_queries(queries, hours, **kw):
@@ -234,6 +240,9 @@ def test_trace_detail_hides_a_private_session_named_only_by_a_content_event(
                 out[key] = [{"@message": json.dumps(span)}]
             elif key == "events":
                 out[key] = [{"@message": json.dumps(event)}]
+            elif key == "ownership":
+                out[key] = [{"service": "arch.DEFAULT", "record_count": "2",
+                             "attributed_count": "2", "service_count": "1"}]
             else:
                 out[key] = []
         return out
@@ -247,6 +256,11 @@ def test_trace_detail_hides_a_private_session_named_only_by_a_content_event(
     assert res.status_code == 404 and "CUSTOMER_SECRET_039" not in res.text
     # an ordinary public trace (no private sid anywhere) is unaffected
     event["attributes"]["session.id"] = "public-session-1234567890"
+    # Public means attributable to this workspace, not an arbitrary account session.
+    with SessionLocal() as db:
+        db.add(ChatSession(agent_id=_preset, session_id="public-session-1234567890",
+                           workspace_id=DEFAULT_WORKSPACE_ID, actor_id="public"))
+        db.commit()
     observability.reset_cache()
     assert other.get(f"/api/observability/traces/{trace_id}").status_code == 200
 
@@ -298,11 +312,25 @@ def _asgi_turn(app, cid: str, *, spec_version: str, fail_send_after: int | None,
     return chunks
 
 
+def _wait_turn_finished(cid: str, timeout: float = 15.0) -> None:
+    """N-ARCH-obs15: a detached turn finishes on its driver thread; wait for it."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        live = service.live_run(cid)
+        if live is None and not any(t.name.startswith("assistant-turn-")
+                                    for t in threading.enumerate()):
+            return
+        time.sleep(0.02)
+    raise AssertionError("the detached turn did not finish within the budget")
+
+
 @pytest.mark.parametrize("mode", ["asgi-2.0-disconnect", "asgi-2.4-send-error"])
 def test_whole_asgi_disconnect_finalizes_the_turn_deterministically(client, ready, harness, mode):
-    """After the first delta the client goes away. Without any gc.collect the upstream
-    stream is closed, the partial answer + interrupted row are persisted, and the
-    claim is released — by the response's own cleanup, in both ASGI paths."""
+    """After the first delta the client goes away. Without any gc.collect the response's
+    own cleanup detaches the subscriber in both ASGI paths — and (N-ARCH-obs15) the turn
+    itself keeps running to its terminal row: the full reply and its proposal are
+    persisted exactly as for a watched turn, the claim is released and the upstream is
+    closed by the turn's own finalizer. No ``interrupted`` row any more."""
     import gc
 
     gc.disable()
@@ -318,17 +346,24 @@ def test_whole_asgi_disconnect_finalizes_the_turn_deterministically(client, read
             chunks = _asgi_turn(client.app, cid, spec_version="2.4", fail_send_after=2,
                                 disconnect_after=None)
         assert entered.is_set() and chunks  # the data-plane call really started
+        _wait_turn_finished(cid)
         db = SessionLocal()
         try:
             conv = db.get(AssistantConversation, cid)
             assert conv.active_turn is None and conv.active_turn_token is None
-            roles = [m.role for m in service._messages(db, cid)]
-            assert roles[0] == "user" and roles[-1] == "error"
-            assert "interrupted" in service._messages(db, cid)[-1].text
-            assert service.latest_proposal(db, cid) is None  # nothing from a cut reply
+            msgs = service._messages(db, cid)
+            # adapted (ruled change): the turn completed — no interrupted marker
+            assert [m.role for m in msgs] == ["user", "assistant"]
+            assert msgs[1].text.endswith(_block(VALID_PROPOSAL))
+            latest = service.latest_proposal(db, cid)
+            assert latest is not None and latest.status == "draft" and latest.revision == 1
+            assert latest.content["name"] == VALID_PROPOSAL["name"]
+            events = service.turn_events(db, cid, 1)
+            assert events[-1].event == "done" and [e.seq for e in events] == list(
+                range(1, len(events) + 1))
         finally:
             db.close()
-        assert harness.streams[0].closed
+        assert harness.streams[0].closed  # by the turn's finalizer, not by the disconnect
     finally:
         gc.enable()
 
@@ -341,21 +376,19 @@ def test_cancel_unblocks_a_blocked_upstream_read(ready, harness):
     class Blocking:
         closed = False
 
-        def __iter__(self):
-            return self
-
-        def __next__(self):
+        def iter_lines(self, chunk_size=None):
             if self.closed:
-                raise StopIteration
+                return
             release.wait(timeout=10)
-            raise StopIteration
+            yield from ()
 
         def close(self):
             self.closed = True
             release.set()
 
     blocking = Blocking()
-    harness.invoke_harness = lambda **kw: {"stream": blocking}
+    harness.invoke_agent_runtime = lambda **kw: {"response": blocking,
+                                                 "contentType": "text/event-stream"}
     db = SessionLocal()
     try:
         row = db.get(Workspace, DEFAULT_WORKSPACE_ID)
@@ -526,176 +559,8 @@ def test_stale_retry_cannot_revive_a_failed_job(client, ready, harness, monkeypa
 
 
 # ---------------------------------------------------------------------------
-# pinned Harness stage execution + existing-only KB gateway
+# pinned Harness stage execution
 # ---------------------------------------------------------------------------
-
-
-def _pin(content=VALID_PROPOSAL, catalog=None):
-    parsed = contract.parse_content(content)[0]
-    return {"content": content,
-            "bindings": contract.resource_bindings(parsed, catalog or _catalog())}
-
-
-def test_stage_request_uses_the_pinned_gateway_auth_and_memory_not_the_live_workspace():
-    pin = _pin()
-    spec = contract.to_agent_spec(contract.parse_content(VALID_PROPOSAL)[0], _catalog())
-    drifted_ws = workspace_context(Workspace(
-        id="default", name="d", account_id="111122223333", region="us-west-2",
-        bootstrap_status="ready",
-        resources={**RESOURCES, "memory_arn": "arn:aws:x:memory/OTHER",
-                   "kb_gateway_arn": "arn:aws:x:gateway/OTHER", "oauth_provider_arn": "arn:other"}))
-    params = harness_deployer._build_live_params(spec, drifted_ws, pin)
-    gateways = [t for t in params["tools"] if t["type"] == "agentcore_gateway"]
-    assert {g["config"]["agentCoreGateway"]["gatewayArn"] for g in gateways} == {
-        GW_ARN, RESOURCES["kb_gateway_arn"]}  # reviewed ARNs, not the drifted map
-    hr = next(g for g in gateways if g["config"]["agentCoreGateway"]["gatewayArn"] == GW_ARN)
-    assert hr["config"]["agentCoreGateway"]["outboundAuth"] == OAUTH
-    kb = next(g for g in gateways if g["config"]["agentCoreGateway"]["gatewayArn"]
-              == RESOURCES["kb_gateway_arn"])
-    assert kb["config"]["agentCoreGateway"]["outboundAuth"]["oauth"]["providerArn"] == (
-        RESOURCES["oauth_provider_arn"])
-    assert params["memory"] == {"agentCoreMemoryConfiguration": {"arn": RESOURCES["memory_arn"]}}
-    disabled = contract.parse_content({**VALID_PROPOSAL, "memory": "disabled"})[0]
-    params = harness_deployer._build_live_params(
-        contract.to_agent_spec(disabled, _catalog()), drifted_ws,
-        _pin({**VALID_PROPOSAL, "memory": "disabled"}))
-    assert params["memory"] == {"disabled": {}}
-
-
-def test_pinned_verification_refuses_live_auth_or_skill_drift_before_the_write(monkeypatch):
-    pin = _pin()
-    spec = contract.to_agent_spec(contract.parse_content(VALID_PROPOSAL)[0], _catalog())
-    ws = workspace_context(Workspace(id="default", name="d", account_id="111122223333",
-                                     region="us-west-2", bootstrap_status="ready",
-                                     resources=dict(RESOURCES)))
-    ctx = StageContext(agent_id="a", deployment_id="d", job_id="j", workspace=ws)
-    live_auth = {"oauth": {**OAUTH["oauth"]}}
-    monkeypatch.setattr(registry_console, "resolve_gateway_attachments", lambda tools, w: [
-        {"gateway_id": "gw-1", "gateway_arn": GW_ARN, "outbound_auth": live_auth}])
-    monkeypatch.setattr(service, "skill_content_snapshot",
-                        lambda w, path: {"content_digest": "d" * 64, "object_count": 3})
-    harness_deployer._verify_pinned_resources(ctx, spec, pin, skills=True)  # identical → ok
-    live_auth["oauth"] = {**OAUTH["oauth"], "providerArn": "arn:aws:other-provider"}  # B ≠ A
-    with pytest.raises(RuntimeError, match="live ARN/outbound auth differ"):
-        harness_deployer._verify_pinned_resources(ctx, spec, pin, skills=True)
-    live_auth["oauth"] = dict(OAUTH["oauth"])
-    monkeypatch.setattr(service, "skill_content_snapshot",
-                        lambda w, path: {"content_digest": "e" * 64, "object_count": 3})
-    with pytest.raises(RuntimeError, match="no longer matches the reviewed content"):
-        harness_deployer._verify_pinned_resources(ctx, spec, pin, skills=True)
-    # the deploy stage consults the same guard on its final request
-    monkeypatch.setattr(service, "skill_content_snapshot",
-                        lambda w, path: {"content_digest": "d" * 64, "object_count": 3})
-    monkeypatch.setattr(harness_deployer, "_execution_role_arn", lambda c, a: "arn:role")
-    sent: list = []
-
-    class Control:
-        def create_harness(self, **kw):
-            sent.append(kw)
-            return {"harness": {"harnessId": "h1", "arn": "arn:h1", "harnessVersion": "1"}}
-
-    monkeypatch.setattr(harness_deployer, "control_client", lambda w: Control())
-    monkeypatch.setattr(harness_deployer.hc, "wait_harness_ready",
-                        lambda c, h: {"arn": "arn:h1", "harnessVersion": "1"})
-    monkeypatch.setattr(harness_deployer.agent_iam, "retry_iam_propagation", lambda fn, log: fn())
-    db = SessionLocal()
-    try:
-        agent = Agent(workspace_id="default", name="hr-helpdesk", method="harness",
-                      status="deploying", spec=spec.model_dump())
-        db.add(agent)
-        db.commit()
-        ctx = StageContext(agent_id=agent.id, deployment_id="d", job_id="j", workspace=ws)
-        ctx.scratch["assistant_pin"] = pin
-        ctx.scratch["mode"] = "create"
-        ctx.log = lambda m: None
-        harness_deployer._stage_deploy(ctx, agent)
-        assert len(sent) == 1
-        gw = [t for t in sent[0]["tools"] if t["type"] == "agentcore_gateway"]
-        assert gw[0]["config"]["agentCoreGateway"]["outboundAuth"] == OAUTH  # pinned A, never B
-        monkeypatch.setattr(service, "skill_content_snapshot",
-                            lambda w, path: {"content_digest": "f" * 64, "object_count": 1})
-        agent2 = Agent(workspace_id="default", name="hr-two", method="harness",
-                       status="deploying", spec={**spec.model_dump(), "name": "hr-two"})
-        db.add(agent2)
-        db.commit()
-        ctx2 = StageContext(agent_id=agent2.id, deployment_id="d2", job_id="j2", workspace=ws)
-        ctx2.scratch["assistant_pin"] = pin
-        ctx2.scratch["mode"] = "create"
-        ctx2.log = lambda m: None
-        with pytest.raises(RuntimeError, match="reviewed content"):
-            harness_deployer._stage_deploy(ctx2, agent2)
-        assert len(sent) == 1  # nothing was sent for the drifted skill
-    finally:
-        db.close()
-
-
-def test_assistant_kb_mount_uses_an_existing_ready_gateway_and_never_creates_one(monkeypatch):
-    class Control:
-        def __init__(self, status="READY", arn=RESOURCES["kb_gateway_arn"], missing=False):
-            self.status, self.arn, self.missing = status, arn, missing
-            self.targets: list = []
-
-        def list_gateways(self, **kw):
-            raise AssertionError("assistant KB mount must never list-and-create a gateway")
-
-        def create_gateway(self, **kw):
-            raise AssertionError("assistant KB mount must never create a gateway")
-
-        url = "https://kb.example/mcp"
-        authorizer_type = "CUSTOM_JWT"
-        authorizer = KB_AUTHORIZER
-
-        def get_gateway(self, gatewayIdentifier):
-            if self.missing:
-                raise RuntimeError("ResourceNotFoundException")
-            return {"gatewayId": gatewayIdentifier, "gatewayArn": self.arn,
-                    "gatewayUrl": self.url, "authorizerType": self.authorizer_type,
-                    "authorizerConfiguration": self.authorizer, "status": self.status}
-
-    ws = workspace_context(Workspace(id="default", name="d", account_id="111122223333",
-                                     region="us-west-2", bootstrap_status="ready",
-                                     resources=dict(RESOURCES)))
-    gw = kbgw.lookup_existing_kb_gateway(Control(), ws, expected_arn=RESOURCES["kb_gateway_arn"])
-    assert gw["id"] == "kbgw-1" and gw["url"] == "https://kb.example/mcp"
-    for control, needle in ((Control(status="CREATING"), "not READY"),
-                            (Control(missing=True), "could not be read"),
-                            (Control(arn="arn:aws:x:gateway/other"), "no longer the one")):
-        with pytest.raises(RuntimeError, match=needle):
-            kbgw.lookup_existing_kb_gateway(control, ws, expected_arn=RESOURCES["kb_gateway_arn"])
-    bare = workspace_context(Workspace(id="default", name="d", account_id="111122223333",
-                                       region="us-west-2", bootstrap_status="ready",
-                                       resources={k: v for k, v in RESOURCES.items()
-                                                  if k != "kb_gateway_id"}))
-    with pytest.raises(RuntimeError, match="manual prerequisite"):
-        kbgw.lookup_existing_kb_gateway(Control(), bare)
-    # the real provision stage with a pin: existing lookup + target mount, no creation
-    control = Control()
-    monkeypatch.setattr(harness_deployer, "control_client", lambda w: control)
-    monkeypatch.setattr(harness_deployer.agent_iam, "provision_execution_role",
-                        lambda *a, **k: ("arn:aws:iam::1:role/x", "role ok"))
-    monkeypatch.setattr(harness_deployer.kbgw, "ensure_retrieve_target",
-                        lambda c, gid, kb_id, name, desc: control.targets.append(
-                            ("retrieve", gid, kb_id)))
-    monkeypatch.setattr(harness_deployer.kbgw, "sync_agentic_target",
-                        lambda c, gid, name, kbs: control.targets.append(("agentic", gid, name)))
-    spec = contract.to_agent_spec(contract.parse_content(VALID_PROPOSAL)[0], _catalog())
-    agent = Agent(id="a1", workspace_id="default", name="hr-helpdesk", method="harness",
-                  status="deploying", spec=spec.model_dump())
-    ctx = StageContext(agent_id="a1", deployment_id="d", job_id="j", workspace=ws)
-    ctx.scratch["assistant_pin"] = _pin()
-    ctx.log = lambda m: None
-    result = harness_deployer._stage_provision(ctx, agent)
-    assert "kb targets ready" in result.detail
-    assert control.targets == [("retrieve", "kbgw-1", "KB123ABC"),
-                               ("agentic", "kbgw-1", "hr-helpdesk")]
-    kb_tool = ctx.scratch["create_params"]["tools"][-1]["config"]["agentCoreGateway"]
-    assert kb_tool["gatewayArn"] == RESOURCES["kb_gateway_arn"]
-    # gateway gone at provision time → actionable failure, still no creation
-    control.missing = True
-    with pytest.raises(RuntimeError, match="could not be read"):
-        harness_deployer._stage_provision(ctx, agent)
-    # ordinary (non-assistant) agents keep the ensure helper — unchanged behaviour
-    assert harness_deployer.kbgw.ensure_kb_gateway_persisted is kbgw.ensure_kb_gateway_persisted
 
 
 def test_pipeline_entry_seeds_the_pin_for_the_stages(client, ready, harness, monkeypatch):
@@ -710,7 +575,7 @@ def test_pipeline_entry_seeds_the_pin_for_the_stages(client, ready, harness, mon
 
     monkeypatch.setattr(pipeline, "get_method", lambda name: {"generate": capture_generate})
     _REAL_EXECUTE(body["job_id"], resume=False)
-    assert seen["pin"]["bindings"]["resources"]["gateways"]["gw-1"]["outbound_auth"] == OAUTH
+    assert seen["pin"]["bindings"]["resources"]["gateways"]["gw-1"]["auth_type"] == "aws_iam"
     assert seen["pin"]["revision"] == 1
 
 
@@ -726,11 +591,16 @@ def test_provenance_covers_nested_resource_attrs_and_merged_multi_sid_events(
     cid = _open(member)
     harness.reply("private CUSTOMER_SECRET_HOST")
     sid = _turn(member, cid, "workshop")[0][1]["session_id"]
+    with SessionLocal() as db:
+        db.add(ChatSession(agent_id=_preset, session_id="public-session-1234567890",
+                           workspace_id=DEFAULT_WORKSPACE_ID, actor_id="public"))
+        db.commit()
     trace_id = "b" * 32
     span = {"traceId": trace_id, "spanId": "s1", "name": "invoke_agent", "kind": "SERVER",
             "startTimeUnixNano": "1", "endTimeUnixNano": "2", "durationNano": "1",
             "attributes": {"gen_ai.system": "x"},
             "resource": {"attributes": {
+                "service.name": "arch.DEFAULT",
                 "aws.log.group.names": "/aws/bedrock-agentcore/runtimes/r"}}}
     variants = {
         "nested-resource-attrs": [
@@ -750,11 +620,18 @@ def test_provenance_covers_nested_resource_attrs_and_merged_multi_sid_events(
             for key in queries:
                 out[key] = ([{"@message": json.dumps(span)}] if key == "spans"
                             else [{"@message": json.dumps(e)} for e in events]
-                            if key == "events" else [])
+                            if key == "events" else
+                            [{"service": "arch.DEFAULT", "record_count": "2",
+                              "attributed_count": "2", "service_count": "1"}]
+                            if key == "ownership" else [])
             return out
         return fake_queries
 
     for name, events in variants.items():
+        for event in events:
+            event["traceId"] = trace_id
+            attrs = event.setdefault("resource", {}).setdefault("attributes", {})
+            attrs["service.name"] = "arch.DEFAULT"
         monkeypatch.setattr(observability, "run_insights_queries", make_queries(events))
         observability.reset_cache()
         owner = member.get(f"/api/observability/traces/{trace_id}")
@@ -768,8 +645,10 @@ def test_disconnect_while_the_upstream_read_blocks_is_cleaned_up_within_budget(
     client, ready, harness, mode
 ):
     """One delta, then the next upstream read BLOCKS. The response's own disconnect
-    handling must close the upstream (unblocking the read) BEFORE waiting for the
-    worker, so the whole request returns, persists and releases within the budget."""
+    handling must detach the subscriber BEFORE anything waits for the worker, so the
+    whole request returns within the budget — while (N-ARCH-obs15) the upstream stays
+    open and the turn keeps running: once the upstream delivers, the reply is persisted
+    as a completed turn and the claim released by the turn's own finalizer."""
     import gc
 
     release = threading.Event()
@@ -777,27 +656,19 @@ def test_disconnect_while_the_upstream_read_blocks_is_cleaned_up_within_budget(
     class Blocking:
         closed = False
 
-        def __init__(self):
-            self.sent = False
-
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            if not self.sent:
-                self.sent = True
-                return {"contentBlockDelta": {"delta": {"text": "first delta "}}}
+        def iter_lines(self, chunk_size=None):
+            yield from sse_lines([{"contentBlockDelta": {"delta": {"text": "first delta "}}}])
             if self.closed:
-                raise StopIteration
+                return
             release.wait(timeout=30)  # a read that never returns on its own
-            raise StopIteration
 
         def close(self):
             self.closed = True
             release.set()
 
     blocking = Blocking()
-    harness.invoke_harness = lambda **kw: {"stream": blocking}
+    harness.invoke_agent_runtime = lambda **kw: {"response": blocking,
+                                                 "contentType": "text/event-stream"}
     gc.disable()
     try:
         cid = _open(client)
@@ -810,14 +681,26 @@ def test_disconnect_while_the_upstream_read_blocks_is_cleaned_up_within_budget(
                        disconnect_after=None)
         elapsed = time.monotonic() - started
         assert elapsed < 5, elapsed  # not the worker's 30 s block, not the 5 s cancel budget
-        assert blocking.closed
+        # adapted (ruled change): the disconnect closed nothing but the subscription
+        assert not blocking.closed
+        db = SessionLocal()
+        try:
+            conv = db.get(AssistantConversation, cid)
+            assert conv.active_turn == 1 and conv.active_turn_token is not None
+            live = service.live_run(cid)
+            assert live is not None and live.turn == 1 and live.state == "running"
+        finally:
+            db.close()
+        release.set()  # the upstream finally answers; the detached turn completes
+        _wait_turn_finished(cid)
+        assert blocking.closed  # by the turn's finalizer
         db = SessionLocal()
         try:
             conv = db.get(AssistantConversation, cid)
             assert conv.active_turn is None and conv.active_turn_token is None
             msgs = service._messages(db, cid)
-            assert [m.role for m in msgs] == ["user", "assistant", "error"]
-            assert msgs[1].text == "first delta " and "interrupted" in msgs[2].text
+            assert [m.role for m in msgs] == ["user", "assistant"]
+            assert msgs[1].text == "first delta "
         finally:
             db.close()
     finally:
@@ -831,22 +714,14 @@ def test_live_local_turn_is_never_taken_over_and_tool_writes_are_fenced(client, 
     entered, release = threading.Event(), threading.Event()
 
     class Blocking:
-        def __init__(self):
-            self.step = 0
-
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            self.step += 1
-            if self.step == 1:
-                entered.set()
-                release.wait(timeout=30)
-                return {"contentBlockStart": {"start": {"toolUse": {"name": "late_tool",
-                                                                     "toolUseId": "t"}}}}
-            if self.step == 2:
-                return {"contentBlockDelta": {"delta": {"text": "done"}}}
-            raise StopIteration
+        def iter_lines(self, chunk_size=None):
+            entered.set()
+            release.wait(timeout=30)
+            yield from sse_lines([
+                {"contentBlockStart": {"start": {"toolUse": {"name": "late_tool",
+                                                             "toolUseId": "t"}}}},
+                {"contentBlockDelta": {"delta": {"text": "done"}}},
+            ])
 
         def close(self):
             release.set()
@@ -855,9 +730,9 @@ def test_live_local_turn_is_never_taken_over_and_tool_writes_are_fenced(client, 
 
     def invoke(**kw):
         calls.append(kw)
-        return {"stream": Blocking()}
+        return {"response": Blocking(), "contentType": "text/event-stream"}
 
-    harness.invoke_harness = invoke
+    harness.invoke_agent_runtime = invoke
     cid = _open(client)
     results: list = []
     t = threading.Thread(target=lambda: results.append(
@@ -893,7 +768,7 @@ def test_live_local_turn_is_never_taken_over_and_tool_writes_are_fenced(client, 
     finally:
         db.close()
     harness.reply("recovered")
-    harness.invoke_harness = harness.__class__.invoke_harness.__get__(harness)
+    harness.invoke_agent_runtime = harness.__class__.invoke_agent_runtime.__get__(harness)
     events = _turn(client, cid, "again")
     assert events[0][1]["turn"] == 10 and events[-1][0] == "done"
     # a stale token (the dead process) cannot write a tool row afterwards
@@ -944,7 +819,7 @@ def test_skill_bytes_are_snapshotted_on_the_normalized_directory_and_deployed_fr
     from app.services import workspace as workspace_mod
 
     monkeypatch.setattr(workspace_mod.WorkspaceContext, "client", lambda self, name, **k: S3())
-    ws = workspace.__class__(account_id="111122223333", region="us-west-2",
+    ws = workspace.__class__(account_id="111122223333", region="cn-northwest-1",
                              resources={**RESOURCES,
                                         "artifacts_bucket": "launchpad-artifacts-test"})
     snap = service.skill_content_snapshot(ws, "s3://bucket/skills/legacy/SKILL.md")
@@ -972,109 +847,6 @@ def test_skill_bytes_are_snapshotted_on_the_normalized_directory_and_deployed_fr
     copies[f"assistant-skills/{digest[:16]}/helper.py"] = b"tampered"
     with pytest.raises(RuntimeError, match="does not match the reviewed digest"):
         service.verify_skill_copy(ws, uri, pinned)
-
-
-def test_package_stage_switches_the_agent_and_request_to_the_immutable_copy(
-    client, ready, harness, monkeypatch
-):
-    cid = _open(client)
-    r1 = _propose(client, harness, cid)
-    body = _approve(client, cid, r1).json()
-    published: dict = {}
-
-    def fake_publish(ws, pinned):
-        published["pinned"] = pinned
-        return "s3://launchpad-artifacts-test/assistant-skills/dddddddddddddddd/"
-
-    monkeypatch.setattr(service, "publish_skill_copy", fake_publish)
-    monkeypatch.setattr(service, "verify_skill_copy", lambda ws, uri, pinned: None)
-    monkeypatch.setattr(registry_console, "resolve_gateway_attachments", lambda tools, w: [
-        {"gateway_id": "gw-1", "gateway_arn": GW_ARN, "outbound_auth": OAUTH}])
-    db = SessionLocal()
-    try:
-        job = db.get(Job, body["job_id"])
-        agent = db.get(Agent, body["agent"]["id"])
-        ws = workspace_context(db.get(Workspace, DEFAULT_WORKSPACE_ID))
-        ctx = StageContext(agent_id=agent.id, deployment_id=body["deployment_id"],
-                           job_id=job.id, workspace=ws)
-        ctx.scratch["assistant_pin"] = dict(job.payload["assistant"])
-        ctx.scratch["mode"] = "create"
-        ctx.log = lambda m: None
-        result = harness_deployer._stage_package(ctx, agent)
-        assert "immutable" in result.detail
-        assert published["pinned"]["source_prefix"] == "s3://bucket/skills/meeting-summarizer/1.0.0/"
-        db.expire_all()
-        assert db.get(Agent, agent.id).spec["skills"] == [
-            "s3://launchpad-artifacts-test/assistant-skills/dddddddddddddddd/"]
-        assert db.get(Job, job.id).payload["assistant"]["skill_copies"] == {
-            "s3://bucket/skills/meeting-summarizer/1.0.0/":
-            "s3://launchpad-artifacts-test/assistant-skills/dddddddddddddddd/"}
-        # the regenerated request loads the COPY, never the mutable source
-        assert ctx.scratch["create_params"]["skills"] == [
-            {"s3": {"uri": "s3://launchpad-artifacts-test/assistant-skills/dddddddddddddddd/"}}]
-        # and the job-entry guard accepts the copy-rewritten spec (a resumed job)
-        service.assert_job_bindings_pinned(db.get(Job, job.id).payload, db.get(Agent, agent.id), ws)
-    finally:
-        db.close()
-
-
-def test_kb_gateway_url_and_authorizer_are_pinned_and_verified_before_target_writes(monkeypatch):
-    from .test_assistant_residuals import (  # local reuse of the fake control above
-        test_assistant_kb_mount_uses_an_existing_ready_gateway_and_never_creates_one as _,  # noqa
-    )
-    pinned = _pin()["bindings"]["resources"]["kb_gateway"]
-    assert pinned["url"] == "https://kb.example/mcp" and pinned["authorizer_type"] == "CUSTOM_JWT"
-    assert pinned["authorizer"] == KB_AUTHORIZER
-
-    class Control:
-        targets: list = []
-        url = "https://kb.example/mcp"
-        authorizer_type = "CUSTOM_JWT"
-        authorizer = KB_AUTHORIZER
-
-        def list_gateways(self, **kw):
-            raise AssertionError("never list-and-create")
-
-        def create_gateway(self, **kw):
-            raise AssertionError("never create")
-
-        def get_gateway(self, gatewayIdentifier):
-            return {"gatewayId": gatewayIdentifier, "gatewayArn": RESOURCES["kb_gateway_arn"],
-                    "gatewayUrl": self.url, "authorizerType": self.authorizer_type,
-                    "authorizerConfiguration": self.authorizer, "status": "READY"}
-
-    ws = workspace_context(Workspace(id="default", name="d", account_id="111122223333",
-                                     region="us-west-2", bootstrap_status="ready",
-                                     resources=dict(RESOURCES)))
-    ok = kbgw.lookup_existing_kb_gateway(Control(), ws, expected=pinned)
-    assert ok["url"] == "https://kb.example/mcp"
-    # same id/ARN/READY but the live URL or inbound auth differ → refused
-    for attr, value in (("url", "https://other.example/mcp"), ("authorizer_type", "AWS_IAM"),
-                        ("authorizer", {"customJWTAuthorizer": {"discoveryUrl": "x",
-                                                                 "allowedClients": []}})):
-        control = Control()
-        setattr(control, attr, value)
-        with pytest.raises(RuntimeError, match="differs from the reviewed configuration"):
-            kbgw.lookup_existing_kb_gateway(control, ws, expected=pinned)
-    # through the real provision stage: drift → zero target writes, zero creations
-    control = Control()
-    control.authorizer_type = "AWS_IAM"
-    monkeypatch.setattr(harness_deployer, "control_client", lambda w: control)
-    monkeypatch.setattr(harness_deployer.agent_iam, "provision_execution_role",
-                        lambda *a, **k: ("arn:aws:iam::1:role/x", "role ok"))
-    monkeypatch.setattr(harness_deployer.kbgw, "ensure_retrieve_target",
-                        lambda *a, **k: control.targets.append("retrieve"))
-    monkeypatch.setattr(harness_deployer.kbgw, "sync_agentic_target",
-                        lambda *a, **k: control.targets.append("agentic"))
-    spec = contract.to_agent_spec(contract.parse_content(VALID_PROPOSAL)[0], _catalog())
-    agent = Agent(id="a2", workspace_id="default", name="hr-helpdesk", method="harness",
-                  status="deploying", spec=spec.model_dump())
-    ctx = StageContext(agent_id="a2", deployment_id="d", job_id="j", workspace=ws)
-    ctx.scratch["assistant_pin"] = _pin()
-    ctx.log = lambda m: None
-    with pytest.raises(RuntimeError, match="differs from the reviewed configuration"):
-        harness_deployer._stage_provision(ctx, agent)
-    assert control.targets == []
 
 
 def test_winner_branches_revalidate_the_caller_and_never_mask_auth_errors(
@@ -1165,7 +937,7 @@ def test_live_publication_is_atomic_with_the_durable_claim(client, ready, harnes
     could do anything else), age the committed claim in the ledger, send a second
     ordinary POST: the live owner is not stolen, only one Harness invocation happens."""
     gate, release = threading.Event(), threading.Event()
-    _pause_then(monkeypatch, service.hc, "new_session_id", gate, release)  # right after claim
+    _pause_then(monkeypatch, service.rt, "new_session_id", gate, release)  # right after claim
     harness.reply("first reply")
     cid = _open(client)
     results: list = []
@@ -1268,35 +1040,27 @@ def test_claim_loss_mid_stream_closes_the_upstream_and_finalizes_the_producer(
     class Stream:
         closed = False
 
-        def __init__(self):
-            self.step = 0
-
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            self.step += 1
-            if self.step == 1:
-                db = SessionLocal()
-                try:  # ownership replaced by "another process" before the tool event lands
-                    row = db.query(AssistantConversation).one()
-                    row.active_turn_token = "stolen"
-                    db.commit()
-                finally:
-                    db.close()
-                return {"contentBlockStart": {"start": {"toolUse": {"name": "t",
-                                                                     "toolUseId": "1"}}}}
+        def iter_lines(self, chunk_size=None):
+            db = SessionLocal()
+            try:  # ownership replaced by "another process" before the tool event lands
+                row = db.query(AssistantConversation).one()
+                row.active_turn_token = "stolen"
+                db.commit()
+            finally:
+                db.close()
+            yield from sse_lines([{"contentBlockStart": {"start": {
+                "toolUse": {"name": "t", "toolUseId": "1"}}}}])
             if self.closed:
-                raise StopIteration
+                return
             release.wait(timeout=30)  # would block forever without a close
-            raise StopIteration
 
         def close(self):
             self.closed = True
             release.set()
 
     stream = Stream()
-    harness.invoke_harness = lambda **kw: {"stream": stream}
+    harness.invoke_agent_runtime = lambda **kw: {"response": stream,
+                                                 "contentType": "text/event-stream"}
     cid = _open(client)
     started = time.monotonic()
     res = client.post(f"{BASE}/conversations/{cid}/turns", json={"prompt": "go"})
@@ -1318,79 +1082,125 @@ def test_claim_loss_mid_stream_closes_the_upstream_and_finalizes_the_producer(
         db.close()
 
 
-def test_kb_preflight_runs_before_any_iam_or_target_write(monkeypatch):
-    """Review-4 #4: three drift cases at the reviewed KB gateway — each refused with ZERO
-    IAM, target and Harness writes; the compliant case provisions normally."""
+# ---------------------------------------------------------------------------
+# N-ARCH-obs12: a disconnect while the Harness still streams is an INTERRUPTED turn —
+# the ledger never carries the transport's exception text, and a proposal block that
+# had already streamed completely survives the cut
+# ---------------------------------------------------------------------------
 
-    class Iam:
-        def __init__(self):
-            self.calls: list[str] = []
 
-        def __getattr__(self, name):
-            def record(**kw):
-                self.calls.append(name)
-                if name == "get_role":
-                    from botocore.exceptions import ClientError
+class _ClosableBody:
+    """An upstream body that streams ``events`` and then BLOCKS in its read. ``close()``
+    — what the response's disconnect handling does (``TurnRun.signal``) — makes that read
+    raise exactly the way urllib3 does on a closed ``_fp``: the live N-ARCH-obs12 row."""
 
-                    raise ClientError({"Error": {"Code": "NoSuchEntity"}}, "GetRole")
-                if name == "create_role":
-                    return {"Role": {"Arn": "arn:aws:iam::111122223333:role/launchpad-agent-x"}}
-                return {}
-            return record
+    def __init__(self, events):
+        self._lines = sse_lines(events)
+        self._release = threading.Event()
+        self.closed = False
 
-    class Control:
-        def __init__(self, **drift):
-            self.drift = drift
-            self.writes: list[str] = []
+    def iter_lines(self, chunk_size=None):
+        yield from self._lines
+        self._release.wait(timeout=30)
+        if self.closed:
+            raise AttributeError("'NoneType' object has no attribute 'read'")
 
-        def list_gateways(self, **kw):
-            self.writes.append("list_gateways")
-            raise AssertionError("never list-and-create")
+    def close(self):
+        self.closed = True
+        self._release.set()
 
-        def create_gateway(self, **kw):
-            self.writes.append("create_gateway")
-            raise AssertionError("never create")
 
-        def get_gateway(self, gatewayIdentifier):
-            base = {"gatewayId": gatewayIdentifier, "gatewayArn": RESOURCES["kb_gateway_arn"],
-                    "gatewayUrl": "https://kb.example/mcp", "authorizerType": "CUSTOM_JWT",
-                    "authorizerConfiguration": KB_AUTHORIZER, "status": "READY"}
-            base.update(self.drift)
-            return base
+def _deltas(text: str, size: int = 40) -> list[dict]:
+    return [{"contentBlockDelta": {"delta": {"text": text[i:i + size]}}}
+            for i in range(0, len(text), size)]
 
-        def __getattr__(self, name):  # any other AgentCore call is a write we record
-            def record(**kw):
-                self.writes.append(name)
-                return {"items": [], "targetId": "t", "status": "READY"}
-            return record
 
-    spec = contract.to_agent_spec(contract.parse_content(VALID_PROPOSAL)[0], _catalog())
-    ws = workspace_context(Workspace(id="default", name="d", account_id="111122223333",
-                                     region="us-west-2", bootstrap_status="ready",
-                                     resources=dict(RESOURCES)))
-    agent = Agent(id="a3", workspace_id="default", name="hr-helpdesk", method="harness",
-                  status="deploying", spec=spec.model_dump())
-    for drift in ({"gatewayUrl": "https://other.example/mcp"}, {"authorizerType": "AWS_IAM"},
-                  {"status": "CREATING"}):
-        control, iam = Control(**drift), Iam()
-        monkeypatch.setattr(harness_deployer, "control_client", lambda w, c=control: c)
-        ctx = StageContext(agent_id="a3", deployment_id="d", job_id="j", workspace=ws)
-        ctx.scratch["assistant_pin"] = _pin()
-        ctx.log = lambda m: None
-        with pytest.raises(RuntimeError):
-            harness_deployer._stage_provision(ctx, agent, iam_client=iam)
-        assert iam.calls == [], drift            # no IAM write of any kind
-        assert control.writes == [], drift       # no target/gateway write of any kind
-    # compliant gateway: preflight passes, then the role and targets are provisioned
-    control, iam = Control(), Iam()
-    monkeypatch.setattr(harness_deployer, "control_client", lambda w: control)
-    monkeypatch.setattr(harness_deployer.kbgw, "ensure_retrieve_target",
-                        lambda c, gid, kb_id, name, desc: control.writes.append("retrieve"))
-    monkeypatch.setattr(harness_deployer.kbgw, "sync_agentic_target",
-                        lambda c, gid, name, kbs: control.writes.append("agentic"))
-    ctx = StageContext(agent_id="a3", deployment_id="d", job_id="j", workspace=ws)
-    ctx.scratch["assistant_pin"] = _pin()
-    ctx.log = lambda m: None
-    result = harness_deployer._stage_provision(ctx, agent, iam_client=iam)
-    assert "kb targets ready" in result.detail
-    assert "create_role" in iam.calls and control.writes == ["retrieve", "agentic"]
+def _interrupted_turn(harness, streamed: str, mode: str):
+    """Stream ``streamed`` whole, then cut the turn: ``disconnect`` = the response layer
+    signals the run (client gone) while the producer is blocked upstream and its read
+    raises; ``generator_close`` = the body iterator is closed at the pending yield
+    (GeneratorExit). Returns ``(conversation_id, events, body)``."""
+    body = _ClosableBody(_deltas(streamed))
+    harness.invoke_agent_runtime = lambda **kw: {"response": body,
+                                                 "contentType": "text/event-stream"}
+    expected_deltas = len(_deltas(streamed))
+    db = SessionLocal()
+    try:
+        row = db.get(Workspace, DEFAULT_WORKSPACE_ID)
+        from app.routers.auth import Identity
+
+        identity = Identity(username="river", role="admin")
+        conv = service.create_conversation(db, row, workspace_context(row), identity, "t")
+        run = service.TurnRun()
+        gen = service.run_turn(db, conv, row, workspace_context(row), identity, "go", run=run)
+        run.generator = gen
+        got: list[dict] = []
+        for event in gen:
+            got.append(event)
+            if sum(1 for e in got if e["event"] == "delta") == expected_deltas:
+                if mode == "disconnect":
+                    run.signal()  # close upstream NOW; the blocked read raises
+                else:
+                    gen.close()
+                    break
+        assert run.finished and body.closed
+        return conv.id, got, body
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("mode", ["disconnect", "generator_close"])
+@pytest.mark.parametrize("complete_block", [True, False])
+def test_disconnect_mid_stream_is_an_interrupted_turn_that_keeps_a_complete_proposal(
+    ready, harness, mode, complete_block
+):
+    """Live 2026-10-14 (rt2-1a run A): the member's tab closed 480 s into a proposal turn;
+    the ledger showed ``error: AttributeError: 'NoneType' object has no attribute 'read'``
+    and the 16 k-char proposal was discarded. Now: the partial text is kept, the error row
+    is the ``turn_interrupted`` marker (never a traceback), and a ``launchpad-proposal``
+    block that had streamed completely is recorded as a revision; an unclosed block is
+    not."""
+    prose = "Here is the design for the helpdesk agent. " * 4
+    block = _block(VALID_PROPOSAL)
+    tail = "\n\nNext steps: review the golden tests. " * 3
+    streamed = prose + block + tail if complete_block else prose + block[: len(block) // 2]
+    cid, events, _body = _interrupted_turn(harness, streamed, mode)
+    if mode == "disconnect":
+        assert events[-1] == {"event": "error", "data": {"message": "interrupted"}}
+    assert not any(e["event"] in ("done", "proposal") for e in events)
+    db = SessionLocal()
+    try:
+        assert db.get(AssistantConversation, cid).active_turn is None  # claim released
+        msgs = service._messages(db, cid)
+        assert [m.role for m in msgs] == ["user", "assistant", "error"]
+        assert msgs[1].text == streamed  # what the member saw is kept
+        assert msgs[2].name == service.TURN_INTERRUPTED_NAME
+        assert msgs[2].text == service.TURN_INTERRUPTED_TEXT and "interrupted" in msgs[2].text
+        assert not any("AttributeError" in m.text or "NoneType" in m.text for m in msgs)
+        latest = service.latest_proposal(db, cid)
+        if complete_block:
+            assert latest is not None and latest.status == "draft" and latest.revision == 1
+            assert latest.content["name"] == VALID_PROPOSAL["name"]
+        else:
+            assert latest is None  # never a proposal from an unclosed block
+    finally:
+        db.close()
+
+
+def test_disconnect_after_an_invalid_block_records_the_rejection_for_the_next_turn(
+    ready, harness
+):
+    """The kept block is validated like a completed reply: an invalid one becomes an
+    ``invalid`` revision with its ``proposal_rejected`` note, so the next turn replays
+    the verdict and the model corrects it without the member relaying anything."""
+    bad = {**VALID_PROPOSAL, "model_id": "anthropic.claude-sonnet-4-5"}
+    cid, _events, _body = _interrupted_turn(harness, "Design.\n" + _block(bad), "disconnect")
+    db = SessionLocal()
+    try:
+        latest = service.latest_proposal(db, cid)
+        assert latest is not None and latest.status == "invalid"
+        assert any(e.startswith("model_id:") for e in latest.validation_errors)
+        names = [m.name for m in service._messages(db, cid) if m.role == "error"]
+        assert names == [service.TURN_INTERRUPTED_NAME, service.PROPOSAL_REJECTED_NAME]
+    finally:
+        db.close()

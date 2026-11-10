@@ -42,6 +42,22 @@
 }
 .v2 .v2-videos-card .tags { margin-top: 2px; }
 
+/* document cards (workshop manuals): the body is the button, the open links sit below it */
+.v2 .v2-videos-doc { cursor: default; }
+.v2 .v2-videos-doc .body {
+  display: flex; flex-direction: column; flex: 1; width: 100%; padding: 0; text-align: left;
+  background: none; border: 0; cursor: pointer; color: var(--v2-ink); font: inherit;
+}
+.v2 .v2-videos-doc .body:focus-visible { outline: 2px solid var(--v2-primary); outline-offset: -2px; }
+.v2 .v2-videos-card .thumb.doc { background: var(--v2-primary-soft); }
+.v2 .v2-videos-card .doc-icon { position: absolute; inset: 0; margin: auto; color: var(--v2-primary); opacity: 0.85; }
+.v2 .v2-videos-card .thumb.doc img + .doc-icon { opacity: 0; }
+.v2 .v2-videos-doc .links { display: flex; padding: 0 14px 14px; }
+.v2 .v2-videos-doc-links { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+.v2 .v2-videos-doc-links a { text-decoration: none; }
+.v2 .v2-videos-doc-intro { margin: 0 0 16px; font-size: 13.5px; line-height: 1.75; color: var(--v2-ink-2); white-space: pre-wrap; }
+.v2 .v2-videos-doc-hint { padding: 10px 0 0; }
+
 /* watch page */
 .v2 .v2-videos-layout {
   display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start;

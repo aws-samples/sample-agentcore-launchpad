@@ -1,0 +1,38 @@
+{
+ "seam": "agentcore-runtime",
+ "case": "eval_worker_invalid_job_payload",
+ "captured_at": "2026-10-19T09:11:53Z",
+ "notes": "Eval worker entrypoint receives a non-JobSpec payload: the worker-side validation error frame (r16-b 'worker real error replay').",
+ "response_or_error": {
+  "invoke_response_meta": {
+   "ResponseMetadata": {
+    "RequestId": "2c7fe065-48ad-4167-a436-13d3adc08188",
+    "HTTPStatusCode": 200,
+    "HTTPHeaders": {
+     "date": "Mon, 19 Oct 2026 09:11:55 GMT",
+     "content-type": "application/json",
+     "transfer-encoding": "chunked",
+     "connection": "keep-alive",
+     "x-amzn-requestid": "2c7fe065-48ad-4167-a436-13d3adc08188",
+     "x-amzn-bedrock-agentcore-runtime-session-id": "56a44512-e530-4f78-8eaa-9e25237a8459-01ca91f3"
+    }
+   },
+   "runtimeSessionId": "56a44512-e530-4f78-8eaa-9e25237a8459-01ca91f3",
+   "contentType": "application/json",
+   "statusCode": 200
+  },
+  "line_count": 1,
+  "bytes": 198,
+  "first_3_lines": [
+   "{\"job_id\": null, \"attempt\": null, \"state\": \"REJECTED\", \"code\": \"evaluation.kind_unsupported\", \"message\": \"unknown job_type '' (implemented: batch_eval, online_eval, insights, recommend, optimize)\"}"
+  ],
+  "last_2_lines": [
+   "{\"job_id\": null, \"attempt\": null, \"state\": \"REJECTED\", \"code\": \"evaluation.kind_unsupported\", \"message\": \"unknown job_type '' (implemented: batch_eval, online_eval, insights, recommend, optimize)\"}"
+  ],
+  "data_line_key_shapes_unique": [],
+  "data_line_key_shapes_unique_raw": []
+ },
+ "status": 200,
+ "elapsed_s": 2.283,
+ "source": "t1 host, instance role (uv env boto3 1.43.109), via SSM"
+}

@@ -1,8 +1,18 @@
 import type { TFunction } from "i18next";
 import { useEffect, useRef, useState } from "react";
 
-import { errorMessage, type MemoryActor } from "../../../lib/api";
+import { errorMessage, type MemoryActor, type MemoryRecord } from "../../../lib/api";
 import type { TagTone } from "../../ui";
+
+/** r14-a (N14-obs1): a long-term record's merge-strategy state. A record from a backend
+ *  or a document that predates the fields is active. */
+export type RecordState = "active" | "superseded" | "deleted" | "expired";
+export function recordState(r: MemoryRecord): RecordState {
+  if (r.superseded_by) return "superseded";
+  if (r.deleted_at) return "deleted";
+  if (r.expired_at) return "expired";
+  return r.active === false ? "superseded" : "active";
+}
 
 /** Memory / strategy status → Tag tone (CREATING / DELETING and anything the
  *  preview API adds read as in-progress). */

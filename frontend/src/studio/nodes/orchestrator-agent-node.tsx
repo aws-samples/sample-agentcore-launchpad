@@ -1,6 +1,7 @@
 import { Handle, Position, type NodeProps, useReactFlow } from '@xyflow/react';
 import { useTranslation } from 'react-i18next';
 import { Crown, Settings, X } from 'lucide-react';
+import { catalogModelLabel } from '../lib/models';
 
 interface OrchestratorAgentNodeData {
   label?: string;
@@ -28,7 +29,8 @@ export function OrchestratorAgentNode({ data, selected, id }: NodeProps) {
   const {
     label = 'Orchestrator Agent',
     modelProvider = 'AWS Bedrock',
-    modelName = 'Claude 3.7 Sonnet',
+    modelId,
+    modelName = catalogModelLabel(modelId),
   } = nodeData;
 
   const handleDelete = (event: React.MouseEvent) => {

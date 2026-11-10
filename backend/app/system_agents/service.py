@@ -48,8 +48,8 @@ from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
 from app.deployer.pipeline import StageContext, StageResult, create_deployment
 from app.models.ledger import Agent, Deployment, Job, Workspace
-from app.schemas.agent import AgentSpec
-from app.services import agent_iam
+from app.schemas.agent import DEFAULT_MODEL_ID, AgentSpec, catalog_version
+from app.services import agent_iam, canary_references
 from app.services.workspace import WorkspaceContext
 from app.system_agents import presets as catalogue
 from app.system_agents.presets import InstallOptions, PresetEdit, SystemPreset
@@ -108,7 +108,7 @@ def refuse_system_mutation(agent: Agent, action: str) -> None:
 
 
 def assert_not_system_agent(db: Session, agent_id: str | None, action: str) -> None:
-    """Router-side guard for rows that *reference* an agent (experiments, canaries)."""
+    """Router-side guard for rows that *reference* an agent (canaries)."""
     if not agent_id:
         return
     agent = db.get(Agent, agent_id)
@@ -137,7 +137,7 @@ def system_projection(agent: Agent) -> dict[str, Any] | None:
         "key": agent.system_key,
         "label": preset.label if preset else agent.system_key,
         "skill_version": catalogue.skill_version_from_spec(agent.spec or {}),
-        "protected_actions": ["redeploy", "delete", "convert", "experiment", "canary"],
+        "protected_actions": ["redeploy", "delete", "convert", "canary"],
     }
 
 
@@ -213,41 +213,6 @@ def require_dedicated_role(
         )
 
 
-def verify_knowledge_bases(ctx: StageContext, spec: AgentSpec) -> None:
-    """Prove every referenced KB exists, is MANAGED and ACTIVE in *this* workspace.
-
-    Runs in the provision stage before any gateway target is created, so a typo or a
-    KB from another account fails with an actionable stage error instead of a wired
-    target pointing at nothing.
-    """
-    if not spec.knowledge_bases:
-        return
-    from app.services.agentcore.client import agent_client
-    from app.services.knowledge import _kb_type
-
-    client = agent_client(ctx.workspace)
-    where = f"workspace {ctx.workspace.id} ({ctx.workspace.region})"
-    for kb in spec.knowledge_bases:
-        try:
-            detail = client.get_knowledge_base(knowledgeBaseId=kb.kb_id)["knowledgeBase"]
-        except client.exceptions.ResourceNotFoundException as exc:
-            raise RuntimeError(
-                f"knowledge base {kb.kb_id} does not exist in {where} — mount an "
-                "existing, authorized knowledge base or install without it"
-            ) from exc
-        if _kb_type(detail) != "MANAGED":
-            raise RuntimeError(
-                f"knowledge base {kb.kb_id} in {where} is not a MANAGED knowledge base"
-            )
-        status = detail.get("status")
-        if status != "ACTIVE":
-            raise RuntimeError(
-                f"knowledge base {kb.kb_id} in {where} is {status or 'in an unknown state'}, "
-                "not ACTIVE — wait for it or install without it"
-            )
-        ctx.log(f"knowledge base {kb.kb_id} verified · MANAGED · ACTIVE")
-
-
 # ---------------------------------------------------------------------------
 # status (ledger-only)
 # ---------------------------------------------------------------------------
@@ -279,13 +244,27 @@ def find_name_holder(db: Session, workspace_id: str, preset: SystemPreset) -> Ag
     )
 
 
-def _latest_deployment(db: Session, agent_id: str) -> Deployment | None:
-    return (
-        db.query(Deployment)
-        .filter(Deployment.agent_id == agent_id)
-        .order_by(Deployment.started_at.desc(), Deployment.id.desc())
-        .first()
-    )
+def _latest_deployment(
+    db: Session, agent_id: str, *, exclude_failed: bool = False
+) -> Deployment | None:
+    """The newest deployment row; with ``exclude_failed`` the newest one that did NOT fail
+    (running or succeeded) — the one whose rendered snapshot the Runtime can be serving.
+    N17-obs259: a failed re-publish is pinned at the new catalog by the pipeline before its
+    `generate` stage runs (or not pinned at all when it failed earlier), while the live
+    version still serves the previous snapshot; reading that row's pin masked the preset as
+    current."""
+    query = db.query(Deployment).filter(Deployment.agent_id == agent_id)
+    if exclude_failed:
+        query = query.filter(Deployment.status != "failed")
+    return query.order_by(Deployment.started_at.desc(), Deployment.id.desc()).first()
+
+
+def serving_pin(db: Session, agent_id: str) -> int | None:
+    """The model-catalog version the preset's snapshot was rendered from: the pin of the
+    newest NON-failed deployment (None before one). The one source for `catalog_behind`,
+    the status read's `catalog_version.installed` and the banner (N17-obs234 / obs259)."""
+    deployment = _latest_deployment(db, agent_id, exclude_failed=True)
+    return deployment.catalog_version if deployment else None
 
 
 def latest_uninstall_job(db: Session, agent_id: str) -> Job | None:
@@ -313,13 +292,213 @@ def _latest_job(db: Session, agent: Agent) -> tuple[Deployment | None, Job | Non
     return deployment, job
 
 
+# Per-process memo of ``release_info`` (review #5): the bundle / template files are
+# immutable for the life of the process, and ``GET /api/system-agents`` is polled every
+# 4 s by the presets panel — re-hashing them on every read is waste. Keyed by
+# ``(preset key, published model-catalog version)``: the rendered SKILL.md of a Harness
+# preset states the catalog, so a registry write (D21) moves the digest — a memo keyed on
+# the preset alone kept answering the pre-write tag until a restart (N-ARCH-obs19).
+# Successes only: a bundle that failed to validate is re-tried on the next read so a fix
+# (a registry write, a new build) is seen.
+_RELEASE_INFO: dict[tuple[str, int], dict[str, Any]] = {}
+
+E_BUNDLE_INVALID = "system_agent.bundle_invalid"
+
+
+def _release_outcome(preset: SystemPreset) -> tuple[dict[str, Any] | None, str | None]:
+    """``(release, None)`` when this build's release of the preset validates,
+    ``(None, message)`` when it does not — the one place the bundle / template is proven
+    for a status read. Never raises."""
+    key = (preset.key, int(catalog_version()))
+    cached = _RELEASE_INFO.get(key)
+    if cached is not None:
+        return dict(cached), None
+    try:
+        if preset.template:
+            rel = catalogue.template_release(preset)
+            info = {"version": rel["version"], "digest": str(rel["digest"])[:12],
+                    "tag": rel["tag"]}
+        else:
+            rel = catalogue.bundle_release(preset)
+            digest = str(rel["digest"])[:12]
+            info = {"version": rel["version"], "digest": digest,
+                    "tag": f"{rel['version']}-{digest}"}
+    except Exception as exc:  # noqa: BLE001 — a read must not 500 on a bad bundle
+        logger.warning("system preset %s: release unavailable: %s", preset.key, exc)
+        return None, str(exc)
+    # one entry per preset — the newest catalog version wins (bounded memo, rev-r11 nit)
+    for stale in [k for k in _RELEASE_INFO if k[0] == preset.key]:
+        del _RELEASE_INFO[stale]
+    _RELEASE_INFO[key] = info
+    return dict(info), None
+
+
+def release_info(preset: SystemPreset) -> dict[str, Any] | None:
+    """This build's release of the preset — what an install pins and what a repair
+    compares the stored spec against: ``{version, digest (12 hex), tag}``. The template
+    release of a ``zip_runtime`` preset, the skill bundle snapshot of a Harness one. A
+    bundle this build cannot validate yields ``None`` (``release_error`` carries why; the
+    install route answers ``409 system_agent.bundle_invalid``); a status read never fails
+    on it. Memoised per preset key and catalog version. (N12-obs31 c)"""
+    return _release_outcome(preset)[0]
+
+
+def release_error(preset: SystemPreset) -> str | None:
+    """Why this build cannot release the preset (``None`` when it can) — the message the
+    install / repair route would refuse with (N-ARCH-obs19)."""
+    return _release_outcome(preset)[1]
+
+
+def current_catalog_version(db: Session) -> int:
+    """N17-obs281 (C1): THE "current model-catalog version" of every preset staleness signal —
+    the ledger stamp (`model_registry.stamp`): `catalog_behind` (banner, `snapshot_behind`,
+    the repair decision) and the status read's `catalog_version.current`. Before, the status
+    read took `current` from the in-process snapshot while `catalog_behind` read the ledger,
+    so a second process could show "current v12" next to `snapshot_behind: true` for ≤ 30 s
+    (model-registry.md §9: the behind signals never disagree). The snapshot's
+    `catalog_version()` stays what a render pins (`Deployment.catalog_version`) and the
+    release memo key — that is the version the rendered bundle states, not a staleness read."""
+    from app.services import model_registry
+
+    return model_registry.stamp(db)
+
+
+def catalog_behind(db: Session, agent: Agent) -> tuple[int, int] | None:
+    """``(installed, current)`` when the preset's newest NON-failed deployment pinned an
+    OLDER model catalog than the ledger's (`current_catalog_version`), else None. The ONE
+    predicate behind the `preset_snapshot_behind` banner, the status read's `snapshot_behind`
+    and the repair decision (N17-obs234): a row without a pin (no `generate` stage succeeded
+    yet) or a pin equal to / newer than the stamp is never behind. Failed deployments are
+    skipped (N17-obs259): their pin describes a snapshot the Runtime never received."""
+    installed = serving_pin(db, agent.id)
+    if installed is None:
+        return None
+    current = current_catalog_version(db)
+    if int(installed) >= current:
+        return None
+    return int(installed), int(current)
+
+
+def model_pinned(agent: Agent) -> bool:
+    """Whether the preset row's model is an administrator's explicit choice (N17-obs202).
+
+    ``Agent.preset_model_pinned`` records it from this build on; a row written before the
+    flag is pinned iff its stored model differs from the then-only default (the built-in
+    constant) — exactly the two states a pre-flag row could be in. Not pinned = the row
+    FOLLOWS the ``agent_default`` model role: a repair re-resolves the model."""
+    if agent.preset_model_pinned is not None:
+        return bool(agent.preset_model_pinned)
+    return str((agent.spec or {}).get("model_id") or "") not in ("", DEFAULT_MODEL_ID)
+
+
+def default_changed(agent: Agent | None, preset: SystemPreset) -> bool:
+    """``True`` when an installed, role-following preset's stored model is not what the
+    ``agent_default`` role resolves to NOW — the next repair re-publishes it with the new
+    model (the presets panel's "model default changed — repair to apply" note). Never
+    true for a pinned row: an override wins until reset."""
+    if agent is None or model_pinned(agent):
+        return False
+    return str((agent.spec or {}).get("model_id") or "") != preset.resolved_model_id()
+
+
+def catalog_snapshot_warnings(db: Session) -> list[dict[str, Any]]:
+    """D21 (M1-d): one `preset_snapshot_behind` warning per installed preset whose latest
+    deployment pinned an OLDER model catalog than the ledger's (`model_registry.stamp`):
+    its rendered snapshot (eval worker tables, architect SKILL catalog lines) is stale until
+    a repair. Registered as a `model_registry.warnings` producer from `app/main.py`."""
+    from app.services import model_registry
+
+    out: list[dict[str, Any]] = []
+    rows = (
+        db.query(Agent)
+        .filter(Agent.system_key.isnot(None), Agent.status != "deleted")
+        .order_by(Agent.workspace_id, Agent.system_key)
+        .all()
+    )
+    for agent in rows:
+        behind = catalog_behind(db, agent)
+        if behind is None:
+            continue
+        installed, current = behind
+        out.append({
+            "code": model_registry.W_PRESET_SNAPSHOT_BEHIND,
+            "message": (
+                f"system preset {agent.system_key}: the installed snapshot states model "
+                f"catalog v{installed}, the current catalog is v{current} — open "
+                "New agent → System presets and repair the snapshot"
+            ),
+            "detail": {"installed": int(installed), "current": int(current),
+                       "preset_key": agent.system_key, "workspace_id": agent.workspace_id,
+                       "agent_id": agent.id},
+        })
+    return out
+
+
+def installed_release(spec: dict[str, Any]) -> str | None:
+    """The release tag (``<version>-<digest12>``, or the bare version for a pre-digest
+    install) the stored spec pins — the counterpart of ``release_info()['tag']``."""
+    tag = catalogue.template_release_from_spec(spec)
+    if tag:
+        return tag
+    rel = catalogue.skill_release_from_spec(spec)
+    if rel:
+        return f"{rel[0]}-{rel[1]}" if rel[1] else rel[0]
+    return None
+
+
+def _job_summary(job: Job | None) -> dict[str, Any] | None:
+    if job is None:
+        return None
+    payload = job.payload or {}
+    return {
+        "id": job.id,
+        "type": job.type,
+        "status": job.status,
+        "error": job.error,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        # N17-obs206 (additive): who asked for a repair (`auto` = the sweep, null = a card /
+        # API action) and why — the card renders a deploying `auto` job as 自动修复中
+        "trigger": payload.get("repair_trigger"),
+        "repair_reason": payload.get("repair_reason"),
+    }
+
+
+def _newest(*jobs: Job | None) -> Job | None:
+    # SQLite hands a reloaded row a naive UTC datetime and a row created in this session
+    # an aware one; both are UTC, so compare them stripped of tzinfo.
+    def key(j: Job) -> tuple[datetime, str]:
+        at = j.created_at or datetime.min
+        return (at.replace(tzinfo=None), j.id)
+
+    live = [j for j in jobs if j is not None]
+    return max(live, key=key) if live else None
+
+
+def job_belongs_to_preset(db: Session, job: Job, workspace_id: str, preset: SystemPreset) -> bool:
+    """Whether ``job`` is one of this preset's deploy/uninstall jobs in ``workspace_id`` —
+    judged by the agent row it names, not by ``job.workspace_id`` (a preset's install job
+    can be filed under a system workspace id the agents API does not expose, N12-obs31 a).
+    Rows an uninstall already marked ``deleted`` still count, so the last uninstall's log
+    stays readable."""
+    agent = db.get(Agent, (job.payload or {}).get("agent_id") or "")
+    return (
+        agent is not None
+        and agent.system_key == preset.key
+        and agent.workspace_id == workspace_id
+        and job.type in ("deploy_agent", UNINSTALL_JOB_TYPE)
+    )
+
+
 def preset_status(
     db: Session, row: Workspace, preset: SystemPreset, *, is_admin: bool
 ) -> dict[str, Any]:
     """One preset's state in one workspace. Ledger + workspace row only — no AWS."""
     # resolved here: skill_registry imports this module for the S3 read helpers
+    from app.services import model_roles
     from app.system_agents import skill_registry
 
+    model_roles.ensure_loaded(db)  # rev-r25 F1: `default_changed` judged on the ledger's roles
     requirements = workspace_requirements(row)
     agent = find_installed(db, row.id, preset)
     holder = find_name_holder(db, row.id, preset)
@@ -334,6 +513,7 @@ def preset_status(
     else:
         status = STATUS_FAILED
     deployment = _latest_deployment(db, agent.id) if agent else None
+    deploy_job = db.get(Job, deployment.job_id) if deployment and deployment.job_id else None
     spec = (agent.spec or {}) if agent else {}
     installed_version = catalogue.skill_version_from_spec(spec) if agent else None
     installed = agent is not None
@@ -350,13 +530,19 @@ def preset_status(
             "error": uninstall_job.error,
             # a failed teardown is retried by another explicit uninstall request
             "retryable": not uninstall_live,
+            # N10v2-bug8: what the attempt verified gone / never manages / stopped at
+            **{
+                key: list(((uninstall_job.payload or {}).get("teardown") or {}).get(key, []))
+                for key in ("removed", "skipped", "failed")
+            },
         }
+    release, release_error_message = _release_outcome(preset)
     return {
         "key": preset.key,
         "name": preset.name,
         "label": preset.label,
         "description": preset.description,
-        "method": "harness",
+        "method": preset.method,
         "skill_version": preset.skill_version,
         "installed_skill_version": installed_version,
         "update_available": bool(agent and installed_version != preset.skill_version),
@@ -370,11 +556,46 @@ def preset_status(
         "agent_id": agent.id if agent else None,
         "agent_status": agent.status if agent else None,
         "error": agent.error if agent else None,
+        # N10v3-bug7: a failed repair of an ACTIVE preset keeps it serving; `error` then
+        # describes that failed attempt, not the live version
+        "last_deploy_failed": bool(agent and agent.status == "active" and agent.error),
         "job_id": deployment.job_id if deployment else None,
         "deployment_id": deployment.id if deployment else None,
         "deployment_status": deployment.status if deployment else None,
+        # N12-obs31 (c): the live runtime version and the releases — this build's (what
+        # a repair compares against) and the one the stored spec pins
+        "version": agent.version if agent else None,
+        "release": release,
+        # N-ARCH-obs19: why `release` is null — this build cannot validate / render the
+        # preset's bundle against the published catalog; install and repair refuse with
+        # `409 system_agent.bundle_invalid` carrying the same message
+        "release_error": release_error_message,
+        "installed_release": installed_release(spec) if agent else None,
+        # D21 (M1-d): the model catalog the SERVING snapshot was rendered from (the newest
+        # non-failed deployment's pin, N17-obs259; None before one) vs the published one —
+        # the presets panel's "snapshot states catalog v12, current v14 → Repair" banner
+        "catalog_version": {
+            "installed": serving_pin(db, agent.id) if agent else None,
+            "current": current_catalog_version(db),  # N17-obs281: catalog_behind's source
+        },
+        # N17-obs234: the ledger verdict the repair decision and the banner share — a
+        # bodiless install / repair of such a preset re-publishes WITHOUT `force`, so the
+        # card's "Repair snapshot" action can never answer "already current"
+        "snapshot_behind": (agent is not None and catalog_behind(db, agent) is not None),
+        # N12-obs31 (a): the preset's current/last job (install, repair or uninstall);
+        # its log is read through GET /api/system-agents/{key}/jobs/{id} (admin)
+        "last_job": _job_summary(_newest(deploy_job, uninstall_job)),
         "model_id": spec.get("model_id"),
         "model_source": spec.get("model_source"),
+        # N17-obs202: whether `model_id` follows the model-defaults page (`default` — the
+        # `agent_default` role at the last install / repair) or is an administrator's pin
+        # (`override`, set through the settings edit; `null` when not installed), and
+        # whether a following row's model lags the role as it stands now — the card's
+        # "model default changed — repair to apply" note; the repair re-publishes it
+        "model_origin": (
+            ("override" if model_pinned(agent) else "default") if agent is not None else None
+        ),
+        "default_changed": default_changed(agent, preset),
         "knowledge_bases": spec.get("knowledge_bases") or [],
         "allowed_tools": spec.get("allowed_tools") or list(preset.allowed_tools),
         "memory": "disabled",
@@ -447,17 +668,20 @@ def _require_ready(row: Workspace) -> str:
 
 
 def _require_kb_prerequisites(row: Workspace, options: InstallOptions | None) -> None:
-    """Mounting a KB needs the KB gateway's OAuth2 credential provider to exist in
-    the workspace resource map: the preset's role is scoped to exactly that provider
-    (see agent_iam._preset_kb_oauth_statements), so without it nothing could ever
-    fetch a token. Refused at request time, before any row is written."""
-    if options and options.knowledge_bases and not (row.resources or {}).get("oauth_provider_arn"):
+    """Mounting a KB needs a knowledge-base backend registered in this build: the
+    preset gets the same direct ``kb_search``/``kb_deep_search`` tool grants as any
+    other agent (R13/R16 — the KB-gateway OAuth path has no CN implementation and is
+    gone), so without a backend nothing could ever answer the mount. Refused at
+    request time, before any row is written."""
+    from app.services import knowledge_backend
+
+    if options and options.knowledge_bases and knowledge_backend.backend_or_none() is None:
         raise AppError(
             "system_agent.workspace_not_ready",
-            "mounting a knowledge base on the preset requires the workspace's KB gateway "
-            "OAuth2 credential provider (oauth_provider_arn) — run the workspace bootstrap",
-            {"requirements": [{"code": "missing_oauth_provider",
-                               "message": "oauth_provider_arn missing from the resource map"}],
+            "mounting a knowledge base on the preset requires a knowledge-base backend "
+            "to be registered in this build",
+            {"requirements": [{"code": "missing_knowledge_backend",
+                               "message": "no knowledge-base backend is registered"}],
              "workspace_id": row.id},
             status_code=409,
         )
@@ -507,8 +731,29 @@ def _refuse_deploy_in_progress(db: Session, agent: Agent, preset: SystemPreset) 
 
 
 def _release_pin(preset: SystemPreset) -> dict[str, Any]:
-    """The exact validated snapshot identity, captured BEFORE the queue commit."""
-    return {"preset_bundle": catalogue.snapshot_bundle(preset).release()}
+    """The exact validated release identity, captured BEFORE the queue commit: the skill
+    bundle snapshot of a Harness preset, the template release of a ``zip_runtime`` one.
+
+    A bundle this build cannot validate or render (the SKILL.md fails the catalog check,
+    a stale version pin, an over-sized bundle, a broken template) is a structured
+    ``409 system_agent.bundle_invalid`` — never a 500: nothing has been claimed or
+    written yet, the status read exposes the same message as ``release_error``, and the
+    administrator acts on the registry or the build (N-ARCH-obs19)."""
+    try:
+        if preset.template:
+            rel = catalogue.template_release(preset)
+            return {"preset_bundle": {"version": rel["version"], "digest": rel["digest"],
+                                      "files": rel["files"], "template": preset.template}}
+        return {"preset_bundle": catalogue.snapshot_bundle(preset).release()}
+    except Exception as exc:  # noqa: BLE001 — a bad bundle is a verdict, not a crash
+        logger.warning("system preset %s: release unavailable: %s", preset.key, exc)
+        raise AppError(
+            E_BUNDLE_INVALID,
+            f"this build cannot publish preset '{preset.key}' {preset.skill_version}: {exc}",
+            {"preset_key": preset.key, "skill_version": preset.skill_version,
+             "catalog_version": int(catalog_version()), "reason": str(exc)},
+            status_code=409,
+        ) from exc
 
 
 def _in_flight(db: Session, agent: Agent) -> InstallOutcome:
@@ -524,6 +769,7 @@ def install_preset(
     edit: PresetEdit | None,
     *,
     force: bool = False,
+    trigger: str | None = None,
 ) -> InstallOutcome:
     """Install, or repair, one preset in one workspace. Idempotent.
 
@@ -532,13 +778,27 @@ def install_preset(
       ``409 system_agent.deploy_in_progress`` rather than a false acceptance)
     * deploying, no explicit edit → the in-flight job, never a second one;
       deploying with an explicit edit → ``409 system_agent.deploy_in_progress``
-    * active, same version and same settings, not forced → no-op (200, no job)
-    * failed, changed settings, newer bundle, or ``force`` → update job (re-publish)
+    * active, same version and same settings, not forced → no-op (200, no job) — unless
+      the latest deployment pinned an OLDER model catalog than the ledger's
+      (``catalog_behind``, N17-obs234): that re-publishes exactly like ``force``
+    * failed, changed settings, newer bundle, a behind catalog snapshot, or ``force`` →
+      update job (re-publish)
 
     ``edit=None`` means "the preset defaults" on a first install and "exactly what is
     stored" on a repair. The only AWS work this starts is the deploy job on a
     background thread; the request itself makes no cloud call.
+
+    ``trigger`` (N17-obs206) names a non-interactive caller of a repair — ``auto`` for the
+    sweep; it rides on the job payload
+    (``repair_trigger``) and prefixes ``repair_reason`` so the status read can say so. It
+    changes no decision.
     """
+    from app.services import model_roles
+
+    # rev-r25 F1 (N17-obs202): resolve the model roles from the LEDGER, whatever process this
+    # is — the bootstrap CLI never ran `load_overrides`, and a role-following preset must
+    # never be re-published on env / built-in values a console override replaced
+    model_roles.ensure_loaded(db)
     bucket = _require_ready(row)
     if edit is not None and edit.is_empty():
         edit = None
@@ -554,7 +814,7 @@ def install_preset(
 
     existing = find_installed(db, row.id, preset)
     if existing is not None:
-        return _repair(db, existing, preset, bucket, edit, force=force)
+        return _repair(db, existing, preset, bucket, edit, force=force, trigger=trigger)
 
     options = edit.resolve(preset, None) if edit else preset.default_options()
     validate_options(preset, options)
@@ -564,11 +824,14 @@ def install_preset(
     agent = Agent(
         workspace_id=row.id,
         name=preset.name,
-        method="harness",
+        method=preset.method,
         status="deploying",
         spec=spec.model_dump(),
-        owner="system",
+        # no creator: a preset is server-owned (`system_key`), whoever asked to install it
         system_key=preset.key,
+        # N17-obs202: an explicit `model_id` in the install body pins the model; otherwise
+        # the row follows the `agent_default` role (`spec.model_id` = the role's value now)
+        preset_model_pinned=options.model_id is not None,
     )
     db.add(agent)
     try:
@@ -602,6 +865,7 @@ def _repair(
     edit: PresetEdit | None,
     *,
     force: bool,
+    trigger: str | None = None,
 ) -> InstallOutcome:
     """Re-publish an installed preset, resolving the partial ``edit`` against the row
     **as it is claimed**.
@@ -627,7 +891,13 @@ def _repair(
 
         stored = dict(agent.spec or {})
         seen = agent.updated_at  # the row version this resolution is valid for
-        resolved = edit.resolve(preset, stored) if edit else catalogue.options_from_spec(stored)
+        # N17-obs202: a row that follows the `agent_default` role resolves its model again
+        # (`model_id=None` → `build_spec` reads the role NOW); a pinned row keeps its pin
+        pinned = model_pinned(agent)
+        resolved = (
+            edit.resolve(preset, stored, model_pinned=pinned) if edit
+            else catalogue.options_from_spec(stored, model_pinned=pinned)
+        )
         validate_options(preset, resolved)  # against the CURRENT row, not a request snapshot
         _require_kb_prerequisites(_workspace_row(db, agent.workspace_id), resolved)
         pin = _release_pin(preset)  # before the claim, so nothing is claimed for a bad bundle
@@ -636,10 +906,32 @@ def _repair(
         ).model_dump()
         # Compare through the schema so a row written before a spec member existed
         # (which simply lacks the key) equals the same choices re-derived today.
-        if agent.status == "active" and not force and desired == _normalized(stored):
+        # N17-obs234: an unchanged spec whose latest deployment pinned an OLDER model
+        # catalog than the ledger's is NOT current — the rendered snapshot (eval worker
+        # tables, SKILL catalog lines) is stale, so the repair re-publishes exactly like
+        # `force` and records why. Equal / newer pins with an unchanged spec stay a no-op.
+        behind = catalog_behind(db, agent)
+        spec_changed = desired != _normalized(stored)
+        if agent.status == "active" and not force and not spec_changed and behind is None:
             deployment, job = _latest_job(db, agent)
             return InstallOutcome(agent=agent, job=job, deployment=deployment, created=False,
                                   changed=False)
+        reasons = []
+        if behind is not None:
+            reasons.append(f"catalog snapshot behind v{behind[0]} < v{behind[1]}")
+        if (resolved.model_id is None and edit is None
+                and desired.get("model_id") != stored.get("model_id")):
+            # N17-obs202: a bodiless repair of a role-following row whose model default moved
+            reasons.append(
+                f"model default changed {stored.get('model_id')} -> {desired.get('model_id')}"
+            )
+        reason = "; ".join(reasons) or None
+        if trigger is not None:
+            # N17-obs206: a non-interactive repair records who asked and why (a newer bundle
+            # or an added spec member re-derives a different spec; `force` is the rest)
+            reason = f"{trigger}: " + (
+                reason or ("release update" if spec_changed else "forced re-publish")
+            )
 
         # Durable claim: status AND version, in the same transaction as the job row.
         now = datetime.now(UTC)
@@ -650,14 +942,26 @@ def _repair(
                 Agent.status.in_(_CLAIMABLE),
                 Agent.updated_at == seen,
             )
-            .values(status="deploying", spec=desired, error=None, updated_at=now)
+            .values(status="deploying", spec=desired, error=None, updated_at=now,
+                    # N17-obs202: the edit may pin (`model_id` set), unpin (`reset`) or keep
+                    preset_model_pinned=resolved.model_id is not None)
         ).rowcount
         if claimed == 1:
             db.expire(agent)
-            # claim + deployment + job + release pin commit together
-            deployment, job = create_deployment(db, agent, mode="update", payload_extra=pin)
+            # claim + deployment + job + release pin commit together; the behind reason
+            # rides on the job payload and the spec snapshot (`note`) as the journal
+            deployment, job = create_deployment(
+                db, agent, mode="update",
+                payload_extra={
+                    **pin,
+                    **({"repair_reason": reason} if reason else {}),
+                    **({"repair_trigger": trigger} if trigger else {}),
+                },
+                note=reason,
+            )
             logger.info(
-                "system preset %s: repair job %s for agent %s", preset.key, job.id, agent.id
+                "system preset %s: repair job %s for agent %s%s", preset.key, job.id, agent.id,
+                f" ({reason})" if reason else "",
             )
             return InstallOutcome(agent=agent, job=job, deployment=deployment, created=False,
                                   changed=True)
@@ -749,6 +1053,8 @@ def assert_job_release_pinned(
             "queued by the preset install/repair route; re-run the install from the "
             "System presets panel so the bundle identity is pinned with the job"
         )
+    if preset.template:
+        return _assert_template_release_pinned(pinned, agent, preset)
     release = catalogue.skill_release_from_spec(agent.spec or {})
     spec_version = release[0] if release else None
     if spec_version != preset.skill_version or pinned.get("version") != preset.skill_version:
@@ -776,6 +1082,34 @@ def assert_job_release_pinned(
             "refused; re-run the preset install so the spec is re-derived"
         )
     return {"pin": pinned, "snapshot": snapshot, "expected_uri": expected}
+
+
+def _assert_template_release_pinned(
+    pinned: dict[str, Any], agent: Agent, preset: SystemPreset
+) -> dict[str, Any]:
+    """The ``zip_runtime`` twin of the skill-bundle guard: the job's pin, the stored spec's
+    release tag and this checkout's template release must agree, and the spec must carry no
+    skill bundle at all (the worker's code is the template)."""
+    current = catalogue.template_release(preset)
+    if pinned.get("version") != preset.skill_version or pinned.get("digest") != current["digest"]:
+        raise RuntimeError(
+            f"queued release mismatch: the job pins v{pinned.get('version')} "
+            f"{str(pinned.get('digest'))[:12]}, this checkout renders v{preset.skill_version} "
+            f"{current['digest'][:12]} — re-run the preset install (repair) so the pin and the "
+            "template are re-derived together"
+        )
+    tag = catalogue.template_release_from_spec(agent.spec or {})
+    if tag != current["tag"]:
+        raise RuntimeError(
+            f"the stored spec pins template release {tag!r} but this checkout renders "
+            f"{current['tag']!r} — re-run the preset install"
+        )
+    if list((agent.spec or {}).get("skills") or []):
+        raise RuntimeError(
+            f"a '{preset.template}' preset carries no skill bundle, but the stored spec loads "
+            f"{(agent.spec or {}).get('skills')} — re-run the preset install"
+        )
+    return {"pin": pinned, "snapshot": None, "expected_uri": None}
 
 
 def _pinned_release(ctx: StageContext) -> dict[str, Any] | None:
@@ -1063,6 +1397,9 @@ def uninstall_preset(db: Session, row: Workspace, preset: SystemPreset) -> Unins
             "a deployment is in progress for this preset — wait for it to finish",
             status_code=409,
         )
+    # N16-obs111a: a canary that still names the preset as an arm (a legacy row — the
+    # create path refuses presets as `system-managed`) would route to a torn-down Runtime
+    canary_references.refuse_agent_in_use(db, agent)
     previous = latest_uninstall_job(db, agent.id)
     live = previous is not None and previous.status in _LIVE_JOB
     if agent.status == STATUS_UNINSTALLING and live:

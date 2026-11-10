@@ -21,9 +21,6 @@ from aws_cdk import (
     aws_codebuild as codebuild,
 )
 from aws_cdk import (
-    aws_cognito as cognito,
-)
-from aws_cdk import (
     aws_ecr as ecr,
 )
 from aws_cdk import (
@@ -33,18 +30,49 @@ from aws_cdk import (
     aws_lambda as lambda_,
 )
 from aws_cdk import (
+    aws_logs as logs,
+)
+from aws_cdk import (
     aws_s3 as s3,
 )
 from constructs import Construct
 
+from stacks.naming import env_name_from_context, suffixed
+from stacks.principals import service_principal
+
+# N11-obs56: every Lambda the stacks create logs into an explicit, retention-bounded group
+# (90 days — the backend's `Settings.log_group_retention_days` default for the per-runtime
+# groups). Without one the service auto-creates `/aws/lambda/<function>` with no retention.
+LAMBDA_LOG_RETENTION = logs.RetentionDays.THREE_MONTHS
+
+
+def lambda_log_group(scope: Construct, construct_id: str) -> logs.LogGroup:
+    """The log group a stack Lambda is pointed at (`Function(log_group=...)`).
+
+    CDK-named on purpose: a stack deployed before this change already has the
+    service-created `/aws/lambda/<function>` group, which CloudFormation would refuse to
+    create a second time; the old group simply stops receiving lines (delete it by hand
+    to reclaim it — deploy.md §8.4). Deleted with the stack."""
+    return logs.LogGroup(
+        scope, construct_id, retention=LAMBDA_LOG_RETENTION, removal_policy=RemovalPolicy.DESTROY
+    )
+
 SAMPLES_DIR = Path(__file__).resolve().parents[2] / "samples"
 
-DEMO_USERS = [
-    {"username": "admin", "email": "admin@launchpad.local", "group": "platform-admin"},
-    {"username": "demo", "email": "demo@launchpad.local", "group": "hr-analyst"},
-]
-
+# Legacy bare role names apply only when the stack region is the original Global one
+# (never true in aws-cn; round-3 cleanup candidate).
+# region-boundary: allow legacy bare-role-name rule, inert in aws-cn
 LEGACY_REGION = "us-west-2"
+
+# N11-r3-bug7: the CodeBuild projects resolve from the BUILD mirror, not the host mirror
+# (tuna, `Settings.pip_index_url` / EC2 `PipIndexUrl`): tuna answers CodeBuild's NAT egress
+# with an immediate 4xx while the EC2 hosts get 200 from the same URL. NJU is the only
+# independent uv-complete mirror probed (N11-obs27); Tencent is the fallback the worker
+# Dockerfile retries on. Mirrors Settings.codebuild_pip_index_url / _fallback_index_url.
+DEFAULT_CODEBUILD_PIP_INDEX_URL = "https://mirror.nju.edu.cn/pypi/web/simple"
+DEFAULT_CODEBUILD_PIP_FALLBACK_INDEX_URL = "https://mirrors.cloud.tencent.com/pypi/simple"
+DEFAULT_NPM_REGISTRY = "https://registry.npmmirror.com"
+DEFAULT_BASE_IMAGE_MIRROR_PREFIX = "base"
 
 
 def regional_role_name(base_name: str, region: str) -> str:
@@ -56,11 +84,22 @@ class LaunchpadBaseStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
+        # `-c env_name=<x>` (stacks/naming.py): every fixed physical name below goes
+        # through `name()` so a parallel environment gets `-<x>` appended; empty
+        # (the default) leaves every name byte-for-byte as before.
+        self.env_name = env_name_from_context(self.node)
+
+        def name(base: str) -> str:
+            return suffixed(base, self.env_name)
+
         # ---- artifacts bucket (agent source zips, codebuild inputs) ----
+        # Exposed as `self.artifacts` (and `self.exec_role` below) so the sibling
+        # `launchpad-memory` stack (N6) can grant itself scoped read/write on the
+        # memory/ and kb/ prefixes without this stack knowing that stack exists.
         artifacts = s3.Bucket(
             self,
             "ArtifactsBucket",
-            bucket_name=f"launchpad-artifacts-{self.account}-{self.region}",
+            bucket_name=name(f"launchpad-artifacts-{self.account}-{self.region}"),
             versioned=True,
             encryption=s3.BucketEncryption.S3_MANAGED,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
@@ -68,18 +107,60 @@ class LaunchpadBaseStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
         )
+        self.artifacts = artifacts
+        # Per-user policy stream B (lead review D2): the gateway engine HMAC key objects
+        # (policy/gateway/<gw>/engine-key, contract amendment 3) are readable ONLY by the
+        # interceptor Lambda's role and this environment's hub instance role (which installs
+        # the key for the engine). Several grants reach `<bucket>/*` — the BYOC CodeBuild
+        # project (it runs member Dockerfiles), workspace source-object reads — so an
+        # explicit Deny overrides every Allow for everyone else, administrators included.
+        artifacts.add_to_resource_policy(iam.PolicyStatement(
+            sid="EngineKeyReadersOnly",
+            effect=iam.Effect.DENY,
+            principals=[iam.AnyPrincipal()],
+            actions=["s3:GetObject", "s3:GetObjectVersion"],
+            resources=[artifacts.arn_for_objects("policy/gateway/*/engine-key")],
+            conditions={"StringNotLike": {"aws:PrincipalArn": [
+                f"arn:{self.partition}:iam::{self.account}:role/"
+                + name("launchpad-policy-interceptor"),
+                f"arn:{self.partition}:iam::{self.account}:role/"
+                + name(f"launchpad-cn-ops-{self.region}"),
+            ]}},
+        ))
 
-        # ---- ECR repo for Claude-SDK container images ----
-        # image_tag_mutability is deliberately left MUTABLE. The container path
-        # tags images `{agent}-v{version}`, and _stage_package runs BEFORE
-        # _stage_deploy bumps the version — so a re-publish pushes the same tag
-        # twice and IMMUTABLE would fail that second push. What matters is that
-        # deployment references the image by *digest* (deployer/container.py), so
-        # the mutable tag is cosmetic.
+        # Per-user policy D5 (contract I9): the eval / canary principal tokens
+        # (evaluations/<job_id>/tokens.json — bearer material the hub rewrites while a job
+        # runs) are readable ONLY by the evaluation worker's execution role and this
+        # environment's hub role; the same bucket-wide readers as above are denied.
+        # The worker role is `launchpad-agent-<preset name>-<agent id[:8]>[-<env>]`
+        # (backend agent_iam.role_name_for; the preset name carries the env suffix too).
+        eval_worker = name("launchpad-eval-worker")
+        worker_role = (f"launchpad-agent-{eval_worker}-????????"
+                       + (f"-{self.env_name}" if self.env_name else ""))
+        artifacts.add_to_resource_policy(iam.PolicyStatement(
+            sid="EvalTokensReadersOnly",
+            effect=iam.Effect.DENY,
+            principals=[iam.AnyPrincipal()],
+            actions=["s3:GetObject", "s3:GetObjectVersion"],
+            resources=[artifacts.arn_for_objects("evaluations/*/tokens.json")],
+            conditions={"StringNotLike": {"aws:PrincipalArn": [
+                f"arn:{self.partition}:iam::{self.account}:role/{worker_role}",
+                f"arn:{self.partition}:iam::{self.account}:role/"
+                + name(f"launchpad-cn-ops-{self.region}"),
+            ]}},
+        ))
+
+        # ---- ECR repo for BYOC container images (CodeBuild output) ----
+        # image_tag_mutability is deliberately left MUTABLE. The BYOC
+        # container_source path tags images `{agent}-v{version}`, and
+        # _stage_package runs BEFORE _stage_deploy bumps the version — so a
+        # re-publish pushes the same tag twice and IMMUTABLE would fail that
+        # second push. What matters is that deployment references the image by
+        # *digest* (deployer/image_build.py), so the mutable tag is cosmetic.
         repo = ecr.Repository(
             self,
             "AgentsRepo",
-            repository_name="launchpad-agents",
+            repository_name=name("launchpad-agents"),
             # Scan on push so a deploy can be blocked on findings before the image
             # ever backs a runtime.
             image_scan_on_push=True,
@@ -88,182 +169,102 @@ class LaunchpadBaseStack(Stack):
         )
 
         # ---- CodeBuild: ARM64 image builder (buildspec ships in source zip) ----
+        pip_index_url = (
+            self.node.try_get_context("codebuild_pip_index_url")
+            or DEFAULT_CODEBUILD_PIP_INDEX_URL
+        )
+        pip_fallback_index_url = (
+            self.node.try_get_context("codebuild_pip_fallback_index_url")
+            or DEFAULT_CODEBUILD_PIP_FALLBACK_INDEX_URL
+        )
+        npm_registry = self.node.try_get_context("npm_registry") or DEFAULT_NPM_REGISTRY
+        base_image_mirror_enabled = str(
+            self.node.try_get_context("base_image_mirror_enabled") or "false"
+        ).lower() == "true"
+        base_image_mirror_prefix = (
+            self.node.try_get_context("base_image_mirror_prefix")
+            or DEFAULT_BASE_IMAGE_MIRROR_PREFIX
+        )
+        codebuild_env_vars: dict[str, codebuild.BuildEnvironmentVariable] = {
+            "PIP_INDEX_URL": codebuild.BuildEnvironmentVariable(value=pip_index_url),
+            # uv 0.9.10 deprecates UV_INDEX_URL in favor of UV_DEFAULT_INDEX —
+            # set both so the mirror applies regardless of which uv release runs.
+            "UV_INDEX_URL": codebuild.BuildEnvironmentVariable(value=pip_index_url),
+            "UV_DEFAULT_INDEX": codebuild.BuildEnvironmentVariable(value=pip_index_url),
+            # the Dockerfiles retry on this one when the primary refuses the build egress
+            "PIP_FALLBACK_INDEX_URL": codebuild.BuildEnvironmentVariable(
+                value=pip_fallback_index_url
+            ),
+            "NPM_CONFIG_REGISTRY": codebuild.BuildEnvironmentVariable(value=npm_registry),
+        }
+        pip_extra_index_url = str(self.node.try_get_context("pip_extra_index_url") or "")
+        if pip_extra_index_url:
+            # N11-obs25: optional secondary index for mirror outages — must be
+            # uv-complete (NJU is; Aliyun 404s its PEP 658 metadata); pip + uv spellings.
+            codebuild_env_vars["PIP_EXTRA_INDEX_URL"] = codebuild.BuildEnvironmentVariable(
+                value=pip_extra_index_url
+            )
+            codebuild_env_vars["UV_INDEX"] = codebuild.BuildEnvironmentVariable(
+                value=pip_extra_index_url
+            )
+        if base_image_mirror_enabled:
+            codebuild_env_vars["BASE_IMAGE"] = codebuild.BuildEnvironmentVariable(
+                value=(
+                    f"{self.account}.dkr.ecr.{self.region}.{self.url_suffix}/"
+                    f"{base_image_mirror_prefix}/python:3.13-slim"
+                )
+            )
         build_project = codebuild.Project(
             self,
             "AgentBuilder",
-            project_name="launchpad-agent-builder",
+            project_name=name("launchpad-agent-builder"),
             source=codebuild.Source.s3(bucket=artifacts, path="builds/placeholder/source.zip"),
             environment=codebuild.BuildEnvironment(
                 build_image=codebuild.LinuxArmBuildImage.AMAZON_LINUX_2023_STANDARD_3_0,
                 compute_type=codebuild.ComputeType.SMALL,
                 privileged=True,  # docker build
+                environment_variables=codebuild_env_vars,
             ),
             timeout=Duration.minutes(30),
         )
         repo.grant_pull_push(build_project)
         artifacts.grant_read(build_project)
-
-        # ---- Cognito: users, roles for Cedar policy demos ----
-        pool = cognito.UserPool(
-            self,
-            "Users",
-            user_pool_name="launchpad-users",
-            self_sign_up_enabled=False,
-            sign_in_aliases=cognito.SignInAliases(username=True, email=True),
-            password_policy=cognito.PasswordPolicy(
-                min_length=12,
-                require_lowercase=True,
-                require_uppercase=True,
-                require_digits=True,
-                require_symbols=False,
-            ),
-            removal_policy=RemovalPolicy.DESTROY,
-        )
-        client = pool.add_client(
-            "Console",
-            user_pool_client_name="launchpad-console",
-            auth_flows=cognito.AuthFlow(user_password=True, user_srp=True),
-            id_token_validity=Duration.hours(8),
-            access_token_validity=Duration.hours(8),
-        )
-        pool.add_domain(
-            "Domain",
-            cognito_domain=cognito.CognitoDomainOptions(
-                domain_prefix=f"launchpad-{self.account}"
-            ),
-        )
-        invoke_scope = cognito.ResourceServerScope(
-            scope_name="invoke", scope_description="Invoke launchpad gateway tools"
-        )
-        resource_server = pool.add_resource_server(
-            "GatewayResourceServer",
-            identifier="launchpad-gw",
-            scopes=[invoke_scope],
-        )
-        m2m_client = pool.add_client(
-            "AgentM2M",
-            user_pool_client_name="launchpad-agent-m2m",
-            generate_secret=True,
-            auth_flows=cognito.AuthFlow(user_password=False, user_srp=False),
-            o_auth=cognito.OAuthSettings(
-                flows=cognito.OAuthFlows(client_credentials=True),
-                scopes=[cognito.OAuthScope.resource_server(resource_server, invoke_scope)],
-            ),
-            access_token_validity=Duration.hours(1),
-        )
-
-        for role_name in ("platform-admin", "hr-analyst"):
-            cognito.CfnUserPoolGroup(
-                self,
-                f"Group-{role_name}",
-                user_pool_id=pool.user_pool_id,
-                group_name=role_name,
-                description=f"Launchpad role: {role_name}",
-            )
-
-        for spec in DEMO_USERS:
-            user = cognito.CfnUserPoolUser(
-                self,
-                f"User-{spec['username']}",
-                user_pool_id=pool.user_pool_id,
-                username=spec["username"],
-                message_action="SUPPRESS",
-                user_attributes=[
-                    cognito.CfnUserPoolUser.AttributeTypeProperty(
-                        name="email", value=spec["email"]
-                    ),
-                    cognito.CfnUserPoolUser.AttributeTypeProperty(
-                        name="email_verified", value="true"
-                    ),
+        # N17-obs465: the aws-cn trace exporter layer is built FROM a member's existing image
+        # (BYOC container_image) — pull only, this account + region's repositories
+        build_project.add_to_role_policy(
+            iam.PolicyStatement(
+                sid="EcrPullMemberImages",
+                actions=[
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:BatchGetImage",
+                    "ecr:GetDownloadUrlForLayer",
                 ],
+                resources=[f"arn:{self.partition}:ecr:{self.region}:{self.account}:repository/*"],
             )
-            attachment = cognito.CfnUserPoolUserToGroupAttachment(
-                self,
-                f"Attach-{spec['username']}",
-                user_pool_id=pool.user_pool_id,
-                group_name=spec["group"],
-                username=spec["username"],
-            )
-            attachment.add_dependency(user)
+        )
 
         # ---- IAM: execution role assumed by AgentCore Runtime workloads ----
         exec_role = iam.Role(
             self,
             "AgentExecutionRole",
-            role_name=regional_role_name("launchpad-agent-execution-role", self.region),
-            assumed_by=iam.ServicePrincipal(
-                "bedrock-agentcore.amazonaws.com",
+            role_name=name(regional_role_name("launchpad-agent-execution-role", self.region)),
+            assumed_by=service_principal(
+                "bedrock-agentcore",
                 conditions={
                     "StringEquals": {"aws:SourceAccount": self.account},
                 },
             ),
             description="Assumed by AgentCore Runtime/Harness workloads launched by Launchpad",
         )
+        self.exec_role = exec_role
         # The platform trusts an execution role for additive grants only when it carries
         # this marker (workspace roles created by the backend carry it too); scoped to
         # this one construct so the gateway/KB/build roles stay unmarked.
         Tags.of(exec_role).add("launchpad:managed", "true")
         exec_role.add_to_policy(
             iam.PolicyStatement(
-                sid="BedrockModels",
-                actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-                resources=["*"],
-            )
-        )
-        # Bedrock Mantle (model_source="mantle") is a SEPARATE IAM service from
-        # bedrock, despite having no boto3 client and no entry in botocore's
-        # endpoints.json — bedrock:InvokeModel does NOT cover it. Without these
-        # statements a Mantle agent deploys and reaches ACTIVE, then fails on its
-        # first invoke with `401 access_denied … not authorized to perform:
-        # bedrock-mantle:CreateInference on … project/default`. Mirrors the AWS
-        # managed policy AmazonBedrockMantleInferenceAccess.
-        exec_role.add_to_policy(
-            iam.PolicyStatement(
-                sid="BedrockMantleInference",
-                actions=[
-                    "bedrock-mantle:Get*",
-                    "bedrock-mantle:List*",
-                    "bedrock-mantle:CreateInference",
-                ],
-                # Mantle models are hosted outside the stack's region, so the
-                # region segment stays wildcarded (see LAUNCHPAD_MANTLE_REGION).
-                resources=[f"arn:aws:bedrock-mantle:*:{self.account}:project/*"],
-            )
-        )
-        exec_role.add_to_policy(
-            iam.PolicyStatement(
-                # Auth is a short-lived bearer token minted from this role by
-                # aws_bedrock_token_generator, so this action is not optional.
-                sid="BedrockMantleCallWithBearerToken",
-                actions=["bedrock-mantle:CallWithBearerToken"],
-                resources=["*"],
-            )
-        )
-        exec_role.add_to_policy(
-            iam.PolicyStatement(
-                # Third-party Mantle models (the openai.* / xai.* families) are
-                # fronted by Marketplace subscriptions. Scoped by CalledViaLast so
-                # the role cannot subscribe to anything on its own initiative.
-                sid="MarketplaceOperationsFromBedrockMantleFor3pModels",
-                actions=["aws-marketplace:Subscribe", "aws-marketplace:ViewSubscriptions"],
-                resources=["*"],
-                conditions={
-                    "StringEquals": {"aws:CalledViaLast": "bedrock-mantle.amazonaws.com"}
-                },
-            )
-        )
-        exec_role.add_to_policy(
-            iam.PolicyStatement(
                 sid="AgentCoreDataPlane",
                 actions=[
-                    "bedrock-agentcore:CreateEvent",
-                    "bedrock-agentcore:GetEvent",
-                    "bedrock-agentcore:ListEvents",
-                    "bedrock-agentcore:ListSessions",
-                    "bedrock-agentcore:ListActors",
-                    "bedrock-agentcore:RetrieveMemoryRecords",
-                    "bedrock-agentcore:GetMemoryRecord",
-                    "bedrock-agentcore:ListMemoryRecords",
                     "bedrock-agentcore:GetResourceApiKey",
                     "bedrock-agentcore:GetResourceOauth2Token",
                     "bedrock-agentcore:GetWorkloadAccessToken",
@@ -318,59 +319,20 @@ class LaunchpadBaseStack(Stack):
         )
         exec_role.add_to_policy(
             iam.PolicyStatement(
-                sid="ABTestOrchestration",
+                sid="GatewayAndRuntimeRead",
                 actions=[
                     "bedrock-agentcore:GetGateway",
                     "bedrock-agentcore:GetGatewayTarget",
                     "bedrock-agentcore:ListGatewayTargets",
                     "bedrock-agentcore:InvokeAgentRuntime",
+                    # N12-bug5: an invoke that carries runtimeUserId (every Launchpad
+                    # caller does) is authorized as the ForUser action — same pair as
+                    # the gateway role's InvokeRuntimeTargets and the per-agent policies
+                    "bedrock-agentcore:InvokeAgentRuntimeForUser",
                     # Chat's explicit END SESSION (StopRuntimeSession) — a console
                     # action, granted next to the console's InvokeAgentRuntime
                     "bedrock-agentcore:StopRuntimeSession",
-                    "bedrock-agentcore:GetConfigurationBundle",
-                    "bedrock-agentcore:GetConfigurationBundleVersion",
-                    "bedrock-agentcore:ListConfigurationBundleVersions",
-                    "bedrock-agentcore:GetOnlineEvaluationConfig",
-                    "bedrock-agentcore:GetEvaluator",
-                    "bedrock-agentcore:GetABTest",
-                    "bedrock-agentcore:StartBatchEvaluation",
-                    "bedrock-agentcore:GetBatchEvaluation",
-                    # A/B tests manage routing rules on the experiment gateway
-                    "bedrock-agentcore:CreateGatewayRule",
-                    "bedrock-agentcore:GetGatewayRule",
-                    "bedrock-agentcore:UpdateGatewayRule",
-                    "bedrock-agentcore:DeleteGatewayRule",
-                    "bedrock-agentcore:ListGatewayRules",
-                    "bedrock-agentcore:UpdateGateway",
                 ],
-                resources=["*"],
-            )
-        )
-        # Managed KB retrieval for the code-generating methods (zip_runtime /
-        # container): their generated kb_search / kb_deep_search tools call the
-        # Bedrock data plane directly with this role instead of going through
-        # launchpad-kb-gw, which only a managed Harness can attach.
-        exec_role.add_to_policy(
-            iam.PolicyStatement(
-                sid="ManagedKbRetrieval",
-                actions=["bedrock:Retrieve", "bedrock:GetKnowledgeBase"],
-                resources=[
-                    f"arn:aws:bedrock:{self.region}:{self.account}:knowledge-base/*"
-                ],
-            )
-        )
-        # kb_deep_search (agentic multi-step retrieval). Kept as its own statement
-        # so the '*' resource is visible in isolation to anyone reading the role:
-        # AgenticRetrieveStream is NOT resource-scopable, so every Launchpad
-        # runtime can agentic-retrieve against any KB in the account. Accepted —
-        # launchpad-gateway-role already carries the same grant for the harness
-        # channel. The MANAGED foundation/reranking model types mean the service
-        # supplies the planner, so no extra model grant is needed beyond the
-        # account-wide bedrock:InvokeModel above.
-        exec_role.add_to_policy(
-            iam.PolicyStatement(
-                sid="ManagedKbAgenticRetrieval",
-                actions=["bedrock:AgenticRetrieveStream"],
                 resources=["*"],
             )
         )
@@ -379,7 +341,7 @@ class LaunchpadBaseStack(Stack):
                 sid="IdentityVaultSecrets",
                 actions=["secretsmanager:GetSecretValue"],
                 resources=[
-                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:bedrock-agentcore-identity!*"
+                    f"arn:{self.partition}:secretsmanager:{self.region}:{self.account}:secret:bedrock-agentcore-identity!*"
                 ],
             )
         )
@@ -411,43 +373,54 @@ class LaunchpadBaseStack(Stack):
         hr_lambda = lambda_.Function(
             self,
             "HrDatabase",
-            function_name="launchpad-hr-database",
+            function_name=name("launchpad-hr-database"),
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.ARM_64,
             handler="handler.lambda_handler",
             code=lambda_.Code.from_asset(str(SAMPLES_DIR / "hr_database_lambda")),
             timeout=Duration.seconds(15),
             description="Launchpad sample: HR database exposed as MCP tools",
+            log_group=lambda_log_group(self, "HrDatabaseLogs"),
         )
 
         # ---- samples: office-facts REST API (→ MCP via OpenAPI target) ----
         facts_lambda = lambda_.Function(
             self,
             "OfficeFacts",
-            function_name="launchpad-office-facts",
+            function_name=name("launchpad-office-facts"),
             runtime=lambda_.Runtime.PYTHON_3_12,
             architecture=lambda_.Architecture.ARM_64,
             handler="handler.lambda_handler",
             code=lambda_.Code.from_asset(str(SAMPLES_DIR / "rest_api")),
             timeout=Duration.seconds(10),
             description="Launchpad sample: office-facts REST backend",
+            log_group=lambda_log_group(self, "OfficeFactsLogs"),
         )
         facts_api = apigw.LambdaRestApi(
             self,
             "OfficeFactsApi",
-            rest_api_name="launchpad-office-facts",
+            rest_api_name=name("launchpad-office-facts"),
             handler=facts_lambda,
             proxy=False,
             deploy_options=apigw.StageOptions(stage_name="prod"),
+            # N11 r3 (live): the L2 default endpoint type is EDGE, which the
+            # aws-cn partition rejects ("Endpoint Configuration type EDGE is
+            # not supported in this region: cn-northwest-1") and rolls the
+            # whole launchpad-base stack back. REGIONAL is what China offers.
+            endpoint_configuration=apigw.EndpointConfiguration(
+                types=[apigw.EndpointType.REGIONAL]
+            ),
         )
         facts = facts_api.root.add_resource("facts")
         facts.add_method("GET", api_key_required=True)
         topic = facts.add_resource("{topic}")
         topic.add_method("GET", api_key_required=True)
-        api_key = facts_api.add_api_key("OfficeFactsKey", api_key_name="launchpad-office-facts")
+        api_key = facts_api.add_api_key(
+            "OfficeFactsKey", api_key_name=name("launchpad-office-facts")
+        )
         plan = facts_api.add_usage_plan(
             "OfficeFactsPlan",
-            name="launchpad-office-facts",
+            name=name("launchpad-office-facts"),
             throttle=apigw.ThrottleSettings(rate_limit=10, burst_limit=20),
         )
         plan.add_api_key(api_key)
@@ -457,9 +430,9 @@ class LaunchpadBaseStack(Stack):
         gateway_role = iam.Role(
             self,
             "GatewayRole",
-            role_name=regional_role_name("launchpad-gateway-role", self.region),
-            assumed_by=iam.ServicePrincipal(
-                "bedrock-agentcore.amazonaws.com",
+            role_name=name(regional_role_name("launchpad-gateway-role", self.region)),
+            assumed_by=service_principal(
+                "bedrock-agentcore",
                 conditions={"StringEquals": {"aws:SourceAccount": self.account}},
             ),
             description="Assumed by AgentCore Gateway to reach targets + identity vault",
@@ -491,61 +464,7 @@ class LaunchpadBaseStack(Stack):
                     "bedrock-agentcore:InvokeAgentRuntimeForUser",
                 ],
                 resources=[
-                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}:runtime/*"
-                ],
-            )
-        )
-        # A Harness canary fronts two Harness endpoints with passthrough targets that
-        # call InvokeHarness through this role. Measured live 2026-09-30: the call is
-        # authorised as InvokeAgentRuntime on the HARNESS arn (403 without it), so both
-        # actions are granted on harness/* (endpoints are sub-resources of it).
-        gateway_role.add_to_policy(
-            iam.PolicyStatement(
-                sid="InvokeHarnessTargets",
-                actions=[
-                    "bedrock-agentcore:InvokeHarness",
-                    "bedrock-agentcore:InvokeAgentRuntime",
-                ],
-                resources=[
-                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}:harness/*"
-                ],
-            )
-        )
-        # A request carrying config-bundle baggage makes the GATEWAY resolve the
-        # bundle itself, with this role — not just the agent. Without this grant the
-        # Gateway answers the MCP call with HTTP 400 `Config bundle fetch failed:
-        # … not authorized to perform: bedrock-agentcore:GetConfigurationBundleVersion`,
-        # so an agent under a config-bundle A/B loses every Gateway tool. Measured
-        # live 2026-08-06; read-only, and there is no narrower resource because
-        # bundle names are generated per experiment.
-        gateway_role.add_to_policy(
-            iam.PolicyStatement(
-                sid="ConfigurationBundleRead",
-                actions=[
-                    "bedrock-agentcore:GetConfigurationBundle",
-                    "bedrock-agentcore:GetConfigurationBundleVersion",
-                ],
-                resources=[
-                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}"
-                    ":configuration-bundle/*"
-                ],
-            )
-        )
-        gateway_role.add_to_policy(
-            iam.PolicyStatement(
-                sid="PolicyEngineEvaluation",
-                actions=[
-                    "bedrock-agentcore:GetPolicyEngine",
-                    "bedrock-agentcore:GetPolicy",
-                    "bedrock-agentcore:ListPolicies",
-                    "bedrock-agentcore:ListPolicySummaries",
-                    "bedrock-agentcore:AuthorizeAction",
-                    "bedrock-agentcore:PartiallyAuthorizeActions",
-                    "bedrock-agentcore:BatchAuthorizeActions",
-                ],
-                resources=[
-                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}:policy-engine/*",
-                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}:gateway/*",
+                    f"arn:{self.partition}:bedrock-agentcore:{self.region}:{self.account}:runtime/*"
                 ],
             )
         )
@@ -554,57 +473,8 @@ class LaunchpadBaseStack(Stack):
                 sid="IdentitySecrets",
                 actions=["secretsmanager:GetSecretValue"],
                 resources=[
-                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:bedrock-agentcore-identity!*"
+                    f"arn:{self.partition}:secretsmanager:{self.region}:{self.account}:secret:bedrock-agentcore-identity!*"
                 ],
-            )
-        )
-        # Managed KB connector targets: the gateway validates bound KBs at target
-        # creation (GetKnowledgeBase) and retrieves on behalf of agents.
-        gateway_role.add_to_policy(
-            iam.PolicyStatement(
-                sid="ManagedKbRetrieval",
-                actions=["bedrock:GetKnowledgeBase", "bedrock:Retrieve"],
-                resources=[
-                    f"arn:aws:bedrock:{self.region}:{self.account}:knowledge-base/*"
-                ],
-            )
-        )
-        gateway_role.add_to_policy(
-            iam.PolicyStatement(
-                sid="ManagedKbAgenticRetrieval",
-                # AgenticRetrieveStream is not resource-scoped.
-                actions=["bedrock:AgenticRetrieveStream"],
-                resources=["*"],
-            )
-        )
-
-        # ---- knowledge base service role (assumed by Bedrock Managed KB) ----
-        # CreateKnowledgeBase requires a roleArn; managed KBs use it to read S3
-        # data sources. Base grant covers the artifacts bucket kb/ prefix;
-        # per-KB inline policies (launchpad-kb-{id}) extend it to external buckets.
-        kb_role = iam.Role(
-            self,
-            "KnowledgeBaseRole",
-            role_name=regional_role_name("launchpad-kb-role", self.region),
-            assumed_by=iam.ServicePrincipal(
-                "bedrock.amazonaws.com",
-                conditions={"StringEquals": {"aws:SourceAccount": self.account}},
-            ),
-            description="Assumed by Bedrock Managed Knowledge Bases to ingest S3 data sources",
-        )
-        kb_role.add_to_policy(
-            iam.PolicyStatement(
-                sid="KbDataObjects",
-                actions=["s3:GetObject"],
-                resources=[artifacts.arn_for_objects("kb/*")],
-            )
-        )
-        kb_role.add_to_policy(
-            iam.PolicyStatement(
-                sid="KbDataList",
-                actions=["s3:ListBucket"],
-                resources=[artifacts.bucket_arn],
-                conditions={"StringLike": {"s3:prefix": "kb/*"}},
             )
         )
 
@@ -613,13 +483,9 @@ class LaunchpadBaseStack(Stack):
         CfnOutput(self, "OfficeFactsApiUrl", value=facts_api.url)
         CfnOutput(self, "OfficeFactsApiKeyId", value=api_key.key_id)
         CfnOutput(self, "GatewayRoleArn", value=gateway_role.role_arn)
-        CfnOutput(self, "KbRoleArn", value=kb_role.role_arn)
         CfnOutput(self, "ArtifactsBucketName", value=artifacts.bucket_name)
         CfnOutput(self, "EcrRepoName", value=repo.repository_name)
         CfnOutput(self, "EcrRepoUri", value=repo.repository_uri)
         CfnOutput(self, "CodeBuildProjectName", value=build_project.project_name)
         CfnOutput(self, "CodeBuildRoleArn", value=build_project.role.role_arn)
-        CfnOutput(self, "UserPoolId", value=pool.user_pool_id)
-        CfnOutput(self, "UserPoolClientId", value=client.user_pool_client_id)
-        CfnOutput(self, "M2MClientId", value=m2m_client.user_pool_client_id)
         CfnOutput(self, "AgentExecutionRoleArn", value=exec_role.role_arn)

@@ -1,11 +1,11 @@
 import { Plus, ShieldAlert } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/auth-context";
 import { api, ApiError, errorMessage } from "../../lib/api";
-import type { ConsoleVersion, ManagedVideo, ManagedVideoCatalog, VideoContent, VideoLocale, VideoTaxonomy } from "../../lib/videos";
+import type { ConsoleVersion, ContentKind, ManagedVideo, ManagedVideoCatalog, VideoContent, VideoLocale, VideoTaxonomy } from "../../lib/videos";
 import { fmtTime } from "../format";
 import { useLoad, useV2Toast } from "../hooks";
 import { Alert, Button, Card, type Column, Confirm, Field, FlowHeader, LinkButton, PageHeader, Select, Spin, Table, Tag } from "../ui";
@@ -16,16 +16,21 @@ const emptyVideo = (): VideoContent => ({
   category_id: "",
   section_id: "",
   console_version: "v2",
+  kind: "video",
   title: { en: "", "zh-CN": "" },
   description: { en: "", "zh-CN": "" },
   cdn_url: "",
   webm_url: null,
   poster_url: null,
   caption_url: null,
+  alt_url: null,
   duration_seconds: 0,
   chapters: [],
   sort_order: 1000,
 });
+/** a manual: a same-origin `/media/…` path or a permanent HTTPS link, `.pdf` or `.html` */
+const DOCUMENT_URL = /^(https:\/\/[^?#\s]+|\/media\/[^?#\s]+)\.(pdf|html)$/i;
+const documentExtension = (url: string) => url.trim().toLowerCase().replace(/^.*\./, "");
 
 type Action = "publish" | "unpublish" | "delete";
 
@@ -37,12 +42,15 @@ function directoryLabel(taxonomy: VideoTaxonomy, content: VideoContent, locale: 
 
 /** Admin-only boundary is above this component; the API independently enforces it. */
 function VideoList({
+  header,
   catalog,
   loading,
   error,
   onRetry,
   onOpen,
 }: {
+  /** the library's page header with the 观看 / 管理 tabs */
+  header: ReactNode;
   catalog: ManagedVideoCatalog | null;
   loading: boolean;
   error: string | null;
@@ -61,7 +69,10 @@ function VideoList({
           <LinkButton onClick={() => onOpen(row.id)} testId={`video-manage-open-${row.id}`}>
             {row.content.title[locale]}
           </LinkButton>
-          <span className="sub mono">ID: {row.id}</span>
+          <span className="sub mono">
+            ID: {row.id}
+            {row.content.kind === "document" && <> · <Tag tone="outline">{t("videos.kind.document")}</Tag></>}
+          </span>
         </>
       ),
     },
@@ -97,7 +108,7 @@ function VideoList({
   ];
   return (
     <>
-      <PageHeader title={t("videoManage.title")} desc={t("videoManage.description")} />
+      {header}
       {error && catalog && <Alert tone="error" action={<Button onClick={onRetry}>{t("v2.common.retry")}</Button>}>{error}</Alert>}
       <Card>
         <div className="v2-toolbar">
@@ -175,15 +186,22 @@ function VideoEditor({
     section.id === draft.section_id && section.categoryId === draft.category_id);
   const titleOk = Boolean(draft.title["zh-CN"].trim());
   const descriptionOk = Boolean(draft.description["zh-CN"].trim());
-  const cdnOk = /^https:\/\/[^?#]+\.(mp4|webm)$/i.test(draft.cdn_url.trim());
+  const isDocument = draft.kind === "document";
+  const cdnOk = isDocument
+    ? DOCUMENT_URL.test(draft.cdn_url.trim())
+    : /^https:\/\/[^?#]+\.(mp4|webm)$/i.test(draft.cdn_url.trim());
+  const altValue = draft.alt_url?.trim() ?? "";
+  const altOk = !isDocument || !altValue || (
+    DOCUMENT_URL.test(altValue) && documentExtension(altValue) !== documentExtension(draft.cdn_url));
   const dirty = !row || JSON.stringify(draft) !== JSON.stringify(row.content) ||
     chaptersText !== JSON.stringify(row.content.chapters, null, 2);
   const saveReason = !draft.category_id ? "videoManage.chooseCategory"
     : !directoryOk ? "videoManage.chooseSection"
       : !titleOk ? "videoManage.titleRequired"
         : !descriptionOk ? "videoManage.descriptionRequired"
-          : !cdnOk ? "videoManage.invalidCdn"
-            : !dirty ? "videoManage.noChanges" : null;
+          : !cdnOk ? (isDocument ? "videoManage.invalidDocument" : "videoManage.invalidCdn")
+            : !altOk ? "videoManage.invalidAlt"
+              : !dirty ? "videoManage.noChanges" : null;
   const publishReason = !row || dirty ? "videoManage.saveFirst"
     : row.status === "published" && !row.has_unpublished_changes ? "videoManage.alreadyPublished" : null;
   const canSave = !busy && !saveReason;
@@ -206,10 +224,13 @@ function VideoEditor({
       title: { ...draft.title, en: draft.title.en.trim() || draft.title["zh-CN"].trim() },
       description: { ...draft.description, en: draft.description.en.trim() || draft.description["zh-CN"].trim() },
       cdn_url: draft.cdn_url.trim(),
-      webm_url: draft.webm_url?.trim() || null,
       poster_url: draft.poster_url?.trim() || null,
-      caption_url: draft.caption_url?.trim() || null,
-      chapters,
+      // a document carries no playable media; a recording no other-format twin
+      webm_url: isDocument ? null : draft.webm_url?.trim() || null,
+      caption_url: isDocument ? null : draft.caption_url?.trim() || null,
+      alt_url: isDocument ? altValue || null : null,
+      duration_seconds: isDocument ? 0 : draft.duration_seconds,
+      chapters: isDocument ? [] : chapters,
     };
     setBusy(true);
     try {
@@ -300,15 +321,26 @@ function VideoEditor({
       <div className="v2-video-manage-layout">
         <Card title={t("videoManage.edit")}>
           <fieldset className="v2-video-manage-form v2-form" disabled={busy}>
-            <Field label={t("videoManage.consoleVersion")} required>
-              <Select value={draft.console_version}
-                options={[
-                  { value: "v2", label: t("videos.version.v2") },
-                  { value: "classic", label: t("videos.version.classic") },
-                ]}
-                onChange={(v) => update("console_version", v as ConsoleVersion)}
-                testId="video-manage-version" />
-            </Field>
+            <div className="v2-form cols-2">
+              <Field label={t("videoManage.kind")} required>
+                <Select value={draft.kind}
+                  options={[
+                    { value: "video", label: t("videos.kind.video") },
+                    { value: "document", label: t("videos.kind.document") },
+                  ]}
+                  onChange={(v) => update("kind", v as ContentKind)}
+                  testId="video-manage-kind" />
+              </Field>
+              <Field label={t("videoManage.consoleVersion")} required>
+                <Select value={draft.console_version}
+                  options={[
+                    { value: "v2", label: t("videos.version.v2") },
+                    { value: "classic", label: t("videos.version.classic") },
+                  ]}
+                  onChange={(v) => update("console_version", v as ConsoleVersion)}
+                  testId="video-manage-version" />
+              </Field>
+            </div>
             <div className="v2-form cols-2">
               <Field label={t("videoManage.category")} required>
                 <Select value={draft.category_id}
@@ -347,43 +379,70 @@ function VideoEditor({
                   onChange={(event) => updateText("description", "en", event.target.value)} maxLength={2000} rows={4} />
               </Field>
             </div>
-            <Field label={t("videoManage.cdnUrl")} required hint={t("videoManage.cdnHint")}
-              error={draft.cdn_url && !cdnOk ? t("videoManage.invalidCdn") : null}>
-              <input className="v2-input mono" type="url" value={draft.cdn_url}
-                onChange={(event) => update("cdn_url", event.target.value)}
-                placeholder="https://cdn.example.com/media/video.mp4" data-testid="video-manage-cdn" />
-            </Field>
+            {isDocument ? (
+              <>
+                <Field label={t("videoManage.documentUrl")} required hint={t("videoManage.documentHint")}
+                  error={draft.cdn_url && !cdnOk ? t("videoManage.invalidDocument") : null}>
+                  <input className="v2-input mono" type="text" value={draft.cdn_url}
+                    onChange={(event) => update("cdn_url", event.target.value)}
+                    placeholder="/media/cn-itsm-manual/20261107-v2-cn-itsm/student-manual-1.9.html"
+                    data-testid="video-manage-cdn" />
+                </Field>
+                <Field label={t("videoManage.altUrl")} hint={t("videoManage.altHint")}
+                  error={altValue && !altOk ? t("videoManage.invalidAlt") : null}>
+                  <input className="v2-input mono" type="text" value={draft.alt_url ?? ""}
+                    onChange={(event) => update("alt_url", event.target.value || null)}
+                    placeholder="/media/cn-itsm-manual/20261107-v2-cn-itsm/student-manual-1.9.pdf"
+                    data-testid="video-manage-alt" />
+                </Field>
+              </>
+            ) : (
+              <Field label={t("videoManage.cdnUrl")} required hint={t("videoManage.cdnHint")}
+                error={draft.cdn_url && !cdnOk ? t("videoManage.invalidCdn") : null}>
+                <input className="v2-input mono" type="url" value={draft.cdn_url}
+                  onChange={(event) => update("cdn_url", event.target.value)}
+                  placeholder="https://cdn.example.com/media/video.mp4" data-testid="video-manage-cdn" />
+              </Field>
+            )}
             <details className="v2-video-manage-advanced">
               <summary>{t("videoManage.advanced")}</summary>
               <div className="v2-form">
-                <Field label={t("videoManage.webmUrl")}>
-                  <input className="v2-input mono" type="url" value={draft.webm_url ?? ""}
-                    onChange={(event) => update("webm_url", event.target.value || null)} />
-                </Field>
+                {!isDocument && (
+                  <Field label={t("videoManage.webmUrl")}>
+                    <input className="v2-input mono" type="url" value={draft.webm_url ?? ""}
+                      onChange={(event) => update("webm_url", event.target.value || null)} />
+                  </Field>
+                )}
                 <Field label={t("videoManage.posterUrl")}>
-                  <input className="v2-input mono" type="url" value={draft.poster_url ?? ""}
+                  <input className="v2-input mono" type={isDocument ? "text" : "url"} value={draft.poster_url ?? ""}
                     onChange={(event) => update("poster_url", event.target.value || null)} />
                 </Field>
-                <Field label={t("videoManage.captionUrl")}>
-                  <input className="v2-input mono" type="url" value={draft.caption_url ?? ""}
-                    onChange={(event) => update("caption_url", event.target.value || null)} />
-                </Field>
-                <div className="v2-form cols-2">
-                  <Field label={t("videoManage.duration")}>
-                    <input className="v2-input mono" type="number" min={0} step="0.001"
-                      value={draft.duration_seconds}
-                      onChange={(event) => update("duration_seconds", Number(event.target.value))} />
+                {!isDocument && (
+                  <Field label={t("videoManage.captionUrl")}>
+                    <input className="v2-input mono" type="url" value={draft.caption_url ?? ""}
+                      onChange={(event) => update("caption_url", event.target.value || null)} />
                   </Field>
+                )}
+                <div className="v2-form cols-2">
+                  {!isDocument && (
+                    <Field label={t("videoManage.duration")}>
+                      <input className="v2-input mono" type="number" min={0} step="0.001"
+                        value={draft.duration_seconds}
+                        onChange={(event) => update("duration_seconds", Number(event.target.value))} />
+                    </Field>
+                  )}
                   <Field label={t("videoManage.order")}>
                     <input className="v2-input mono" type="number" min={0} max={1000000}
                       value={draft.sort_order}
                       onChange={(event) => update("sort_order", Number(event.target.value))} />
                   </Field>
                 </div>
-                <Field label={t("videoManage.chapters")} hint={t("videoManage.chaptersHint")}>
-                  <textarea className="v2-input mono" value={chaptersText} rows={7}
-                    onChange={(event) => setChaptersText(event.target.value)} />
-                </Field>
+                {!isDocument && (
+                  <Field label={t("videoManage.chapters")} hint={t("videoManage.chaptersHint")}>
+                    <textarea className="v2-input mono" value={chaptersText} rows={7}
+                      onChange={(event) => setChaptersText(event.target.value)} />
+                  </Field>
+                )}
               </div>
             </details>
           </fieldset>
@@ -397,8 +456,15 @@ function VideoEditor({
         </Card>
         <Card title={t("videoManage.preview")} sub={t("videoManage.previewHint")}>
           {draft.cdn_url && cdnOk ? (
-            <video controls preload="none" className="v2-video-manage-preview"
-              poster={draft.poster_url ?? undefined} src={draft.cdn_url} data-testid="video-manage-preview" />
+            isDocument ? (
+              <a className="v2-btn" href={draft.cdn_url.trim()} target="_blank" rel="noopener noreferrer"
+                data-testid="video-manage-document-preview">
+                {t("videoManage.openDocumentPreview")}
+              </a>
+            ) : (
+              <video controls preload="none" className="v2-video-manage-preview"
+                poster={draft.poster_url ?? undefined} src={draft.cdn_url} data-testid="video-manage-preview" />
+            )
           ) : <div className="v2-muted">{t("videoManage.noPreview")}</div>}
           {row && (
             <dl className="v2-video-manage-meta">
@@ -426,7 +492,12 @@ function VideoEditor({
   );
 }
 
-export function V2VideoManagement() {
+/**
+ * 视频管理 — the administrator's 管理 tab of the Videos page (`/v2/videos?view=manage`,
+ * N15-obs14; `/v2/video-management` redirects here). `&edit=new` opens a blank draft,
+ * `&edit=<id>` the editor. A member deep-linking the tab gets the admin-required card.
+ */
+export function V2VideoManagement({ header }: { header: ReactNode }) {
   const { isAdmin } = useAuth();
   const { t } = useTranslation();
   if (!isAdmin) {
@@ -442,16 +513,17 @@ export function V2VideoManagement() {
       </>
     );
   }
-  return <Manager />;
+  return <Manager header={header} />;
 }
 
-function Manager() {
+const MANAGE = { view: "manage" };
+
+function Manager({ header }: { header: ReactNode }) {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
   const catalog = useLoad(() => api.manageVideos(), "video-management");
-  const view = params.get("view");
-  const selected = view === "new" ? NEW : view === "edit" ? params.get("id") : null;
-  const back = useCallback(() => setParams({}), [setParams]);
+  const selected = params.get("edit");
+  const back = useCallback(() => setParams(MANAGE), [setParams]);
   if (selected) {
     if (!catalog.data) {
       return catalog.loading ? <Spin /> : (
@@ -466,18 +538,19 @@ function Manager() {
         id={selected}
         taxonomy={catalog.data.taxonomy}
         onBack={back}
-        onCreated={(id) => setParams({ view: "edit", id }, { replace: true })}
+        onCreated={(id) => setParams({ ...MANAGE, edit: id }, { replace: true })}
         onChanged={catalog.reload}
       />
     );
   }
   return (
     <VideoList
+      header={header}
       catalog={catalog.data}
       loading={catalog.loading}
       error={catalog.error}
       onRetry={catalog.reload}
-      onOpen={(id) => setParams(id === NEW ? { view: "new" } : { view: "edit", id })}
+      onOpen={(id) => setParams({ ...MANAGE, edit: id })}
     />
   );
 }

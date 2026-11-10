@@ -1,66 +1,52 @@
 """Online evaluation scores live traces, which carry no ground truth.
 
 A custom judge whose instructions reference ``{expected_response}`` &co must be
-refused up front — AWS refuses it too, but only at
-``CreateOnlineEvaluationConfig``, i.e. after ``stage_gateway`` has already
-created the shared gateway and the v1 runtime target.
+refused up front (N12 E2-1: the judge is an ``eval_evaluators`` row, so the check
+is a ledger read — no control-plane call, no fail-open path any more).
 """
 
 import pytest
 
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError
-from app.optimization.service import ONLINE_EVAL_DEFAULT, normalize_online_evaluators
+from app.evaluation.models import EvalEvaluator
+from app.evaluation.online_evaluators import ONLINE_EVAL_DEFAULT, normalize_online_evaluators
 
 
-class ResourceNotFoundException(Exception):
-    pass
+def _judge(db, evaluator_id, instructions, *, definition="judge", **cols):
+    fields = {"id": evaluator_id, "workspace_id": DEFAULT_WORKSPACE_ID, "name": evaluator_id,
+              "definition": definition, "instructions": instructions, **cols}
+    row = EvalEvaluator(**fields)
+    db.add(row)
+    db.commit()
+    return row
 
 
-class StubControl:
-    """Records GetEvaluator traffic so tests can assert it stays off the fast path."""
-
-    def __init__(self, evaluators=None, error=None):
-        self.evaluators = evaluators or {}
-        self.error = error
-        self.calls: list[str] = []
-
-    def get_evaluator(self, evaluatorId):  # noqa: N803 — boto3 shape
-        self.calls.append(evaluatorId)
-        if self.error is not None:
-            raise self.error
-        return self.evaluators[evaluatorId]
+@pytest.fixture
+def db():
+    session = SessionLocal()
+    yield session
+    session.close()
 
 
-def _judge(instructions):
-    return {"evaluatorConfig": {"llmAsAJudge": {"instructions": instructions}}}
-
-
-def test_builtin_only_selection_makes_no_aws_call():
-    control = StubControl()
-    chosen = normalize_online_evaluators(
-        ["Builtin.Helpfulness", "Builtin.Refusal"], control
-    )
+def test_builtin_only_selection_needs_no_ledger(db):
+    chosen = normalize_online_evaluators(["Builtin.Helpfulness", "Builtin.Refusal"], db)
     assert chosen == ["Builtin.Helpfulness", "Builtin.Refusal"]
-    assert control.calls == []
 
 
-def test_default_fallback_makes_no_aws_call():
-    control = StubControl()
-    assert normalize_online_evaluators(None, control) == list(ONLINE_EVAL_DEFAULT)
-    assert normalize_online_evaluators([], control) == list(ONLINE_EVAL_DEFAULT)
-    assert control.calls == []
+def test_default_fallback():
+    assert normalize_online_evaluators(None, None) == list(ONLINE_EVAL_DEFAULT)
+    assert normalize_online_evaluators([], None) == list(ONLINE_EVAL_DEFAULT)
 
 
 @pytest.mark.parametrize(
     "placeholder",
     ["expected_response", "expected_tool_trajectory", "assertions"],
 )
-def test_ground_truth_judge_rejected(placeholder):
-    control = StubControl(
-        {"gt_judge": _judge(f"Compare {{context}} against {{{placeholder}}}.")}
-    )
+def test_ground_truth_judge_rejected(db, placeholder):
+    _judge(db, "gt_judge", f"Compare {{context}} against {{{placeholder}}}.")
     with pytest.raises(AppError) as excinfo:
-        normalize_online_evaluators(["Builtin.Helpfulness", "gt_judge"], control)
+        normalize_online_evaluators(["Builtin.Helpfulness", "gt_judge"], db)
     err = excinfo.value
     assert err.code == "experiment.evaluator_unsupported"
     assert err.status_code == 400
@@ -68,95 +54,74 @@ def test_ground_truth_judge_rejected(placeholder):
     assert err.detail["placeholders"] == [placeholder]
 
 
-def test_trace_only_placeholders_are_fine_online():
+def test_trace_only_placeholders_are_fine_online(db):
     """context / assistant_turn / actual_tool_trajectory come from the trace."""
-    control = StubControl({
-        "quality_judge": _judge(
-            "Rate {assistant_turn} given {context} and {actual_tool_trajectory}."
-        )
-    })
-    chosen = normalize_online_evaluators(["quality_judge"], control)
-    assert chosen == ["quality_judge"]
-    assert control.calls == ["quality_judge"]
+    _judge(db, "quality_judge",
+           "Rate {assistant_turn} given {context} and {actual_tool_trajectory}.")
+    assert normalize_online_evaluators(["quality_judge"], db) == ["quality_judge"]
 
 
-def test_code_based_evaluator_has_no_instructions_to_inspect():
-    control = StubControl({
-        "lambda_judge": {
-            "evaluatorConfig": {"codeBased": {"lambdaFunctionArn": "arn:aws:lambda:x"}}
-        }
-    })
-    assert normalize_online_evaluators(["lambda_judge"], control) == ["lambda_judge"]
+def test_code_and_derived_evaluators_have_no_instructions_to_inspect(db):
+    _judge(db, "lambda_judge", None, definition="code", lambda_arn="arn:aws-cn:lambda:x")
+    _judge(db, "derived_judge", None, definition="derived",
+           base_evaluator_id="Builtin.Helpfulness")
+    assert normalize_online_evaluators(["lambda_judge", "derived_judge"], db) == [
+        "lambda_judge", "derived_judge"]
 
 
-def test_unknown_custom_evaluator_is_rejected_not_deferred():
-    control = StubControl(error=ResourceNotFoundException("no such evaluator"))
+def test_unknown_custom_evaluator_is_rejected(db):
     with pytest.raises(AppError) as excinfo:
-        normalize_online_evaluators(["ghost_judge"], control)
+        normalize_online_evaluators(["ghost_judge"], db)
     assert excinfo.value.status_code == 400
     assert "ghost_judge" in str(excinfo.value)
 
 
-def test_transient_lookup_failure_fails_open():
-    """A control-plane blip must not block gateway creation — AWS still enforces
-    the constraint server-side, so degrade to the pre-check behaviour."""
-    control = StubControl(error=RuntimeError("throttled"))
-    assert normalize_online_evaluators(["some_judge"], control) == ["some_judge"]
-
-
-def test_inspection_happens_after_dedup_and_cap():
-    control = StubControl({"judge": _judge("Rate {assistant_turn}.")})
-    assert normalize_online_evaluators(["judge", "judge", " judge "], control) == ["judge"]
-    assert control.calls == ["judge"]  # deduped before the lookup
-
-    over_cap = [f"judge{i}" for i in range(11)]
-    control = StubControl()
+def test_another_workspaces_judge_is_unknown_here(db):
+    _judge(db, "foreign_judge", "Rate {assistant_turn}.", workspace_id="other-ws")
     with pytest.raises(AppError):
-        normalize_online_evaluators(over_cap, control)
-    assert control.calls == []  # rejected without paying for 11 lookups
+        normalize_online_evaluators(["foreign_judge"], db)
 
 
-def test_skill_builtins_accepted_without_aws_call():
-    control = StubControl()
-    chosen = normalize_online_evaluators(
-        ["Builtin.SkillSelectionAccuracy", "Builtin.SkillInstructionFollowing"], control
-    )
-    assert chosen == [
-        "Builtin.SkillSelectionAccuracy",
-        "Builtin.SkillInstructionFollowing",
-    ]
-    assert control.calls == []
-
-
-def test_third_party_evaluator_accepted():
-    """Managed third-party evaluators expose no llmAsAJudge config — the
-    GetEvaluator probe finds nothing ground-truth-shaped and lets them through."""
-    control = StubControl({
-        "ThirdParty.DeepEval.TaskCompletion": {
-            "evaluatorId": "ThirdParty.DeepEval.TaskCompletion",
-            "evaluatorType": "ThirdParty",
-            "provider": "DeepEval",
-        }
-    })
-    chosen = normalize_online_evaluators(["ThirdParty.DeepEval.TaskCompletion"], control)
-    assert chosen == ["ThirdParty.DeepEval.TaskCompletion"]
-    assert control.calls == ["ThirdParty.DeepEval.TaskCompletion"]
-
-
-def test_skill_builtin_typo_rejected():
-    control = StubControl()
+def test_inspection_happens_after_dedup_and_cap(db):
+    _judge(db, "judge", "Rate {assistant_turn}.")
+    assert normalize_online_evaluators(["judge", "judge", " judge "], db) == ["judge"]
+    over_cap = [f"judge{i}" for i in range(11)]
     with pytest.raises(AppError) as excinfo:
-        normalize_online_evaluators(["Builtin.SkillTypo"], control)
+        normalize_online_evaluators(over_cap, db)
+    assert "at most 10" in str(excinfo.value)
+
+
+def test_skill_builtins_accepted(db):
+    chosen = normalize_online_evaluators(
+        ["Builtin.SkillSelectionAccuracy", "Builtin.SkillInstructionFollowing"], db
+    )
+    assert chosen == ["Builtin.SkillSelectionAccuracy", "Builtin.SkillInstructionFollowing"]
+
+
+def test_skill_builtin_typo_rejected(db):
+    with pytest.raises(AppError) as excinfo:
+        normalize_online_evaluators(["Builtin.SkillTypo"], db)
     assert excinfo.value.status_code == 400
-    assert control.calls == []
 
 
-def test_existing_rejections_unchanged():
-    control = StubControl()
+def test_trajectory_matchers_rejected_with_the_caller_code_family(db):
     with pytest.raises(AppError) as trajectory:
-        normalize_online_evaluators(["Builtin.TrajectoryInOrderMatch"], control)
+        normalize_online_evaluators(["Builtin.TrajectoryInOrderMatch"], db)
     assert trajectory.value.code == "experiment.evaluator_unsupported"
-    with pytest.raises(AppError) as unknown_builtin:
-        normalize_online_evaluators(["Builtin.NotAThing"], control)
-    assert unknown_builtin.value.status_code == 400
-    assert control.calls == []
+    with pytest.raises(AppError) as online:
+        normalize_online_evaluators(["Builtin.TrajectoryInOrderMatch"], db,
+                                    code_prefix="online_eval")
+    assert online.value.code == "online_eval.evaluator_unsupported"
+
+
+def test_a_non_session_second_argument_is_refused(db):
+    """E2-1 dropped the control-client parameter: every caller hands over the ledger
+    Session (the experiment router included), so an unknown custom id is a 400 everywhere."""
+
+    class NotASession:
+        pass
+
+    with pytest.raises(TypeError):
+        normalize_online_evaluators(["legacy_unknown"], NotASession())
+    with pytest.raises(AppError):
+        normalize_online_evaluators(["legacy_unknown"], db)

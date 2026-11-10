@@ -1,10 +1,11 @@
 import { useTranslation } from "react-i18next";
 
 import type { SkillLabJudgeMode, SkillLabStatus, SkillLabTargetBackend } from "../../../lib/api";
+import { modelUnavailableReason } from "../../../lib/models";
 import {
   BACKEND_LABELS,
   backendsOf,
-  JUDGE_MODEL_SUGGESTIONS,
+  judgeModelSuggestions,
   judgeReadiness,
   modelDefault,
 } from "../../../lib/skillLab";
@@ -45,6 +46,9 @@ export function ModelFields({
   const { t } = useTranslation();
   const judgeModes: SkillLabJudgeMode[] = status?.judge_modes?.length ? status.judge_modes : ["auto", "chat", "agentic"];
   const readiness = judgeReadiness(status, judge?.model ?? "");
+  // N-R6-obs1 follow-up: a typed / picked judge model of an unconfigured provider is
+  // flagged under the field (the backend refuses it at submit anyway)
+  const judgeUnavailable = judge ? modelUnavailableReason(judge.model.trim()) : null;
 
   const applyBackend = (next: SkillLabTargetBackend) => {
     if (next === backend) return;
@@ -65,7 +69,7 @@ export function ModelFields({
       </Field>
       <Field
         label={t("skillLab.eval.wizard.field.targetModel")}
-        hint={t(backend === "codex_exec" ? "skillLab.backend.targetHintCodex" : "skillLab.backend.targetHintClaude")}
+        hint={t("skillLab.backend.targetHint")}
       >
         <input
           className="v2-input mono"
@@ -76,17 +80,36 @@ export function ModelFields({
       </Field>
       {judge && (
         <>
-          <Field label={judge.label ?? t("skillLab.eval.wizard.field.judgeModel")} hint={t("skillLab.backend.judgeHint")}>
+          <Field
+            label={judge.label ?? t("skillLab.eval.wizard.field.judgeModel")}
+            hint={
+              judgeUnavailable ? (
+                <span className="v2-skilllab-warn" data-testid={`${testId}-judge-model-unavailable`}>
+                  {t("models.unavailable", judgeUnavailable)}
+                </span>
+              ) : (
+                t("skillLab.backend.judgeHint")
+              )
+            }
+          >
             <input
               className="v2-input mono"
               value={judge.model}
               list={`${testId}-judge-models`}
               data-testid={`${testId}-judge-model`}
+              aria-invalid={judgeUnavailable ? true : undefined}
               onChange={(e) => judge.setModel(e.target.value)}
             />
-            <datalist id={`${testId}-judge-models`}>
-              {JUDGE_MODEL_SUGGESTIONS.map((model) => (
-                <option key={model} value={model} />
+            <datalist id={`${testId}-judge-models`} data-testid={`${testId}-judge-models`}>
+              {judgeModelSuggestions().map((row) => (
+                // an unavailable catalog row is listed "not configured" and disabled —
+                // browsers drop a disabled <option> from the suggestions (N-R6-obs1)
+                <option
+                  key={row.model_id}
+                  value={row.model_id}
+                  label={row.available ? undefined : `${row.model_id} · ${t("models.unavailableShort")}`}
+                  disabled={!row.available}
+                />
               ))}
             </datalist>
           </Field>

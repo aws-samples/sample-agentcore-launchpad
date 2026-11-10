@@ -1,0 +1,24 @@
+{
+  "account_id": "YOUR_12_DIGIT_ACCOUNT_ID",
+  "region": "cn-northwest-1",
+  "profile": "cn-northwest-1",
+  "stack_name": "launchpad-cn-ec2-lab",
+  "environment": "lab",
+  "console_entry": "public_nlb",
+  "release_bucket": "YOUR_PRIVATE_RELEASE_BUCKET",
+  "engine_artifact": "/YOUR_ABSOLUTE_CHECKOUT/policy-engine/dist/launchpad-policy-engine-0.1.0-aarch64.tar.gz",
+  "parameters": {
+    "GitRepoUrl": "https://github.com/aws-samples/sample-agentcore-launchpad.git",
+    "GitBranch": "cn-region",
+    "GitDeployKeyParameter": "YOUR_GIT_DEPLOY_KEY_PARAMETER",
+    "AllowedCidr": "YOUR_PUBLIC_IP/32",
+    "GlobalBedrockApiKeyParameter": "YOUR_MODEL_KEY_PARAMETER",
+    "ConsolePasswordParameter": "YOUR_ADMIN_PASSWORD_PARAMETER",
+    "AuthPasswordPolicy": "relaxed",
+    "AuthPasswordMinLength": 8,
+    "InstanceType": "m7g.xlarge",
+    "MemoryDomainMode": "dedicated",
+    "ConsolePort": "8443",
+    "TlsMode": "selfsigned"
+  }
+}

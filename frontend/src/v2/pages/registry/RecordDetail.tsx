@@ -1,3 +1,4 @@
+import { copyBrowserText } from "../../../lib/browser-compat";
 import { Copy } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -6,8 +7,10 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../../auth/auth-context";
 import { type AgentInfo, api, errorMessage, type LiveAgentCard } from "../../../lib/api";
 import { descriptorExcerpt, parseAgentCard, parseSkillDefinition, skillPath } from "../../../lib/registry";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
+import { useMayMutate } from "../../ownership";
+import { notifyRegistryChanged } from "../../registryPending";
 import {
   Alert,
   Button,
@@ -154,6 +157,8 @@ export function RecordDetail({ id }: { id: string }) {
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"disable" | "delete" | null>(null);
   const [reimporting, setReimporting] = useState(false);
+  // creator-or-admin on edit / reimport / delete (server rule `registry.forbidden`, N15-obs7)
+  const mayMutate = useMayMutate();
   const [reimportError, setReimportError] = useState<string | null>(null);
 
   const record = detail.data;
@@ -181,6 +186,8 @@ export function RecordDetail({ id }: { id: string }) {
       const updated = await api.registryAction(record.record_id, action);
       toast("success", t("v2.registry.actionDone", { name: record.name, status: statusLabel(t, updated.status) }));
       setTick((n) => n + 1);
+      // N17-obs267: the sidebar's pending badge re-reads its count
+      notifyRegistryChanged();
     } catch (err) {
       toast("error", t("common.actionFailed", { msg: errorMessage(err) }));
     } finally {
@@ -194,6 +201,7 @@ export function RecordDetail({ id }: { id: string }) {
     try {
       await api.registryDelete(record.record_id);
       toast("success", t("registry.deleted", { name: record.name }));
+      notifyRegistryChanged();
       setParams({});
     } catch (err) {
       toast("error", t("common.actionFailed", { msg: errorMessage(err) }));
@@ -228,19 +236,45 @@ export function RecordDetail({ id }: { id: string }) {
     const agent = agents.data.get(record.record_id);
     if (!agent) return t("registry.drawer.liveCardNotLaunchpad");
     if (agent.spec.protocol !== "a2a") return t("registry.drawer.liveCardNotA2A");
-    if (agent.status !== "active" || !agent.arn) return t("registry.drawer.liveCardNotReady", { status: agent.status });
+    if (agent.status !== "active" || !agent.arn) return t("registry.drawer.liveCardNotReady", { status: t(`status.${agent.status}`, { defaultValue: agent.status }) });
     return null;
   })();
 
-  const canEdit = record.type !== "A2A" && record.status !== "DEPRECATED" && !record.system;
+  const mutable = mayMutate(record);
+  const canEdit = record.type !== "A2A" && record.status !== "DEPRECATED" && !record.system && mutable;
   const canReimport =
     record.type === "AGENT_SKILLS" &&
     !record.system &&
+    mutable &&
     (skillMeta?.source?.kind === "git" || skillMeta?.source?.kind === "url") &&
     record.status !== "DEPRECATED";
   const approved = record.status === "APPROVED";
 
-  const lifecycleButtons = lifecycleAllowed ? (
+  // N17-obs248: the review decision is an administrator's — a member submits (DRAFT /
+  // REJECTED) and then waits; the server answers `registry.approval_admin_only` otherwise.
+  const memberLifecycle = (
+    <>
+      {(record.status === "DRAFT" || record.status === "REJECTED") && (
+        <Button kind="primary" disabled={busy} onClick={() => void act("submit")} testId="v2-registry-submit">
+          {t("v2.registry.action.submit")}
+        </Button>
+      )}
+      {record.status === "PENDING_APPROVAL" && (
+        <span className="v2-muted" style={{ fontSize: 13 }} data-testid="v2-registry-awaiting-admin">
+          {t("v2.registry.awaitingAdmin")}
+        </span>
+      )}
+      {record.status === "DEPRECATED" && <span className="v2-muted" style={{ fontSize: 13 }}>{t("v2.registry.deprecatedNote")}</span>}
+    </>
+  );
+
+  const lifecycleButtons = !lifecycleAllowed ? (
+    <span className="v2-muted" style={{ fontSize: 13 }} data-testid="v2-registry-member-readonly">
+      {t("registry.drawer.system.memberReadOnly")}
+    </span>
+  ) : !isAdmin ? (
+    memberLifecycle
+  ) : (
     <>
       {record.status === "DRAFT" && (
         <Button kind="primary" disabled={busy} onClick={() => void act("submit")} testId="v2-registry-submit">
@@ -264,10 +298,6 @@ export function RecordDetail({ id }: { id: string }) {
       )}
       {record.status === "DEPRECATED" && <span className="v2-muted" style={{ fontSize: 13 }}>{t("v2.registry.deprecatedNote")}</span>}
     </>
-  ) : (
-    <span className="v2-muted" style={{ fontSize: 13 }} data-testid="v2-registry-member-readonly">
-      {t("registry.drawer.system.memberReadOnly")}
-    </span>
   );
 
   const skillColumns: Column<CardSkill>[] = [
@@ -316,7 +346,7 @@ export function RecordDetail({ id }: { id: string }) {
                 {t("v2.common.edit")}
               </Button>
             )}
-            {!record.system && (
+            {!record.system && mutable && (
               <Button kind="danger" disabled={busy} onClick={() => setConfirm("delete")} testId="v2-registry-delete">
                 {t("v2.common.delete")}
               </Button>
@@ -325,6 +355,11 @@ export function RecordDetail({ id }: { id: string }) {
         }
       />
       {record.status_reason && <Alert tone={record.status === "REJECTED" ? "error" : "info"}>{record.status_reason}</Alert>}
+      {!record.system && record.type !== "A2A" && !mutable && (
+        <Alert>
+          <span data-testid="v2-registry-creator-only">{t("v2.common.creatorOnlyActions", { name: creatorLabel(record) })}</span>
+        </Alert>
+      )}
 
       <Card title={t("v2.registry.basic")}>
         <Descriptions
@@ -334,6 +369,7 @@ export function RecordDetail({ id }: { id: string }) {
             { label: t("v2.registry.recordId"), value: <span className="mono">{record.record_id}</span> },
             { label: t("v2.registry.col.version"), value: <span className="mono">{record.version ?? "—"}</span> },
             { label: t("v2.common.createdAt"), value: fmtTime(record.created_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(record) },
             { label: t("v2.registry.col.updated"), value: fmtTime(record.updated_at) },
             { label: t("v2.registry.col.description"), value: record.description || "—" },
             {
@@ -397,8 +433,9 @@ export function RecordDetail({ id }: { id: string }) {
                     <LinkButton
                       title={t("registry.drawer.cardUrlCopy")}
                       onClick={() => {
-                        void navigator.clipboard?.writeText(card.url ?? "").catch(() => undefined);
-                        toast("success", t("registry.drawer.cardUrlCopied"));
+                        void copyBrowserText(card.url ?? "").then((copied) => {
+                          if (copied) toast("success", t("registry.drawer.cardUrlCopied"));
+                        });
                       }}
                     >
                       <Copy size={13} aria-hidden="true" />

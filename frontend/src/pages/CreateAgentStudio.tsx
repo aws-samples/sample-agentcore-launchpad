@@ -23,7 +23,6 @@ import { NodePalette } from "../studio/NodePalette";
 import { PropertyPanel } from "../studio/PropertyPanel";
 import { generateStrandsAgentCode } from "../studio/lib/code-generator";
 import type { FlowData } from "../studio/lib/debug-client";
-import { MANTLE_PROVIDER } from "../studio/lib/models";
 import { SampleGallery } from "../studio/SampleGallery";
 import type { SampleFlow } from "../studio/lib/sample-flows";
 
@@ -141,31 +140,22 @@ export function CreateAgentStudio() {
     setCodeState({ code: fullCode, source: "template", flowStale: false });
   };
 
-  // OpenAI and Mantle both import `openai` at the top level (only in the
-  // [openai] extra); the extra also pulls the Bedrock token generator Mantle
-  // auth needs. Caching / thinking / skills need no extra requirement.
+  // OpenAI imports `openai` at the top level (only in the [openai] extra).
   const extraReqs = useMemo(
     () =>
-      nodes.some((n) => {
-        const p = (n.data as { modelProvider?: string })?.modelProvider;
-        return p === "OpenAI" || p === MANTLE_PROVIDER;
-      })
+      nodes.some((n) => (n.data as { modelProvider?: string })?.modelProvider === "OpenAI")
         ? ["strands-agents[openai]"]
         : [],
     [nodes],
   );
 
-  // Generated code reads OPENAI_API_KEY / BEDROCK_API_KEY from the runtime env.
-  // Map the first non-empty apiKey per provider onto spec.env; flag when a node
-  // needs a key but none was entered (publish is still allowed — the key may be
-  // provisioned another way).
-  //
-  // Mantle nodes never count as missing a key: without one, codegen emits
-  // `bedrock_mantle_config` and the SDK mints a bearer token from the runtime
-  // execution role per request. Only OpenAI nodes genuinely need a secret.
+  // Generated code reads OPENAI_API_KEY from the runtime env; Bedrock models need
+  // no node key — the studio wrapper fetches the Global Bedrock API key from
+  // AgentCore Identity. Map the first non-empty apiKey per provider onto
+  // spec.env; flag when a node needs a key but none was entered (publish is
+  // still allowed — the key may be provisioned another way).
   const { env: publishEnv, missingApiKey } = useMemo(() => {
     let openaiKey = "";
-    let bedrockKey = "";
     let needsOpenaiKey = false;
     for (const n of nodes) {
       const d = n.data as { modelProvider?: string; apiKey?: string };
@@ -173,13 +163,10 @@ export function CreateAgentStudio() {
       if (d?.modelProvider === "OpenAI") {
         needsOpenaiKey = true;
         if (key && !openaiKey) openaiKey = key;
-      } else if (d?.modelProvider === MANTLE_PROVIDER) {
-        if (key && !bedrockKey) bedrockKey = key;
       }
     }
     const env: Record<string, string> = {};
     if (openaiKey) env.OPENAI_API_KEY = openaiKey;
-    if (bedrockKey) env.BEDROCK_API_KEY = bedrockKey;
     return { env, missingApiKey: needsOpenaiKey && !openaiKey };
   }, [nodes]);
 
@@ -192,7 +179,7 @@ export function CreateAgentStudio() {
     [nodes, edges],
   );
   const debugApiKeys = useMemo(
-    () => ({ openai_api_key: publishEnv.OPENAI_API_KEY, bedrock_api_key: publishEnv.BEDROCK_API_KEY }),
+    () => ({ openai_api_key: publishEnv.OPENAI_API_KEY }),
     [publishEnv],
   );
 
@@ -422,7 +409,6 @@ export function CreateAgentStudio() {
           deployment={deployment}
           job={job}
           agentStatus={agentStatus}
-          detailsMode={false}
           onRestart={() => navigate("/agents")}
         />
         {agentStatus === "active" && (

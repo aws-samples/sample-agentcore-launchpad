@@ -28,10 +28,10 @@ MEMBER_CREDS = {
 PROBES = [
     ("agents.deploy", "POST", "/api/agents", {}, 422),
     ("agents.deploy", "POST", "/api/agents/no-such-agent/redeploy", {}, 422),
+    # N17-obs464: a manual edit of an accepted recommendation publishes a version
+    ("agents.deploy", "POST", "/api/eval/runs/no-such-run/recommendations/x/revise", {}, 422),
     ("agents.import", "POST", "/api/agents/discovery/import", {}, 422),
     ("agents.delete", "DELETE", "/api/agents/no-such-agent", None, 404),
-    ("agents.convert", "POST", "/api/agents/no-such-agent/convert", None, 404),
-    ("eval.run", "POST", "/api/eval/runs", {}, 422),
     ("identity.manage", "POST", "/api/identity/connections/oauth2", {}, 422),
     ("identity.manage", "POST", "/api/identity/connections/api-key", {}, 422),
     # an unknown kind fails path validation, after the policy dependency ran

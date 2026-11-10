@@ -150,11 +150,16 @@ Resources:
 
               # PassRole is never *called* by the hub: it is the implicit check
               # AWS performs when a role ARN is handed to a service. Launchpad
-              # passes launchpad-* roles to AgentCore (CreateAgentRuntime,
-              # CreateHarness, CreateGateway, CreateMemory,
-              # CreateOnlineEvaluationConfig), to CodeBuild (CreateProject
-              # serviceRole) and to Bedrock (CreateKnowledgeBase). The condition
-              # is what stops this from being "pass any launchpad role anywhere".
+              # passes launchpad-* roles to AgentCore (CreateAgentRuntime /
+              # UpdateAgentRuntime execution roles — including the evaluation
+              # worker's and canary candidate versions —, CreateGateway) and to
+              # CodeBuild (CreateProject serviceRole); the CN build's online
+              # evaluation runs on the backend + worker, so no evaluation-service
+              # role is ever passed. The condition is what stops this from being
+              # "pass any launchpad role anywhere". (The `bedrock.amazonaws.com` entry
+              # that used to sit here is gone with the managed-KB `CreateKnowledgeBase`
+              # call it was for — the CN build's Knowledge Bases are self-hosted
+              # over OpenSearch, N6.)
               - Sid: PassLaunchpadRoles
                 Effect: Allow
                 Action:
@@ -164,7 +169,6 @@ Resources:
                 Condition:
                   StringEquals:
                     iam:PassedToService:
-                      - bedrock.amazonaws.com
                       - bedrock-agentcore.amazonaws.com
                       - codebuild.amazonaws.com
 
@@ -183,7 +187,6 @@ Resources:
                 Condition:
                   StringLike:
                     iam:AWSServiceName:
-                      - agent-registry.amazonaws.com
                       - application-signals.cloudwatch.amazonaws.com
                       - bedrock-agentcore.amazonaws.com
                       - identity-network.bedrock-agentcore.amazonaws.com
@@ -196,6 +199,9 @@ Resources:
               # object-level actions share one statement (the bucket ARN and the
               # /* ARN); an action that does not apply to one of the two is
               # simply never authorized against it.
+              # N12 (D14): the evaluation worker's artefacts (`evaluations/*`) and the
+              # dataset snapshots (`eval-datasets/*`) live in the workspace artifacts
+              # bucket `launchpad-artifacts-<account>-<region>` — covered by this statement.
               - Sid: S3Launchpad
                 Effect: Allow
                 Action:
@@ -277,87 +283,23 @@ Resources:
                   - codebuild:ListProjects
                 Resource: "*"
 
-              # ── AgentCore + Agent Registry ─────────────────────────────────
-              # Wildcarded on purpose. These are preview services: the console
-              # spans runtimes, harnesses, gateways and their targets, memories,
-              # policy engines and policies, evaluators, datasets, batch
-              # evaluations, configuration bundles, A/B tests, online evaluation
-              # configs, credential providers, registries and registry records —
-              # control plane and data plane — and every List*/Create* call in
-              # that set is account-scoped rather than resource-scoped, so an ARN
-              # list would grant nothing while breaking on the next API. The
+              # ── AgentCore ───────────────────────────────────────────────────
+              # Wildcarded on purpose. AgentCore is a preview service: the
+              # console spans runtimes, gateways and their targets, credential
+              # providers and workload identities — control plane and data
+              # plane — and every List*/Create* call in that set is
+              # account-scoped rather than resource-scoped, so an ARN list
+              # would grant nothing while breaking on the next API. The
               # boundary here is that this role only reaches THIS account.
-              - Sid: AgentCoreAndRegistry
+              # (The Agent Registry grant that used to sit here is gone: the
+              # CN build's Registry is Launchpad's own ledger.)
+              # N12 (D14): the hub also dispatches evaluation jobs to this account's
+              # `launchpad-eval-worker*` Runtime (InvokeAgentRuntime / StopRuntimeSession)
+              # — covered here; infra/tests/test_spoke_template.py pins it.
+              - Sid: AgentCore
                 Effect: Allow
                 Action:
-                  - agent-registry:*
                   - bedrock-agentcore:*
-                Resource: "*"
-
-              # ── Bedrock (Managed Knowledge Bases) ──────────────────────────
-              # `bedrock:` is the IAM prefix of the bedrock-agent control plane
-              # and bedrock-agent-runtime data plane, which is how Launchpad
-              # manages Managed KBs. `Retrieve` is the console's own retrieval
-              # preview. Agentic retrieval is deliberately absent: agents reach it
-              # through the gateway under their own execution role, and
-              # AgenticRetrieveStream cannot be resource-scoped at all, so it does
-              # not belong in a knowledge-base-scoped statement.
-              - Sid: BedrockKnowledgeBases
-                Effect: Allow
-                Action:
-                  - bedrock:CreateDataSource
-                  - bedrock:DeleteDataSource
-                  - bedrock:DeleteKnowledgeBase
-                  - bedrock:GetDataSource
-                  - bedrock:GetKnowledgeBase
-                  - bedrock:ListIngestionJobs
-                  - bedrock:ListKnowledgeBaseDocuments
-                  - bedrock:Retrieve
-                  - bedrock:StartIngestionJob
-                  - bedrock:UpdateKnowledgeBase
-                Resource:
-                  Fn::Sub: "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:knowledge-base/*"
-
-              # A knowledge base has no ARN before it exists.
-              - Sid: BedrockCreateKnowledgeBase
-                Effect: Allow
-                Action:
-                  - bedrock:CreateKnowledgeBase
-                Resource: "*"
-
-              # ── Cognito ────────────────────────────────────────────────────
-              # The RESOURCE cannot be scoped: a user pool's ARN contains the pool
-              # id AWS assigns at creation, so the pool Launchpad is about to
-              # create cannot be named in advance, and ListUserPools (how the
-              # bootstrap finds an existing pool) is account-wide regardless.
-              # Scoping it would take a two-pass rollout: deploy, then re-deploy
-              # with the pool id. The ACTIONS are enumerated even so — a spoke
-              # account may hold user pools that have nothing to do with
-              # Launchpad, and `cognito-idp:*` on `*` would let the hub delete
-              # them. Pool + resource server + app clients + domain + groups come
-              # from the bootstrap's cognito stage; the Admin* calls and
-              # InitiateAuth are the console's per-user Gateway policy identity.
-              - Sid: CognitoIdp
-                Effect: Allow
-                Action:
-                  - cognito-idp:AdminAddUserToGroup
-                  - cognito-idp:AdminCreateUser
-                  - cognito-idp:AdminDeleteUser
-                  - cognito-idp:AdminGetUser
-                  - cognito-idp:AdminListGroupsForUser
-                  - cognito-idp:AdminRemoveUserFromGroup
-                  - cognito-idp:AdminSetUserPassword
-                  - cognito-idp:CreateGroup
-                  - cognito-idp:CreateResourceServer
-                  - cognito-idp:CreateUserPool
-                  - cognito-idp:CreateUserPoolClient
-                  - cognito-idp:CreateUserPoolDomain
-                  - cognito-idp:DescribeResourceServer
-                  - cognito-idp:DescribeUserPoolClient
-                  - cognito-idp:DescribeUserPoolDomain
-                  - cognito-idp:InitiateAuth
-                  - cognito-idp:ListUserPoolClients
-                  - cognito-idp:ListUserPools
                 Resource: "*"
 
               # ── Observability ──────────────────────────────────────────────
@@ -376,6 +318,7 @@ Resources:
                   - cloudwatch:GetMetricData
                   - cloudwatch:ListMetrics
                   - logs:CreateDelivery
+                  - logs:CreateLogGroup          # N11-obs56: the deploy stage's retention step
                   - logs:DescribeDeliveries
                   - logs:DescribeLogGroups
                   - logs:DescribeLogStreams
@@ -387,11 +330,27 @@ Resources:
                   - logs:PutDeliveryDestination
                   - logs:PutDeliverySource
                   - logs:PutResourcePolicy
+                  - logs:PutRetentionPolicy      # N11-obs56
                   - logs:StartQuery
                   - logs:StopQuery
                   - xray:GetTraceSegmentDestination
                   - xray:UpdateTraceSegmentDestination
                 Resource: "*"
+
+              # ── Policy decisions log (D20 P1-d) ────────────────────────────
+              # The self-hosted Cedar Policy module mirrors every hub decision row
+              # into /launchpad/policy/decisions[-env] in the workspace's own
+              # account (services/policy_audit.py); the workspace bootstrap's
+              # `policy` stage creates the group (CreateLogGroup +
+              # PutRetentionPolicy come from the Observability Sid above). Only
+              # the stream/put calls need this narrow grant.
+              - Sid: PolicyDecisionsLog
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/launchpad/policy/decisions*"
 
               # ── Secrets Manager (AgentCore Identity token vault) ──────────
               # LIVE-OBSERVED, not call-site derivable (2026-08-13, first spoke

@@ -1,0 +1,10 @@
+# Evaluation worker (N12 plan §B.0) — resolved for aarch64 / Python 3.13 in requirements.lock.
+strands-agents[otel,openai]==1.47.0
+bedrock-agentcore==1.17.*
+boto3>=1.43.109,<2
+strands-agents-evals==1.5.0
+strands-harness-optimizer==0.0.1
+# strands-harness-optimizer imports ``strands_tools.shell``; strands-agents-tools 0.9.0 (2026-11-04)
+# turned that module into an ImportError stub, which broke every worker job that loads the
+# optional handlers (N17-obs540). Keep the 0.8 line until the optimizer moves to vended_tools.
+strands-agents-tools>=0.8.3,<0.9

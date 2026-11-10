@@ -15,9 +15,11 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
+from app.core.features import feature_unavailable
 from app.deployer.pipeline import start_deploy_async
-from app.routers.agents import _agent_out
-from app.routers.auth import require_admin, require_identity
+from app.models.ledger import Job
+from app.routers.agents import _agent_out, job_out
+from app.routers.auth import require_identity
 from app.routers.registry import _invalidate_attachables, _record_out
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.agent import MAX_TOKENS_CEILING, KnowledgeBaseRef, ModelSource, ReasoningEffort
@@ -126,13 +128,11 @@ def list_system_agents(
 def install_system_agent(
     preset_key: str,
     req: InstallRequest,
-    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> Any:
-    from fastapi.responses import JSONResponse
+    from app.core.display_time import DisplayTimeJSONResponse
 
-    require_admin(request)  # belt and braces with ROUTE_POLICY
     preset = _preset(preset_key)
     stored = service.find_installed(db, ws.id, preset)
     edit = req.edit()
@@ -152,25 +152,23 @@ def install_system_agent(
         "changed": outcome.changed,
         "preset": service.preset_status(db, ws.row, preset, is_admin=True),
     }
-    return JSONResponse(status_code=outcome.status_code, content=body)
+    return DisplayTimeJSONResponse(status_code=outcome.status_code, content=body)
 
 
 @router.post("/{preset_key}/skill-registration")
 def register_system_skill_record(
     preset_key: str,
-    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
     """Register — or verify, or roll forward — the installed preset's published Skill
     release as its own Registry record (SE-043). No request body: the resource is
     server-selected (the release the stored spec pins, proven against this build and
-    read back from S3). Nothing is uploaded, the Harness is not re-published and the
+    read back from S3). Nothing is uploaded, the runtime is not re-deployed and the
     agent's A2A record is untouched. A first registration lands in the normal review
     queue (submitted, not approved); an identical repeat is a no-op that keeps the
     record's approval; a newer release updates the descriptor and needs review again.
     """
-    require_admin(request)  # belt and braces with ROUTE_POLICY
     preset = _preset(preset_key)
     agent = service.find_installed(db, ws.id, preset)
     if agent is None:
@@ -185,6 +183,10 @@ def register_system_skill_record(
             {"agent_status": agent.status},
             status_code=409,
         )
+    from app.services import registry_backend
+
+    if registry_backend.backend_or_none() is None:
+        raise feature_unavailable("registry")
     outcome = skill_registry.register_system_skill(db, ws.context, preset, agent)
     _invalidate_attachables(ws.id)  # a changed or new record must not serve a stale catalog
     return {
@@ -217,16 +219,34 @@ def _files_of(record: dict[str, Any]) -> list[str]:
         return []
 
 
-@router.delete("/{preset_key}")
-def uninstall_system_agent(
+@router.get("/{preset_key}/jobs/{job_id}")
+def get_system_agent_job(
     preset_key: str,
-    request: Request,
+    job_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    from fastapi.responses import JSONResponse
+    """The preset's install / repair / uninstall job with its log (N12-obs31 a).
 
-    require_admin(request)
+    A preset's job may be filed under a workspace id the agents API does not expose, so
+    ``GET /api/jobs/{id}`` answers 404 for it; this route resolves the job through the
+    preset's own agent row in the caller's workspace instead. Administrator only — the
+    log names AWS resources and the install's release pin."""
+    preset = _preset(preset_key)
+    job = db.get(Job, job_id)
+    if job is None or not service.job_belongs_to_preset(db, job, ws.id, preset):
+        raise NotFoundError("job.not_found", "job not found")
+    return job_out(job)
+
+
+@router.delete("/{preset_key}")
+def uninstall_system_agent(
+    preset_key: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+) -> dict[str, Any]:
+    from app.core.display_time import DisplayTimeJSONResponse
+
     preset = _preset(preset_key)
     outcome = service.uninstall_preset(db, ws.row, preset)
     # The claim owner launches the worker. A repeated request for a job that is still
@@ -236,7 +256,7 @@ def uninstall_system_agent(
     # one, the other exits; one thread per request, never a loop.
     if outcome.started or outcome.job.status == "queued":
         start_uninstall_async(outcome.job.id)
-    return JSONResponse(
+    return DisplayTimeJSONResponse(
         status_code=202,
         content={
             "agent": _agent_out(outcome.agent),

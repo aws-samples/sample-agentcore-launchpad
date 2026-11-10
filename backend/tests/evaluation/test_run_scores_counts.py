@@ -1,85 +1,104 @@
-"""Run scores carry their judgement counts, and a code-based evaluator AWS
-summarises without an average is scored from the batch's own results stream.
+"""Run scores carry their judgement counts and come from the ingested ``eval_results``
+rows (N12 E1-4) — the twin of the baseline's results-stream fallback: an evaluator's mean
+is computed from its scored records; NOT_APPLICABLE and error records count for nothing."""
 
-Live 2026-10-05 (dev run dec2706812cd): ``DjiKbToolBoundary`` judged 18 sessions,
-``totalFailed`` 0, but its ``evaluatorSummaries`` entry had ``statistics: {}`` —
-so the run's scores silently held 7 of its 8 evaluators."""
-
-from unittest.mock import MagicMock
-
-import app.evaluation.agentcore_eval as ac
 import app.evaluation.service as svc
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
+from app.evaluation import results_store
+from app.evaluation.jobs import JobDone
+from app.services.strands_eval.results import aggregate_scores
+from tests.conftest import ws_ctx
+from tests.evaluation.fakes import FakeExecutor
 from tests.evaluation.test_resume import get_run, make_run
 
-ARN = "arn:aws:bedrock-agentcore:us-west-2:111122223333:evaluator/"
-RESULT = {
-    "status": "COMPLETED",
-    "outputConfig": {"cloudWatchConfig": {"logGroupName": "g", "logStreamName": "s"}},
-    "evaluationResults": {"evaluatorSummaries": [
-        {"evaluatorId": "Builtin.Refusal", "statistics": {"averageScore": 0.26},
-         "totalEvaluated": 19, "totalFailed": 0},
-        {"evaluatorId": "KbToolBoundary-f56DD97uvp", "statistics": {},
-         "totalEvaluated": 3, "totalFailed": 0},
-        {"evaluatorId": "Builtin.Helpfulness", "statistics": {"averageScore": 0.7}},
-    ]},
-}
+
+def _record(sid, evaluator_id, score, **extra):
+    return {"session_id": sid, "evaluator_id": evaluator_id, "score": score, **extra}
 
 
-def _record(evaluator_id, score, name="KbToolBoundary"):
-    return {"gen_ai.evaluation.name": name, "gen_ai.evaluation.score.value": score,
-            "aws.bedrock_agentcore.evaluator.arn": ARN + evaluator_id}
+RECORDS = [
+    _record("s1", "KbToolBoundary-f56DD97uvp", 1.0),
+    _record("s2", "KbToolBoundary-f56DD97uvp", 0.0),
+    _record("s3", "KbToolBoundary-f56DD97uvp", 1.0),
+    _record("s1", "Builtin.Refusal", 0.0), _record("s2", "Builtin.Refusal", 0.52),
+    _record("s1", "Builtin.TrajectoryInOrderMatch", None, label="NOT_APPLICABLE"),
+    _record("s1", "Builtin.Helpfulness", None, error_type="RuntimeError", error_message="boom"),
+]
 
 
-RECORDS = [_record("KbToolBoundary-f56DD97uvp", 1.0), _record("KbToolBoundary-f56DD97uvp", 0.0),
-           _record("KbToolBoundary-f56DD97uvp", 1.0),
-           _record("Builtin.Refusal", 0.0, name="Builtin.Refusal"),
-           {"gen_ai.evaluation.name": "KbToolBoundary", "error.message": "boom",
-            "aws.bedrock_agentcore.evaluator.arn": ARN + "KbToolBoundary-f56DD97uvp"}]
-
-
-def test_counts_ride_along_and_an_unsummarised_evaluator_is_read_from_the_stream():
-    reads = []
-    scores = ac.parse_eval_scores(RESULT, records_reader=lambda: reads.append(1) or RECORDS)
-
-    assert scores == [
-        {"evaluatorId": "Builtin.Refusal", "score": 0.26, "count": 19},
-        {"evaluatorId": "KbToolBoundary-f56DD97uvp", "score": 0.67, "count": 3},
-        {"evaluatorId": "Builtin.Helpfulness", "score": 0.7},
+def test_counts_ride_along_and_means_come_from_the_records():
+    assert aggregate_scores(RECORDS) == [
+        {"evaluatorId": "Builtin.Refusal", "score": 0.26, "count": 2, "n": 2, "unit": "turn"},
+        # a custom row without a level counts as a session evaluator
+        {"evaluatorId": "KbToolBoundary-f56DD97uvp", "score": 0.6667, "count": 3, "n": 3,
+         "unit": "session"},
     ]
-    assert reads == [1]
 
 
-def test_the_stream_is_not_read_when_every_evaluator_has_an_average():
-    result = {"evaluationResults": {"evaluatorSummaries": [RESULT["evaluationResults"][
-        "evaluatorSummaries"][0]]}}
-
-    def boom():
-        raise AssertionError("no read needed")
-
-    assert ac.parse_eval_scores(result, records_reader=boom) == [
-        {"evaluatorId": "Builtin.Refusal", "score": 0.26, "count": 19}]
+def test_tool_call_fan_out_counts_sessions_not_records():
+    records = [_record("s1", "Builtin.ToolSelectionAccuracy", 1.0),
+               _record("s1", "Builtin.ToolSelectionAccuracy", 0.0),
+               _record("s2", "Builtin.ToolSelectionAccuracy", 1.0)]
+    assert aggregate_scores(records) == [
+        {"evaluatorId": "Builtin.ToolSelectionAccuracy", "score": 0.6667, "count": 2, "n": 3,
+         "unit": "tool_call"}]
 
 
-def test_an_unreadable_stream_leaves_the_evaluator_out():
-    def broken():
-        raise RuntimeError("AccessDenied")
-
-    ids = [s["evaluatorId"] for s in ac.parse_eval_scores(RESULT, records_reader=broken)]
-    assert ids == ["Builtin.Refusal", "Builtin.Helpfulness"]
-
-
-def test_a_finished_run_records_the_code_evaluators_mean(monkeypatch):
-    run_id = make_run(status="evaluating", batch_eval_id="run_code-1")
-    seen = {}
-
-    def read(logs, group, stream, **_kw):
-        seen["location"] = (group, stream)
-        return RECORDS
-
-    monkeypatch.setattr(svc.ac, "read_result_records", read)
-    svc._finish_from_result(run_id, "evaluators", RESULT, workspace=MagicMock())
-
+def test_a_finished_run_records_the_means_of_every_scored_evaluator():
+    run_id = make_run(status="evaluating", batch_eval_id="run_code-1", mode="evaluators")
+    with SessionLocal() as db:
+        results_store.persist(db, DEFAULT_WORKSPACE_ID, source="run", owner_id=run_id,
+                              records=RECORDS)
+    svc._finish(run_id, "evaluators", [JobDone(state="COMPLETED", result_count=len(RECORDS))],
+                workspace=ws_ctx(), executor=FakeExecutor(), job_ids=["run_code-1"])
     run = get_run(run_id)
-    assert run.status == "completed" and seen["location"] == ("g", "s")
-    assert {s["evaluatorId"]: s.get("count") for s in run.scores} == {
-        "Builtin.Refusal": 19, "KbToolBoundary-f56DD97uvp": 3, "Builtin.Helpfulness": None}
+    assert run.status == "completed"
+    assert {s["evaluatorId"]: s["count"] for s in run.scores} == {
+        "Builtin.Refusal": 2, "KbToolBoundary-f56DD97uvp": 3}
+    assert "Builtin.Helpfulness" not in {s["evaluatorId"] for s in run.scores}  # only errors
+
+
+def test_budget_stops_are_collected_from_the_jobs():
+    run_id = make_run(status="evaluating", batch_eval_id="run_bs", mode="evaluators")
+    svc._finish(run_id, "evaluators", [
+        JobDone(state="COMPLETED", summary={"budget_stops": [{"scenario_id": "a"}]}),
+        JobDone(state="COMPLETED", summary={"budget_stops": [{"scenario_id": "b"}]}),
+    ], workspace=ws_ctx(), executor=FakeExecutor(), job_ids=["run_bs-s0", "run_bs-s1"])
+    assert get_run(run_id).budget_stops == [{"scenario_id": "a"}, {"scenario_id": "b"}]
+
+
+def test_scenario_failures_fold_the_skipped_personas_from_the_jobs():
+    """Upstream #251 parity: ``eval_runs.scenario_failures`` lists the SIMULATED persona
+    scenarios the worker skipped (``replay_failures[].simulated``), in upstream's wire shape
+    (``retries`` a string, ``error`` = ``<code>: <message>`` bounded); a predefined scenario
+    that failed to replay stays an N-SCN-bug1 errored scenario and is not listed."""
+    run_id = make_run(status="evaluating", batch_eval_id="run_sf", mode="evaluators")
+    svc._finish(run_id, "evaluators", [
+        JobDone(state="COMPLETED", summary={"replay_failures": [
+            {"session_id": "s1", "scenario_id": "p1", "code": "ReadTimeoutError",
+             "attempts": 3, "error": "Read timeout on endpoint URL", "arm": None,
+             "simulated": True},
+            {"session_id": "s2", "scenario_id": "s2", "code": "ValueError", "attempts": 1,
+             "error": "bad prompt", "arm": None},  # a predefined scenario: no key at all
+        ]}),
+        JobDone(state="COMPLETED", summary={"replay_failures": [
+            {"session_id": "s3", "scenario_id": "p3", "code": "RuntimeError", "attempts": 1,
+             "error": "x" * 400, "arm": "T1", "simulated": True},
+        ]}),
+    ], workspace=ws_ctx(), executor=FakeExecutor(), job_ids=["run_sf-s0", "run_sf-s1"])
+    run = get_run(run_id)
+    assert run.scenario_failures == [
+        {"scenario_id": "p1", "retries": "2", "code": "ReadTimeoutError",
+         "error": "ReadTimeoutError: Read timeout on endpoint URL"},
+        {"scenario_id": "p3", "retries": "0", "code": "RuntimeError",
+         "error": ("RuntimeError: " + "x" * 400)[:svc.SCENARIO_ERROR_CHARS]},
+    ]
+
+
+def test_a_run_without_skipped_personas_records_no_scenario_failures():
+    run_id = make_run(status="evaluating", batch_eval_id="run_nsf", mode="evaluators")
+    svc._finish(run_id, "evaluators", [JobDone(state="COMPLETED", summary={
+        "replay_failures": [{"session_id": "s2", "scenario_id": "s2", "code": "ValueError",
+                             "attempts": 1, "error": "bad", "arm": None}],
+    })], workspace=ws_ctx(), executor=FakeExecutor(), job_ids=["run_nsf"])
+    assert get_run(run_id).scenario_failures is None

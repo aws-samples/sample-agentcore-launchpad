@@ -82,22 +82,3 @@ def _launchpad_attachment_messages(prompt, attachments):
     else:
         messages.append({"role": "user", "content": content})
     return messages
-
-
-def _launchpad_mantle_model_class(base):
-    """Strands 1.47 uses file_url for inline files; Mantle requires file_data."""
-    class LaunchpadOpenAIResponsesModel(base):
-        @classmethod
-        def _format_request_message_content(cls, content, *, role="user"):
-            value = super()._format_request_message_content(content, role=role)
-            file_url = value.get("file_url")
-            if "document" in content and isinstance(file_url, str) and file_url.startswith("data:"):
-                value = dict(value)
-                value["file_data"] = value.pop("file_url")
-                document = content["document"]
-                name = document.get("name") or "attachment"
-                extension = "." + document["format"]
-                value["filename"] = name if name.endswith(extension) else name + extension
-            return value
-
-    return LaunchpadOpenAIResponsesModel

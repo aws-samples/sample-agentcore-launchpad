@@ -1,4 +1,4 @@
-"""Named-endpoint wrappers, invoke qualifier, and the shared sigv4_post helper.
+"""Named-endpoint wrappers and invoke qualifier.
 
 Phase 1 of the production target-based canary — pure wrappers, no real AWS.
 """
@@ -8,10 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services import aws_clients
-from app.services.agentcore import gateway as gw
 from app.services.agentcore import runtime as rt
-from tests.conftest import ws_ctx
 
 
 # ─── named endpoint wrappers ─────────────────────────────────────────────────
@@ -180,61 +177,6 @@ def test_invoke_runtime_text_joins_native_sse_without_final_duplication():
     assert result["text"] == "hello world"
 
 
-# ─── sigv4_post ──────────────────────────────────────────────────────────────
-def _stub_creds(monkeypatch):
-    monkeypatch.setattr(
-        aws_clients, "get_session",
-        lambda *a, **k: SimpleNamespace(
-            get_credentials=lambda: SimpleNamespace(
-                get_frozen_credentials=lambda: "frozen"
-            )
-        ),
-    )
-
-
-class _FakeResp:
-    status_code = 200
-
-
-def test_sigv4_post_sets_session_header_and_signs(monkeypatch):
-    _stub_creds(monkeypatch)
-    captured: dict = {}
-    signed: list = []
-
-    def poster(url, content, headers):
-        captured.update(url=url, content=content, headers=headers)
-        return _FakeResp()
-
-    resp = gw.sigv4_post(
-        "https://gw/x/invocations",
-        {"prompt": "hi"},
-        ws_ctx(),
-        session_id="sess-123",
-        poster=poster,
-        signer=lambda creds, region, req: signed.append(creds),
-    )
-    assert resp.status_code == 200
-    assert captured["url"] == "https://gw/x/invocations"
-    assert captured["headers"][gw.SESSION_HEADER] == "sess-123"
-    assert json.loads(captured["content"]) == {"prompt": "hi"}
-    assert signed == ["frozen"]
-
-
-def test_sigv4_post_omits_session_header_when_absent(monkeypatch):
-    _stub_creds(monkeypatch)
-    captured: dict = {}
-
-    def poster(url, content, headers):
-        captured["headers"] = headers
-        return _FakeResp()
-
-    gw.sigv4_post(
-        "https://gw/x/invocations", {"prompt": "hi"}, ws_ctx(),
-        poster=poster, signer=lambda *a: None,
-    )
-    assert gw.SESSION_HEADER not in captured["headers"]
-
-
 # ─── free-form JSON bodies (Runtime contract names no key) ───────────────────
 def test_invoke_runtime_text_reads_conventional_text_keys():
     # The devguide's own example body and a measured BYOC body (CrewAI agent,
@@ -328,11 +270,20 @@ def test_invoke_runtime_text_free_form_error_key_still_raises():
     ],
 )
 def test_stream_runtime_events_ignores_converse_bookkeeping_events(payload, wrapped):
-    # Converse stream events without text must not be dumped as JSON.
+    # Converse stream events without text must not be dumped as JSON — and a stream made of
+    # nothing but bookkeeping is an empty answer (N17-obs114: 502 agent.empty_answer), not a
+    # silent `meta → done`.
+    from app.core.errors import AppError
+
     body = json.dumps({"event": payload} if wrapped else payload)
     stub = StubDataPlane(f"data: {body}\n\n".encode(), content_type="text/event-stream")
 
-    assert list(rt.stream_runtime_events(stub, "arn:rt-1", "hi")) == []
+    seen: list[dict] = []
+    with pytest.raises(AppError) as exc:
+        for event in rt.stream_runtime_events(stub, "arn:rt-1", "hi"):
+            seen.append(event)
+    assert seen == []  # nothing rendered — the bookkeeping event is not text
+    assert (exc.value.status_code, exc.value.code) == (502, "agent.empty_answer")
 
 
 @pytest.mark.parametrize("wrapped", [False, True])
@@ -438,3 +389,30 @@ def test_plain_text_reply_that_is_not_an_event_repr_is_kept():
 
     text = rt.invoke_runtime_text(stub, "arn:rt-1", "hi")["text"]
     assert text == "{'event': 'not a converse event'}"
+
+
+class _Recorder:
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def create_agent_runtime(self, **params):
+        self.calls.append(params)
+        return {"agentRuntimeId": "r", "agentRuntimeArn": "arn"}
+
+    def update_agent_runtime(self, **params):
+        self.calls.append(params)
+        return {"agentRuntimeId": "r"}
+
+
+def test_code_runtime_calls_pin_platform_v2():
+    c = _Recorder()
+    rt.create_code_runtime(c, runtime_name="n", s3_bucket="b", s3_key="k", role_arn="r")
+    rt.update_code_runtime(c, runtime_id="id", s3_bucket="b", s3_key="k", role_arn="r")
+    assert [p["platformVersion"] for p in c.calls] == ["V2", "V2"]
+
+
+def test_container_runtime_calls_pin_platform_v2():
+    c = _Recorder()
+    rt.create_container_runtime(c, runtime_name="n", container_uri="u", role_arn="r")
+    rt.update_container_runtime(c, runtime_id="id", container_uri="u", role_arn="r")
+    assert [p["platformVersion"] for p in c.calls] == ["V2", "V2"]

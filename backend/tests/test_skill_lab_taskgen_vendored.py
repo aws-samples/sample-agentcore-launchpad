@@ -48,10 +48,7 @@ def _record(work_dir, prompt):
     )
     return "stub response", "raw"
 
-def run_claude_code_exec(**kwargs):
-    return _record(kwargs["work_dir"], kwargs["prompt"])
-
-def run_codex_exec(**kwargs):
+def run_opencode_exec(**kwargs):
     return _record(kwargs["work_dir"], kwargs["prompt"])
 '''
 
@@ -104,11 +101,9 @@ def _run(tmp_path, tasks, attachments=(), count=1, raw_manifest=None):
             spec = importlib.util.spec_from_file_location("agent_stub", {str(stub)!r})
             agent = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(agent)
-            # Patch only the two entry points: the real module carries other names
-            # that skillopt.envs.skilleval.rollout imports.
-            import skillopt.model.codex_harness as harness
-            harness.run_claude_code_exec = agent.run_claude_code_exec
-            harness.run_codex_exec = agent.run_codex_exec
+            # Patch only the entry point, before generate_tasks binds it by name.
+            import skillopt.model.opencode_backend as backend
+            backend.run_opencode_exec = agent.run_opencode_exec
             sys.argv = {argv!r}
             globals_dict = {{"__name__": "__main__", "__file__": {str(SCRIPT)!r}}}
             exec(compile(open({str(SCRIPT)!r}).read(), {str(SCRIPT)!r}, "exec"), globals_dict)

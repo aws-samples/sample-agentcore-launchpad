@@ -4,7 +4,7 @@ info:
   description: Tiny office facts API — sample REST→MCP conversion source.
   version: "1.0"
 servers:
-  - url: https://REPLACED_AT_BOOTSTRAP.execute-api.us-west-2.amazonaws.com/prod
+  - url: https://REPLACED_AT_BOOTSTRAP.execute-api.cn-northwest-1.amazonaws.com.cn/prod
 paths:
   /facts:
     get:

@@ -1,8 +1,8 @@
 """Judge routing: the derived judge_mode must not survive an import as an explicit one.
 
 Slice 0 of `08-26-skill-lab-judge-route-readiness`. A live prod evaluation submitted with
-`judge_mode: chat` escalated to the agentic judge anyway and failed with
-`FileNotFoundError: 'claude'`. The mechanism, confirmed by probe:
+`judge_mode: chat` escalated to the agentic judge anyway and failed with a missing
+judge CLI. The mechanism, confirmed by probe:
 
 `load_tasks` writes a derived `judge_mode: "auto"` into every item. `import_taskgen_taskset`
 saves those normalized items verbatim, so the stored document *contains* a `judge_mode`
@@ -130,26 +130,17 @@ def test_routing_flags_are_passed_for_every_judge_mode(mode):
 
 
 @pytest.mark.parametrize("mode", ("chat", "auto", "agentic"))
-def test_an_openai_family_judge_never_resolves_to_the_claude_cli(mode):
-    argv = _judge_argv(mode, judge_model="us.openai.gpt-6-sol")
-    backend = argv[argv.index("--judge_exec_backend") + 1]
-    model = argv[argv.index("--judge_exec_model") + 1]
-    assert backend == "codex_exec"
-    # the inference-profile id is kept: codex's amazon-bedrock-runtime provider
-    # invokes it directly (a bare openai.* id is rejected)
-    assert model == "us.openai.gpt-6-sol"
-
-
-@pytest.mark.parametrize("mode", ("chat", "auto", "agentic"))
-def test_a_non_openai_judge_keeps_the_claude_cli_and_the_full_model_id(mode):
-    argv = _judge_argv(mode, judge_model="global.anthropic.claude-opus-5")
-    assert argv[argv.index("--judge_exec_backend") + 1] == "claude_code_exec"
-    assert argv[argv.index("--judge_exec_model") + 1] == "global.anthropic.claude-opus-5"
+@pytest.mark.parametrize("judge_model", ("global.zai.glm-5.3", "global.moonshotai.kimi-k3"))
+def test_every_judge_model_routes_to_the_one_exec_cli(mode, judge_model):
+    """D16: one exec CLI, the model id passed through unchanged."""
+    argv = _judge_argv(mode, judge_model=judge_model)
+    assert argv[argv.index("--judge_exec_backend") + 1] == "opencode_exec"
+    assert argv[argv.index("--judge_exec_model") + 1] == judge_model
 
 
 def test_the_train_path_states_the_route_for_chat_too():
     env = runner._train_judge_env(runner.clamp_train_params({"judge_mode": "chat"}))
-    assert env["judge_backend"] == "codex_exec"
+    assert env["judge_backend"] == "opencode_exec"
     assert set(env) == {"judge_backend", "judge_model", "judge_effort", "judge_sandbox_command"}
 
 
@@ -190,8 +181,8 @@ def test_chat_still_produces_chat_verdicts_when_the_route_is_stated(tmp_path):
                 mode: should_use_agentic(
                     derived,
                     artifact,
-                    AgenticJudgeConfig(mode=mode, backend="codex_exec",
-                                       model="openai.gpt-5.6-sol"),
+                    AgenticJudgeConfig(mode=mode, backend="opencode_exec",
+                                       model="global.zai.glm-5.3"),
                 )
                 for mode in ("chat", "auto", "agentic")
             }))
@@ -232,37 +223,36 @@ def _status(client, present: set[str], judge_model: str, monkeypatch) -> dict:
     return response.json()
 
 
-def test_readiness_is_false_for_the_route_whose_cli_is_absent(client, monkeypatch):
-    """The prod shape: bwrap + codex present, claude absent. Before this slice the
-    status reported the agentic judge ready and every artifact task still died."""
-    body = _status(client, {"bwrap", "codex"}, "global.anthropic.claude-opus-5", monkeypatch)
-    assert body["agentic_judge_ready"] is True  # the shared prerequisite does hold
-    assert body["judge_codex_ready"] is True
-    assert body["judge_claude_ready"] is False
-    # …but the configured judge model routes to claude, so the honest answer is no.
+def test_readiness_is_false_when_the_exec_cli_is_absent(client, monkeypatch):
+    """bwrap present, opencode absent: the shared prerequisite holds but the judge
+    CLI does not — and the honest answer for the configured judge model is no."""
+    body = _status(client, {"bwrap"}, "global.zai.glm-5.3", monkeypatch)
+    assert body["agentic_judge_ready"] is True
+    assert body["judge_opencode_ready"] is False
     assert body["judge_cli_ready"] is False
+    assert "judge_codex_ready" not in body and "judge_claude_ready" not in body
 
 
-def test_readiness_is_true_when_the_routed_cli_is_present(client, monkeypatch):
-    body = _status(client, {"bwrap", "codex"}, "us.openai.gpt-5.6-sol", monkeypatch)
+def test_readiness_is_true_when_the_exec_cli_is_present(client, monkeypatch):
+    body = _status(client, {"bwrap", "opencode"}, "global.moonshotai.kimi-k3", monkeypatch)
+    assert body["judge_opencode_ready"] is True
     assert body["judge_cli_ready"] is True
-    assert body["judge_claude_ready"] is False  # irrelevant for this route
 
 
 def test_the_shared_prerequisite_is_reported_separately(client, monkeypatch):
-    """A host with both CLIs but no sandbox launcher: per-CLI probes say yes, the
+    """A host with the CLI but no sandbox launcher: the CLI probe says yes, the
     shared one says no. Keeping them separate is what lets the wizard name the
     actual missing piece."""
-    body = _status(client, {"claude", "codex"}, "us.openai.gpt-5.6-sol", monkeypatch)
+    body = _status(client, {"opencode"}, "global.zai.glm-5.3", monkeypatch)
     assert body["agentic_judge_ready"] is False
-    assert body["judge_codex_ready"] is True and body["judge_claude_ready"] is True
+    assert body["judge_opencode_ready"] is True
     assert body["judge_cli_ready"] is True
 
 
 def test_judge_cli_binary_matches_the_route():
-    assert runner.judge_cli_binary("us.openai.gpt-5.6-sol") == "codex"
-    assert runner.judge_cli_binary("global.anthropic.claude-opus-5") == "claude"
-    assert set(runner.JUDGE_CLI_BINARY) == set(runner.TARGET_BACKENDS)
+    assert runner.judge_cli_binary("global.zai.glm-5.3") == "opencode"
+    assert runner.judge_cli_binary("us.openai.gpt-5.6-sol") == "opencode"
+    assert set(runner.JUDGE_CLI_BINARY) == set(runner.TARGET_BACKENDS) == {"opencode_exec"}
 
 
 # ── a missing judge CLI is an actionable prerequisite, not a mystery row ────
@@ -282,8 +272,8 @@ def _write_results(tmp_path, monkeypatch, rows: list[dict]) -> dict:
 
 CLI_CRASH = (
     "judge worker exited 1: Traceback (most recent call last):\n"
-    "  File \"…/codex_harness.py\", line 1160, in _run_claude_code_judge_cli\n"
-    "FileNotFoundError: [Errno 2] No such file or directory: 'claude'"
+    "  File \"…/opencode_backend.py\", line 480, in _run_judge\n"
+    "FileNotFoundError: [Errno 2] No such file or directory: 'opencode'"
 )
 
 
@@ -299,9 +289,9 @@ def test_a_missing_judge_cli_is_named_on_the_row_and_summarised_once(tmp_path, m
              "judge_error": CLI_CRASH},
         ],
     )
-    assert [row["judge_prerequisite"] for row in result["rows"]] == ["claude", "claude"]
+    assert [row["judge_prerequisite"] for row in result["rows"]] == ["opencode", "opencode"]
     # Stated once for the run, not per row.
-    assert result["summary"]["judge_prerequisite_missing"] == ["claude"]
+    assert result["summary"]["judge_prerequisite_missing"] == ["opencode"]
     assert result["summary"]["invalid"] == 2
 
 
@@ -311,10 +301,10 @@ def test_an_absolute_cli_path_is_reduced_to_the_binary_name(tmp_path, monkeypatc
         monkeypatch,
         [{"id": "t1", "score_valid": False,
           "judge_error": "FileNotFoundError: [Errno 2] No such file or directory: "
-                         "'/usr/local/bin/codex'"}],
+                         "'/usr/local/bin/opencode'"}],
     )
-    assert result["rows"][0]["judge_prerequisite"] == "codex"
-    assert result["summary"]["judge_prerequisite_missing"] == ["codex"]
+    assert result["rows"][0]["judge_prerequisite"] == "opencode"
+    assert result["summary"]["judge_prerequisite_missing"] == ["opencode"]
 
 
 @pytest.mark.parametrize(

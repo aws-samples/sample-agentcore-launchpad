@@ -39,7 +39,7 @@ import {
   SkillNode,
 } from './nodes';
 import { isValidConnection } from './lib/connection-validator';
-import { DEFAULT_NEW_AGENT_MODEL } from './lib/models';
+import { defaultNewAgentModel } from './lib/models';
 
 const initialNodes: Node[] = [];
 const initialEdges: Edge[] = [];
@@ -230,12 +230,11 @@ export function FlowEditor({
       if (type === 'agent') {
         Object.assign(defaultData, {
           label: 'Agent',
-          // Native Bedrock GPT-6 Sol (global profile, Converse) is the platform
-          // default, matching the Create Agent wizard. Bedrock nodes generate
-          // from modelId; the Mantle provider stays one dropdown away.
+          // GLM 5.3 (Global profile, Converse) is the platform default, matching
+          // the Create Agent wizard; Bedrock nodes generate from modelId.
           modelProvider: 'AWS Bedrock',
-          modelId: DEFAULT_NEW_AGENT_MODEL.model_id,
-          modelName: DEFAULT_NEW_AGENT_MODEL.model_name,
+          modelId: defaultNewAgentModel().model_id,
+          modelName: defaultNewAgentModel().label,
           systemPrompt: 'You are a helpful AI assistant.',
           // launchpad extension: new agents default to streaming ON + 32000 max output tokens
           maxTokens: 32000,

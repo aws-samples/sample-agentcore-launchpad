@@ -4,6 +4,7 @@ CompleteResourceTokenAuth leg, grants, revocation (force re-auth), the
 return-URL reconcile and the generated non-blocking exchange."""
 
 import ast
+import inspect
 import json
 import os
 from datetime import UTC, datetime, timedelta
@@ -599,7 +600,9 @@ def test_runtime_user_id_is_sent_for_as_user_tools():
     assert runtime_user_id(AS_USER_SPEC, "alice") == "alice"
 
 
-def test_environment_carries_return_url_and_agent_id_only_for_as_user(monkeypatch):
+def test_environment_carries_return_url_only_for_as_user_and_agent_id_always(monkeypatch):
+    """The OAuth return URL is an as_user concern; the agent id is not (N12-obs33: the
+    config-bundle reader keys its S3 prefix on LAUNCHPAD_AGENT_ID for EVERY runtime)."""
     monkeypatch.setenv("LAUNCHPAD_PUBLIC_BASE_URL", "https://console.example/")
     get_settings.cache_clear()
     try:
@@ -610,7 +613,8 @@ def test_environment_carries_return_url_and_agent_id_only_for_as_user(monkeypatc
         plain = runtime_environment(
             AgentSpec(**{**AS_USER_SPEC, "tools": [m2m]}), {}, agent_id="a1"
         )
-        assert ENV_OAUTH_RETURN_URL not in plain and ENV_AGENT_ID not in plain
+        assert ENV_OAUTH_RETURN_URL not in plain and plain[ENV_AGENT_ID] == "a1"
+        assert ENV_AGENT_ID not in runtime_environment(AgentSpec(**AS_USER_SPEC), {})
     finally:
         get_settings.cache_clear()
 
@@ -707,6 +711,9 @@ def test_a_failed_return_url_registration_does_not_fail_the_deploy_stage(monkeyp
     db.add(agent)
     db.commit()
     control = MagicMock()
+    # N10v2-bug1: the create path first looks for a runtime to adopt; a bare MagicMock
+    # page would paginate forever (its .get("nextToken") is truthy)
+    control.list_agent_runtimes.return_value = {"agentRuntimes": []}
     control.create_agent_runtime.return_value = {
         "agentRuntimeId": "rt-9", "agentRuntimeArn": "arn:rt-9", "agentRuntimeVersion": "1"}
     control.get_agent_runtime.return_value = {
@@ -934,3 +941,32 @@ def test_prod_startup_warns_on_a_localhost_oauth_return_url(run_mode, urls, warn
     settings = Settings(run_mode=run_mode, **{
         "public_base_url": "http://localhost:5173", "oauth_return_url": "", **urls})
     assert _warn_local_return_url(settings) is warns
+
+
+# ── caller_kind: a legacy, always-"iam" column (N3 fix round) ───────────────
+#
+# caller_kind on OauthPendingSession is a legacy column from the pre-N3
+# identity fork's JWT-inbound era (see models/ledger.py and core/db.py's
+# migration comments). Every Runtime inbound is AWS_IAM-only in this build,
+# `record_pending` no longer accepts a caller kind at all, and
+# `oauth_sessions.complete`/`_user_identifier` no longer branch on it.
+
+
+def test_record_pending_has_no_caller_kind_parameter():
+    assert "caller_kind" not in inspect.signature(oauth_sessions.record_pending).parameters
+
+
+def test_every_recorded_row_has_caller_kind_iam(db):
+    _record(db)
+    assert db.query(OauthPendingSession).one().caller_kind == "iam"
+
+
+def test_another_user_cannot_complete_a_different_users_session(db):
+    _record(db, user="alice")
+    data = MagicMock()
+    with pytest.raises(AppError) as excinfo:
+        oauth_sessions.complete(db, WS, SESSION, caller="bob", data_client=data)
+    assert (excinfo.value.code, excinfo.value.status_code) == (
+        "identity.session_user_mismatch", 403)
+    data.complete_resource_token_auth.assert_not_called()
+    assert db.query(OauthPendingSession).one().user_id == "alice"

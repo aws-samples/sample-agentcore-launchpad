@@ -21,3 +21,22 @@ export function classicVideosToV2(search: string): string {
   const query = out.toString();
   return `/v2/videos${query ? `?${query}` : ""}`;
 }
+
+/**
+ * `/v2/video-management` was folded into the Videos page as its administrator-only
+ * `?view=manage` tab (2026-10-19, N15-obs14). Saved bookmarks and old links keep
+ * landing on the same sub-page:
+ *
+ *   /v2/video-management                → /v2/videos?view=manage
+ *   /v2/video-management?view=new       → /v2/videos?view=manage&edit=new
+ *   /v2/video-management?view=edit&id=X → /v2/videos?view=manage&edit=X
+ */
+export function legacyVideoManagementToV2(search: string): string {
+  const params = new URLSearchParams(search);
+  const out = new URLSearchParams({ view: "manage" });
+  const view = params.get("view");
+  const id = params.get("id");
+  if (view === "new") out.set("edit", "new");
+  else if (view === "edit" && id) out.set("edit", id);
+  return `/v2/videos?${out.toString()}`;
+}

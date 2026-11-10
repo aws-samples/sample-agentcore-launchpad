@@ -1,0 +1,32 @@
+{
+ "seam": "agentcore-browser",
+ "case": "get_browser_session_unknown",
+ "captured_at": "2026-10-19T09:12:16Z",
+ "notes": "",
+ "response_or_error": {
+  "exception": "botocore.exceptions.ClientError",
+  "Error": {
+   "Message": "Session not found: 01AAAAAAAAAAAAAAAAAAAAAAAA",
+   "Code": "ResourceNotFoundException"
+  },
+  "ResponseMetadata": {
+   "RequestId": "720b83de-46a9-4b3c-a0c2-97e6c715a2f2",
+   "HTTPStatusCode": 404,
+   "HTTPHeaders": {
+    "date": "Mon, 19 Oct 2026 09:12:17 GMT",
+    "content-type": "application/json",
+    "content-length": "59",
+    "connection": "keep-alive",
+    "x-amzn-requestid": "720b83de-46a9-4b3c-a0c2-97e6c715a2f2",
+    "x-amzn-errortype": "ResourceNotFoundException:http://internal.amazon.com/coral/com.amazon.bedrock.agentcore.common/"
+   }
+  },
+  "extra_top_level_keys": [
+   "message"
+  ],
+  "str": "An error occurred (ResourceNotFoundException) when calling the GetBrowserSession operation: Session not found: 01AAAAAAAAAAAAAAAAAAAAAAAA"
+ },
+ "status": 404,
+ "elapsed_s": 0.035,
+ "source": "t1 host, instance role (uv env boto3 1.43.109), via SSM"
+}

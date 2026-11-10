@@ -20,7 +20,6 @@ CTX = RoleContext(
     region="us-west-2",
     artifacts_bucket="bkt",
     ecr_repo_arn="arn:aws:ecr:us-west-2:123456789012:repository/launchpad-agents",
-    memory_id="launchpad_memory-abc",
 )
 
 
@@ -53,7 +52,19 @@ class StubIam:
         self.calls.append(f"get_role:{RoleName}")
         if RoleName not in self.roles:
             raise NoSuchEntity(RoleName)
-        return {"Role": {"Arn": f"arn:aws:iam::123456789012:role/{RoleName}"}}
+        # boto3 hands the trust document back URL-decoded as a dict; a stub seeded with
+        # a non-JSON string keeps it verbatim (the comparison must tolerate both).
+        trust = self.roles[RoleName].get("trust")
+        try:
+            doc = json.loads(trust) if isinstance(trust, str) else trust
+        except ValueError:
+            doc = trust
+        return {
+            "Role": {
+                "Arn": f"arn:aws:iam::123456789012:role/{RoleName}",
+                "AssumeRolePolicyDocument": doc,
+            }
+        }
 
     def update_assume_role_policy(self, RoleName, PolicyDocument):
         self.calls.append(f"update_trust:{RoleName}")
@@ -62,6 +73,14 @@ class StubIam:
     def put_role_policy(self, RoleName, PolicyName, PolicyDocument):
         self.calls.append(f"put_policy:{PolicyName}")
         self.roles[RoleName]["policies"][PolicyName] = json.loads(PolicyDocument)
+
+    def get_role_policy(self, RoleName, PolicyName):
+        self.calls.append(f"get_policy:{PolicyName}")
+        policies = self.roles.get(RoleName, {}).get("policies", {})
+        if PolicyName not in policies:
+            raise NoSuchEntity(PolicyName)
+        return {"RoleName": RoleName, "PolicyName": PolicyName,
+                "PolicyDocument": policies[PolicyName]}
 
     def delete_role_policy(self, RoleName, PolicyName):
         self.calls.append(f"delete_policy:{PolicyName}")
@@ -99,7 +118,6 @@ def _spec(**over) -> AgentSpec:
 
 def _mount_spec() -> AgentSpec:
     return _spec(
-        method="container",
         filesystem={"s3_files": [{"access_point_arn": S3_AP, "mount_path": "/mnt/a"}]},
         network={"subnets": ["subnet-1"], "security_groups": ["sg-1"]},
     )
@@ -140,6 +158,76 @@ class TestEnsureRole:
         arn = agent_iam.ensure_role(iam, agent, _spec(), CTX)
         assert arn.endswith(f"role/{name}")
         assert f"update_trust:{name}" in iam.calls
+
+    # N10v2-bug1: the hub's EC2 ops role had no iam:UpdateAssumeRolePolicy, so a resumed
+    # deploy (provision re-entered by resume_pending_jobs) died on the adopt path's
+    # unconditional trust rewrite — for a trust document that was byte-identical.
+    def test_a_resumed_provision_writes_nothing_when_the_role_is_already_right(self):
+        iam = StubIam()
+        agent = _agent()
+        agent_iam.ensure_role(iam, agent, _spec(), CTX)
+        before = len(iam.calls)
+        logs: list[str] = []
+        agent_iam.ensure_role(iam, agent, _spec(), CTX, logs.append)
+        resumed = iam.calls[before:]
+        assert not [c for c in resumed if c.startswith(("update_trust:", "put_policy:"))], resumed
+        assert any(c.startswith("get_role:") for c in resumed)  # it did look
+        assert any("unchanged" in line for line in logs)
+
+    def test_trust_comparison_tolerates_the_url_encoded_string_form(self):
+        """Some SDK paths return AssumeRolePolicyDocument as the raw URL-encoded JSON
+        string the IAM API stores; identical content must still count as identical."""
+        from urllib.parse import quote
+
+        agent = _agent()
+        name = agent_iam.role_name_for(agent.name, agent.id)
+        encoded = quote(json.dumps(agent_iam.trust_policy(CTX)), safe="")
+
+        class RawDocIam(StubIam):
+            def get_role(self, RoleName):
+                out = super().get_role(RoleName)
+                out["Role"]["AssumeRolePolicyDocument"] = encoded
+                return out
+
+        iam = RawDocIam(existing={name: {"trust": "{}", "policies": {}, "tags": []}})
+        agent_iam.ensure_role(iam, agent, _spec(), CTX)
+        assert f"update_trust:{name}" not in iam.calls
+
+    def test_a_changed_trust_policy_is_still_refreshed_on_adopt(self):
+        """Tightening the trust (a runtime ARN condition) must land on an adopted role."""
+        iam = StubIam()
+        agent = _agent()
+        agent_iam.ensure_role(iam, agent, _spec(), CTX)
+        runtime_arn = "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/probe-x"
+        agent_iam.ensure_role(iam, agent, _spec(), CTX, runtime_arn=runtime_arn)
+        name = agent_iam.role_name_for(agent.name, agent.id)
+        assert iam.calls.count(f"update_trust:{name}") == 1
+        trust = json.loads(iam.roles[name]["trust"])
+        assert trust["Statement"][0]["Condition"]["ArnEquals"]["aws:SourceArn"] == runtime_arn
+
+    def test_a_changed_capability_policy_is_rewritten_only_when_it_differs(self):
+        iam = StubIam()
+        agent = _agent()
+        agent_iam.ensure_role(iam, agent, _spec(), CTX)
+        agent_iam.ensure_role(iam, agent, _spec(), CTX)  # identical → no write
+        # a knowledge base adds a statement → written; mounts live in the fs policy
+        agent_iam.ensure_role(iam, agent, _spec(knowledge_bases=[{"kb_id": "KB1"}]), CTX)
+        caps = agent_iam.capability_policy_name(agent.name)
+        assert iam.calls.count(f"put_policy:{caps}") == 2
+
+    def test_an_iam_client_without_get_role_policy_still_converges(self):
+        """Older stubs / restricted clients: a failed read means 'write it'."""
+
+        class NoRead(StubIam):
+            def get_role_policy(self, RoleName, PolicyName):
+                raise RuntimeError("AccessDenied: iam:GetRolePolicy")
+
+        iam = NoRead()
+        agent = _agent()
+        agent_iam.ensure_role(iam, agent, _spec(), CTX)
+        agent_iam.ensure_role(iam, agent, _spec(), CTX)
+        caps = agent_iam.capability_policy_name(agent.name)
+        assert iam.calls.count(f"put_policy:{caps}") == 2
 
     def test_a_non_conflict_create_error_is_not_swallowed(self):
         class Boom(StubIam):
@@ -222,6 +310,30 @@ class TestDeleteRole:
         joined = "\n".join(logs)
         assert agent_iam.role_name_for(agent.name, agent.id) in joined
         assert agent_iam.MANAGED_TAG_KEY in joined
+
+    def test_a_denied_listing_falls_back_to_the_known_policy_names(self):
+        """N10v2-bug8 (live): the hub's ops role was denied iam:ListRolePolicies, the
+        helper then hit DeleteConflict and the preset stayed `uninstalling`. The two
+        inline policies the platform attaches have deterministic names — delete those
+        when the listing is refused."""
+
+        class DeniedListIam(StubIam):
+            def list_role_policies(self, RoleName):
+                raise RuntimeError("AccessDenied: iam:ListRolePolicies")
+
+            def delete_role(self, RoleName):
+                if self.roles.get(RoleName, {}).get("policies"):
+                    raise RuntimeError("DeleteConflict: Cannot delete entity, must delete "
+                                       "policies first")
+                return super().delete_role(RoleName)
+
+        iam = DeniedListIam()
+        agent = _agent()
+        agent_iam.ensure_role(iam, agent, _mount_spec(), CTX)  # caps + fs policies
+        logs: list[str] = []
+        assert agent_iam.delete_role(iam, agent, logs.append) is True
+        assert iam.roles == {}
+        assert any("known" in line for line in logs)
 
     def test_delete_then_recreate_under_the_same_name_works(self):
         iam = StubIam()

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { type LibraryVideo, type VideoCatalog, type VideoCollection, type VideoLocale, type VideoVersionFilter, videoTimestamp } from "../../../lib/videos";
 import { Alert, Button, Card, SearchInput, Segmented, Select, Tag } from "../../ui";
+import { DocumentLinks, DocumentThumb } from "./Document";
 
 interface Result {
   id: string;
@@ -130,10 +131,45 @@ export function VideoLibrary({
             {results.map((item) => {
               const first = item.videos[0];
               const duration = item.videos.reduce((total, video) => total + video.durationSeconds, 0);
+              const testId = `video-card-${item.id}${version === "all" ? `-${first.consoleVersion}` : ""}`;
+              const tags = (
+                <span className="tags">
+                  {first.kind === "document" && <Tag tone="outline">{t("videos.kind.document")}</Tag>}
+                  <Tag tone={first.consoleVersion === "v2" ? "blue" : "gray"}>
+                    {t(`videos.version.${first.consoleVersion}`)}
+                  </Tag>
+                  {item.videos.length > 1 && (
+                    <Tag tone="blue">{t("videos.episodeCount", { count: item.videos.length })}</Tag>
+                  )}
+                </span>
+              );
+              if (first.kind === "document") {
+                // a manual: the card body routes to the detail page like any item; the open
+                // links sit OUTSIDE the button (no nested interactive content) and open the
+                // file in a new tab — the console never embeds documents (CSP frame-src 'none')
+                return (
+                  <li key={`${item.id}-${first.consoleVersion}`}>
+                    <div className="v2-videos-card v2-videos-doc" data-testid={testId}>
+                      <button type="button" className="body" onClick={() => onWatch(first.id)}
+                        data-testid={`${testId}-detail`}>
+                        <DocumentThumb video={first} />
+                        <span className="text">
+                          <strong>{item.title}</strong>
+                          <span className="desc">{item.description}</span>
+                          {tags}
+                        </span>
+                      </button>
+                      <div className="links">
+                        <DocumentLinks video={first} compact />
+                      </div>
+                    </div>
+                  </li>
+                );
+              }
               return (
                 <li key={`${item.id}-${first.consoleVersion}`}>
                   <button type="button" className="v2-videos-card" onClick={() => onWatch(first.id)}
-                    data-testid={`video-card-${item.id}${version === "all" ? `-${first.consoleVersion}` : ""}`}>
+                    data-testid={testId}>
                     <span className="thumb">
                       {first.posterUrl && <img src={first.posterUrl} alt="" loading="lazy" />}
                       <PlayCircle className="play" size={40} aria-hidden="true" />
@@ -142,14 +178,7 @@ export function VideoLibrary({
                     <span className="text">
                       <strong>{item.title}</strong>
                       <span className="desc">{item.description}</span>
-                      <span className="tags">
-                        <Tag tone={first.consoleVersion === "v2" ? "blue" : "gray"}>
-                          {t(`videos.version.${first.consoleVersion}`)}
-                        </Tag>
-                        {item.videos.length > 1 && (
-                          <Tag tone="blue">{t("videos.episodeCount", { count: item.videos.length })}</Tag>
-                        )}
-                      </span>
+                      {tags}
                     </span>
                   </button>
                 </li>

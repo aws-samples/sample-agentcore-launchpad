@@ -1,0 +1,49 @@
+diff --git a/frontend/src/v2/pages/experiments/ExperimentDetail.tsx b/frontend/src/v2/pages/experiments/ExperimentDetail.tsx
+index a2e4c83d..3ea47fd2 100644
+--- a/frontend/src/v2/pages/experiments/ExperimentDetail.tsx
++++ b/frontend/src/v2/pages/experiments/ExperimentDetail.tsx
+@@ -80,7 +80,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
+   const [genTd, setGenTd] = useState(() => loadRecTypes(id).td);
+   const [prefsSeeded, setPrefsSeeded] = useState(false);
+   const [sourceRunId, setSourceRunId] = useState("");
+-  const [providerId, setProviderId] = useState("agentcore");
++  const [providerId, setProviderId] = useState("gepa_lite");
+   const [modelChoice, setModelChoice] = useState("");
+   const [modelCustom, setModelCustom] = useState("");
+   const [editedPrompt, setEditedPrompt] = useState<string | null>(null);
+@@ -93,7 +93,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
+     const prefs = loadRecPrefs(exp.id);
+     const last = exp.artifacts.recommend;
+     setSourceRunId(prefs.source ?? last?.trace_source?.run_id ?? "");
+-    setProviderId(prefs.provider ?? last?.provider ?? last?.tool_provider ?? "agentcore");
++    setProviderId(prefs.provider ?? last?.provider ?? last?.tool_provider ?? "gepa_lite");
+     setModelChoice(prefs.model ?? "");
+     setModelCustom(prefs.customModel ?? "");
+     setPrefsSeeded(true);
+@@ -161,7 +161,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
+   const knownTools = rec?.analyzed_tools && Object.keys(rec.analyzed_tools).length ? rec.analyzed_tools : (a.agent_meta?.tools ?? {});
+   const hasKnownTools = Object.keys(knownTools).length > 0;
+ 
+-  const provider = recProviders.find((p) => p.id === providerId) ?? recProviders.find((p) => p.id === "agentcore");
++  const provider = recProviders.find((p) => p.id === providerId) ?? recProviders.find((p) => p.id === "gepa_lite");
+   const providerIsAws = !provider || provider.id === "agentcore";
+   const modelId = modelChoice === CUSTOM_MODEL_OPTION ? modelCustom.trim() : modelChoice || (provider?.default_model_id ?? "");
+   const providerNeedsSource = !providerIsAws && !!provider?.requires_source && !sourceRunId;
+@@ -262,7 +262,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
+       <>
+         <Field label={t("expPage.providerLabel")}>
+           <Select
+-            value={provider?.id ?? "agentcore"}
++            value={provider?.id ?? "gepa_lite"}
+             onChange={(v) => {
+               setProviderId(v);
+               setModelChoice("");
+@@ -294,7 +294,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
+               <input
+                 className="v2-input mono"
+                 style={{ marginTop: 8 }}
+-                placeholder="global.anthropic.claude-sonnet-5"
++                placeholder="global.zai.glm-5.3"
+                 value={modelCustom}
+                 onChange={(e) => {
+                   setModelCustom(e.target.value);

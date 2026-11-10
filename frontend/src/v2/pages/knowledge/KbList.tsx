@@ -4,9 +4,10 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { v2KnowledgeApi } from "../../../lib/api";
-import type { KnowledgeBaseSummary } from "../../../lib/knowledgeBases";
-import { fmtTime } from "../../format";
+import { attachedAgentCount, type KnowledgeBaseSummary } from "../../../lib/knowledgeBases";
+import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, usePaged } from "../../hooks";
+import { useMayMutate } from "../../ownership";
 import {
   Alert,
   Button,
@@ -31,6 +32,7 @@ export function KbList({ staleId, onDismissStale }: { staleId: string | null; on
   const [, setParams] = useSearchParams();
   const { data, loading, error, reload } = useLoad(() => v2KnowledgeApi.list(), "kbs");
   const del = useKbDelete(() => reload());
+  const mayMutate = useMayMutate(); // N17-obs530: delete is the creator's or an administrator's
   const [status, setStatus] = useState("");
   const [q, setQ] = useState("");
 
@@ -91,15 +93,16 @@ export function KbList({ staleId, onDismissStale }: { staleId: string | null; on
       key: "agents",
       title: t("knowledge.cols.agents"),
       render: (kb) =>
-        kb.attached_agents.length ? (
+        attachedAgentCount(kb) ? (
           <span className="v2-knowledge-agents" title={kb.attached_agents.join(", ")}>
-            <span className="mono">{kb.attached_agents.length}</span>
+            <span className="mono">{attachedAgentCount(kb)}</span>
             <span className="sub">{kb.attached_agents.join(", ")}</span>
           </span>
         ) : (
           <span className="mono v2-muted">0</span>
         ),
     },
+    { key: "creator", title: t("v2.common.creator"), render: (kb) => creatorLabel(kb) },
     { key: "updated", title: t("knowledge.cols.updated"), className: "nowrap", render: (kb) => fmtTime(kb.updated_at) },
     {
       key: "ops",
@@ -114,14 +117,16 @@ export function KbList({ staleId, onDismissStale }: { staleId: string | null; on
           >
             {t("v2.knowledge.retrieveTest")}
           </LinkButton>
-          <LinkButton
-            danger
-            disabled={kb.status === "DELETING"}
-            onClick={() => del.ask(kb)}
-            testId={`v2-kb-delete-${kb.name}`}
-          >
-            {t("v2.common.delete")}
-          </LinkButton>
+          {mayMutate(kb) && (
+            <LinkButton
+              danger
+              disabled={kb.status === "DELETING"}
+              onClick={() => del.ask(kb)}
+              testId={`v2-kb-delete-${kb.name}`}
+            >
+              {t("v2.common.delete")}
+            </LinkButton>
+          )}
         </div>
       ),
     },

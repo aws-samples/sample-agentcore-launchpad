@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/engine_decide_response/v1",
+  "title": "I4 POST /v1/decide 200 response",
+  "type": "object",
+  "properties": {
+    "decision": {"enum": ["allow", "deny"]},
+    "stage_a": {"enum": ["allow", "deny"]},
+    "stage_bt": {"enum": ["allow", "deny"]},
+    "determining": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "policy_id": {"type": "string", "minLength": 1},
+          "version": {"type": "integer", "minimum": 1},
+          "mode": {"enum": ["active", "log_only"]},
+          "stage": {"enum": ["a", "bt"]}
+        },
+        "required": ["policy_id", "version", "mode", "stage"],
+        "additionalProperties": false
+      }
+    },
+    "log_only_would": {"enum": ["allow", "deny", null]},
+    "event_seq": {"type": ["integer", "null"], "minimum": 0},
+    "ts_ns": {"type": ["integer", "null"], "minimum": 0},
+    "store_epoch": {"type": "string", "minLength": 1},
+    "policy_set_version": {"type": "string", "minLength": 1},
+    "errors": {"type": "array", "items": {"type": "string"}}
+  },
+  "required": ["decision", "stage_a", "stage_bt", "determining", "log_only_would", "event_seq", "ts_ns", "store_epoch", "policy_set_version", "errors"],
+  "additionalProperties": false
+}

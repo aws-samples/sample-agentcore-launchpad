@@ -4,14 +4,26 @@ import { useTranslation } from "react-i18next";
 
 import type { LibraryVideo, VideoCollection, VideoLocale } from "../../../lib/videos";
 import { Card, FlowHeader, LinkButton, Segmented, Tag } from "../../ui";
+import { DocumentDetail } from "./Document";
 import { VideoChapterList, VideoEpisodeList, VideoSummary } from "./playback";
 import { useVideoPlayback } from "./useVideoPlayback";
 
 /**
  * 观看视频 (`?view=watch&video=`) — the shared playback (`./playback`) plus the
  * series playlist. Keyed on the video id by the router, so switching episodes remounts it.
+ * A document item renders `DocumentDetail` (links, no player) under the same route.
  */
-export function VideoPlayer({
+export function VideoPlayer(props: {
+  video: LibraryVideo;
+  collection: VideoCollection;
+  locale: VideoLocale;
+  onSelect: (id: string) => void;
+  onBack: () => void;
+}) {
+  return props.video.kind === "document" ? <DocumentDetail {...props} /> : <RecordingPlayer {...props} />;
+}
+
+function RecordingPlayer({
   video,
   collection,
   locale,

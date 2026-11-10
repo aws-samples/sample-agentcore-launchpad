@@ -1,3 +1,4 @@
+import { copyBrowserText } from "../lib/browser-compat";
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import Editor from '@monaco-editor/react';
@@ -36,8 +37,9 @@ export function CodePanel({
   };
 
   const handleCopy = () => {
-    void navigator.clipboard?.writeText(code).then(
-      () => {
+    void copyBrowserText(code).then(
+      (didCopy) => {
+        if (!didCopy) return;
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       },

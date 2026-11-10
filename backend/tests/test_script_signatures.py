@@ -158,4 +158,6 @@ def test_the_scanner_still_resolves_app_calls():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         functions, modules = _app_imports(tree)
         resolved += len(functions) + len(modules)
-    assert resolved > 20, f"only {resolved} app symbols resolved across backend/scripts"
+    # the CN build dropped the registry/memory/KB e2e scripts (spec C5), and N3
+    # W2 Task 3 dropped the retired inbound-JWT-switch e2e script, so fewer remain
+    assert resolved > 5, f"only {resolved} app symbols resolved across backend/scripts"

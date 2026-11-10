@@ -1,0 +1,202 @@
+# Lifecycle graph — Long-term memory record (E06). Round 16, channel A, r16-o.
+#
+# The record is written by the extractor Lambda's merge (tests/property/
+# test_memory_merge_properties.World — one fake substrate shared with the hub backend) and
+# read / deleted through the console routes with that backend registered.
+graph: memory_record
+module: E06
+entity: one long-term memory document (`launchpad-memory` index) of an actor's `/facts` namespace
+initial: absent
+
+contracts:
+  MB_MERGE:
+    doc: docs/cn/interfaces/memory-backend.md
+    section: "Merge strategy (v2)"
+    quote: >-
+      `op = delete` with a candidate target and `confidence ≥ 0.6` | target gets `deleted_at` (soft);
+      never a hard delete … `op = delete` otherwise (no candidate target, confidence < 0.6, or **no
+      stated confidence** — an absent value reads as 0 for `delete` only) | ignored with a job warning
+      (`counts.noops`) … nearest active record at cosine `≥ 0.92` | duplicate, nothing written,
+      whatever the op … `op = update` | target's text + embedding rewritten in place: same id,
+      `created_at` kept, `updated_at` bumped … `op = supersede` | new record (`supersedes: [target]`);
+      target gets `superseded_by`, `superseded_at` … `op = add` (cosine `0.75–0.92` included: the
+      model decided) | new record
+  MB_RECALL:
+    doc: docs/cn/interfaces/memory-backend.md
+    section: "Merge strategy (v2) › Recall"
+    quote: >-
+      `list_records` and the Chat rail (`session_memory_summary`) hide inactive records.
+      `list_records( … , include_superseded=True)` shows them, and every record item carries the
+      op-history fields plus `active`.
+  MB_CONSOLIDATE:
+    doc: docs/cn/interfaces/memory-backend.md
+    section: "Merge strategy (v2) › Cap and re-summarization"
+    quote: >-
+      After the strategies run, a namespace holding more ACTIVE records than its cap gets one
+      consolidation pass. The pass takes the oldest `min(20, max(4, 2 × overflow))` records and asks
+      the model to merge related ones (`{text, merges: [ids], confidence}`). Each group of two or more
+      becomes one `consolidate` record that supersedes its members. … Superseded records are kept
+      forever as history; only the existing record delete and agent purge remove them.
+  MB_DELETE_UNLINK:
+    doc: docs/cn/interfaces/memory-backend.md
+    section: Merge strategy (v2) › The record delete unlinks (N16-obs114)
+    quote: >-
+      `DELETE /api/memory/records/{id}` of a record inside a history chain never leaves a dangling
+      link: in the same operation the successor (`superseded_by`) drops the id from its
+      `supersedes`; each predecessor (`supersedes[]`) is re-pointed at the successor when there is
+      one … when the deleted record was the chain's head, exactly one predecessor — the newest by
+      `record_timestamp` (`updated_at`, else `created_at`) — has `superseded_by` / `superseded_at`
+      cleared and reads active again … and the other predecessors are re-pointed at it
+  MR_DELETE:
+    doc: docs/cn/interfaces/memory-runtime.md
+    section: "4. Long-term records › Deleting records"
+    quote: >-
+      **Deleting records (N11 r3-C).** Two hub-side paths remove documents from this index, both
+      scoped on the stored `store_id` + `actor_id` fields and never on the bare agent id: `DELETE
+      /api/memory/records/{id}?actor_id=` (one document, `OpenSearchHttp.delete_doc`
+  MB_DELETE:
+    doc: docs/cn/interfaces/memory-backend.md
+    section: "Methods — signature, return shape, caller"
+    quote: >-
+      `delete_record(ws, record_id, actor_id)` | `{record_id, actor_id, namespace, strategy_id,
+      deleted: true}` | `DELETE /api/memory/records/{record_id}?actor_id= … `actor_id` is mandatory
+      and the backend checks the stored `store_id` **and** `actor_id` before deleting, so a record of
+      another actor/workspace answers 404 `memory.not_found` and is never removed.
+  API_MEMORY_DELETE:
+    doc: docs/api.md
+    section: Console Memory API › DELETE /api/memory/records/{record_id}
+    quote: >-
+      One long-term record; the backend confirms the record belongs to that actor and this
+      workspace's store before deleting (N10v2-bug6) — an unknown id, another actor's or another
+      store's record answers `404 memory.not_found` and nothing is removed … `403
+      memory.record_forbidden {actor_id, agent_id}` otherwise
+  MB_ERRORS:
+    doc: docs/cn/interfaces/memory-backend.md
+    section: "Error codes"
+    quote: >-
+      `memory.not_found` | 404 | `NotFoundError` from
+      `_store`/`update_memory_resource`/`delete_memory_resource`, or `mapped_opensearch_error` on an
+      OpenSearch 404 … `memory.default_protected` | 409 | `delete_memory_resource` on the workspace's
+      default store … `memory.record_forbidden` | 403 | `DELETE /api/memory/records/{record_id}` by a
+      member who does not own the agent the record's actor is scoped to (or for an unscoped actor)
+  UO_S4_MEMORY:
+    doc: docs/cn/interfaces/users-and-ownership.md
+    section: "4. CN extras — Memory record delete"
+    quote: >-
+      Memory record delete | `DELETE /api/memory/records/{id}` is admin, or the member whose account
+      **created the agent** the actor is scoped to (replaces the retired `Agent.owner` check) | 403
+      `memory.record_forbidden`
+
+nodes:
+  - id: absent
+  - id: active
+  - id: superseded
+  - id: soft_deleted
+  - id: consolidated
+  - id: gone
+    terminal: true
+
+edges:
+  - id: add
+    from: absent
+    to: active
+    via: an extraction event whose facts operation is `add`
+    expect: {active: true, listed: true, last_op: add}
+    cites: [MB_MERGE]
+    ui: {page: /v2/memory, view: null, controls: [v2-memory-actor, v2-memory-strategy]}
+  - id: add_duplicate
+    from: active
+    to: active
+    kind: refusal
+    via: an `add` whose text sits at cosine ≥ 0.92 of the active record
+    expect: {documents: +0, counts_duplicates: 1}
+    cites: [MB_MERGE]
+    ui: null
+  - id: update
+    from: active
+    to: active
+    via: an `update` naming the record (candidate alias)
+    expect: {same_id: true, created_at_kept: true, updated_at_bumped: true}
+    cites: [MB_MERGE]
+    ui: null
+  - id: delete_low_confidence
+    from: active
+    to: active
+    kind: refusal
+    via: a `delete` naming the record with confidence 0.5
+    expect: {active: true, counts_noops: 1}
+    cites: [MB_MERGE]
+    ui: null
+  - id: supersede
+    from: active
+    to: superseded
+    via: a `supersede` naming the record
+    expect: {target_superseded_by: new, new_supersedes: [target], listed: false}
+    cites: [MB_MERGE, MB_RECALL]
+    ui: {page: /v2/memory, view: null, controls: [v2-memory-show-superseded]}
+  - id: soft_delete
+    from: active
+    to: soft_deleted
+    via: a `delete` naming the record with confidence 0.9
+    expect: {deleted_at_set: true, document_kept: true, listed: false}
+    cites: [MB_MERGE, MB_RECALL]
+    ui: {page: /v2/memory, view: null, controls: [v2-memory-show-superseded]}
+  - id: consolidate
+    from: active
+    to: consolidated
+    via: the namespace is pushed over `max_facts_per_actor` (cap 10) by one event; the consolidation pass merges the oldest records
+    expect: {consolidate_record: 1, members_superseded: true}
+    cites: [MB_CONSOLIDATE]
+    ui: null
+  - id: list_hides_inactive
+    from: superseded
+    to: superseded
+    via: GET /api/memory/records?actor_id= (default) vs include_superseded=true
+    expect: {default_hides: true, include_shows: true, active_flag: false}
+    cites: [MB_RECALL]
+    ui: {page: /v2/memory, view: null, controls: [v2-memory-show-superseded]}
+  - id: api_delete_active
+    from: active
+    to: gone
+    via: DELETE /api/memory/records/{id}?actor_id= (administrator)
+    expect: {status: 200, deleted: true, document_gone: true}
+    cites: [MR_DELETE, MB_DELETE]
+    ui: {page: /v2/memory, view: null, controls: [v2-memory-record-delete, v2-confirm-ok]}
+  - id: api_delete_superseded
+    from: superseded
+    to: gone
+    via: DELETE /api/memory/records/{id}?actor_id= of the retired record
+    expect: {status: 200, document_gone: true, successor_supersedes_cleared: true, scan: "no dangling `supersedes` / `superseded_by` reference"}
+    cites: [MB_DELETE_UNLINK, MB_CONSOLIDATE, MR_DELETE, MB_DELETE]
+    ui: {page: /v2/memory, view: null, controls: [v2-memory-show-superseded, v2-memory-record-delete, v2-confirm-ok]}
+  - id: api_delete_soft_deleted
+    from: soft_deleted
+    to: gone
+    via: DELETE /api/memory/records/{id}?actor_id= of the tombstoned record
+    expect: {status: 200, document_gone: true}
+    cites: [MR_DELETE]
+    ui: null
+  - id: api_delete_again
+    from: gone
+    to: gone
+    kind: refusal
+    via: DELETE /api/memory/records/{id}?actor_id= once more
+    expect: {status: 404, code: memory.not_found}
+    cites: [MB_ERRORS, API_MEMORY_DELETE]
+    ui: null
+  - id: api_delete_wrong_actor
+    from: active
+    to: active
+    kind: refusal
+    via: DELETE /api/memory/records/{id}?actor_id=<another actor>
+    expect: {status: 404, code: memory.not_found, document_kept: true}
+    cites: [MR_DELETE, MB_ERRORS]
+    ui: null
+  - id: member_delete_other_agents_record
+    from: active
+    to: active
+    kind: refusal
+    via: a member's DELETE of a record whose actor is scoped to an agent they did not create
+    expect: {status: 403, code: memory.record_forbidden, document_kept: true}
+    cites: [UO_S4_MEMORY]
+    ui: {page: /v2/memory, view: null, controls: [v2-memory-record-delete]}

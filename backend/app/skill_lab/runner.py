@@ -4,8 +4,10 @@ construction, env allowlist, spawn, and the exec-jobs S3 janitor.
 The vendored CLI runs in the dedicated venv with an allowlisted environment —
 never `os.environ.copy()` — so backend settings and operator secrets don't
 reach the child. Rollouts execute on the AgentCore worker (the vendored
-runner's own boto3 talks to S3/runtime); the judge goes to Bedrock via
-bedrock_chat, so the child needs ambient AWS credentials only.
+runner's own boto3 talks to S3/runtime); the judge goes to Global Bedrock via
+bedrock_chat with the hub's API key, so the child needs ambient AWS credentials
+for S3/runtime plus the bearer the executor seam injects (D16 / N13:
+`skill_lab.executors.opencode` is the one place that knows the exec CLI).
 """
 
 from __future__ import annotations
@@ -24,11 +26,13 @@ import yaml
 
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.services import s3_sweep
 from app.services.local_exec import _AWS_CREDENTIAL_ENV, build_spawn_kwargs
 from app.services.workspace import WorkspaceContext
 from app.skill_lab import artifacts
+from app.skill_lab.executors import opencode as executor
 from app.skill_lab.infra import EXEC_JOBS_PREFIX
-from app.skill_lab.worker_build import VENDOR_ROOT, _codex_catalog_bytes
+from app.skill_lab.worker_build import VENDOR_ROOT
 
 EVAL_SCRIPT = VENDOR_ROOT / "scripts" / "evaluate_skill.py"
 TRAIN_SCRIPT = VENDOR_ROOT / "scripts" / "train.py"
@@ -36,12 +40,12 @@ TASKGEN_SCRIPT = VENDOR_ROOT / "scripts" / "generate_tasks.py"
 
 # Studio PARAM_RANGES floor (S§2.1) — refuse impossible jobs before spending money.
 PARAM_BOUNDS = {"workers": (1, 8), "timeout": (60, 3600), "limit": (0, 10000)}
-# Studio's exec-backend pair; both CLIs are baked into the worker image and talk
-# to Bedrock with the execution role (claude via CLAUDE_CODE_USE_BEDROCK, codex
-# via its baked amazon-bedrock-runtime provider config).
-TARGET_BACKENDS = ("claude_code_exec", "codex_exec")
+# The exec backends the API offers — one: OpenCode, baked into the worker image,
+# reaching Global Bedrock's OpenAI-compatible endpoint with the Identity-provided
+# API key (D16; the seam module owns every CLI specific).
+TARGET_BACKENDS = executor.TARGET_BACKENDS
 # Upstream JUDGE_MODES: auto picks per task (chat for text-only, agentic when
-# artifacts need inspection). The agentic judge runs on the HOST — its claude
+# artifacts need inspection). The agentic judge runs on the HOST — its opencode
 # CLI + bwrap-sandboxed artifact parsers; see design.md for why not the worker.
 JUDGE_MODES = ("auto", "chat", "agentic")
 _BASE_ENV_KEYS = ("PATH", "HOME", "TMPDIR", "LANG", "SSL_CERT_FILE", "SSL_CERT_DIR")
@@ -79,18 +83,14 @@ def clamp_params(params: dict[str, Any] | None) -> dict[str, Any]:
         )
     merged = {
         "target_backend": backend,
-        # A blank target model resolves per backend: the CLIs consume different
-        # defaults (claude: a Converse profile id; codex: the inference-profile
-        # id its baked amazon-bedrock-runtime provider invokes). Always explicit — an
-        # empty --model would let train.py substitute upstream's non-Bedrock
-        # per-backend default (gpt-4o for codex_exec).
-        "target_model": (
-            settings.skill_lab_codex_target_model_id
-            if backend == "codex_exec"
-            else settings.skill_lab_target_model_id
-        ),
+        # Always explicit — an empty --model would let train.py substitute the
+        # vendored per-backend default instead of the platform's catalog model.
+        "target_model": settings.skill_lab_target_model_id,
         "judge_model": settings.skill_lab_judge_model_id,
-        "judge_mode": "auto",
+        # N13 v1 (spike §10a): the judge is bedrock_chat (Converse via the bearer);
+        # the agentic judge on OpenCode is a later spike, so chat is the default and
+        # auto/agentic stay selectable for operators who provision the host for it.
+        "judge_mode": "chat",
         "workers": 2,
         "timeout": 600,
         "limit": 0,
@@ -154,6 +154,22 @@ def require_worker(workspace: WorkspaceContext) -> dict[str, str]:
     return needed
 
 
+def require_model_credential(workspace: WorkspaceContext) -> dict[str, str]:
+    """The host-side Global Bedrock env (`executors.opencode.host_env`) a job's CLIs and
+    judge need — probed at SUBMIT, before any row (N13-obs20, E15 NC-13): a hub without
+    `AWS_BEARER_TOKEN_BEDROCK` answers 503 ``skill_lab.model_credential_missing`` to the
+    request instead of a 201 followed by ``failed "failed to start: …"`` from the worker
+    thread. `build_job_env` calls the same probe when the job starts."""
+    try:
+        return executor.host_env(workspace)
+    except RuntimeError as exc:
+        raise AppError(
+            "skill_lab.model_credential_missing",
+            f"the hub cannot reach Global Bedrock: {exc}",
+            status_code=503,
+        ) from exc
+
+
 def materialize_registry_skill(
     workspace: WorkspaceContext,
     record_id: str,
@@ -169,7 +185,7 @@ def materialize_registry_skill(
     from app.deployer.zip_runtime import bundle_skill_paths_into
     from app.services import registry_console
 
-    record = registry_console.console_get(workspace, record_id)
+    record = registry_console.console_get(workspace, record_id)  # the local Registry (N4)
     try:
         definition = json.loads(
             record["descriptors"]["agentSkills"]["skillDefinition"]["inlineContent"]
@@ -247,51 +263,25 @@ def materialize_staged_skill(
     return skill_dir, {"kind": "upload", "name": name, "version": bundle.version}
 
 
-# Converse cross-region inference-profile prefixes. The chat judge needs the
-# profile id as-is; codex resolves the bare catalog slug through ~/.codex.
-_PROFILE_PREFIX = re.compile(r"^(us|eu|apac|global)\.")
-
-
-def judge_exec_route(judge_model: str) -> tuple[str, str]:
-    """(exec backend, exec model) the agentic judge runs with for `judge_model`.
-
-    One judge model still drives both judge modes, but the judge *agent* is a
-    host CLI and only claude can run anthropic models: an openai-family judge
-    (e.g. us.openai.gpt-6-sol) routes to the host codex CLI. The id is passed
-    unchanged: codex's amazon-bedrock-runtime provider invokes inference-profile
-    ids (a bare `openai.*` id is rejected for on-demand throughput) and looks
-    their metadata up in the ~/.codex model catalog, the same coupling the
-    worker image build relies on. Anything non-openai keeps the claude CLI."""
-    if _PROFILE_PREFIX.sub("", judge_model).startswith("openai."):
-        return "codex_exec", judge_model
-    return "claude_code_exec", judge_model
-
-
-# The host binary each judge exec backend shells out to. Kept beside
-# judge_exec_route because it is the same routing knowledge: readiness has to
-# probe the CLI a run would actually use, not a fixed one.
-JUDGE_CLI_BINARY = {"claude_code_exec": "claude", "codex_exec": "codex"}
-
-
-def judge_cli_binary(judge_model: str) -> str:
-    """Host binary the agentic judge needs for `judge_model`'s route."""
-    backend, _ = judge_exec_route(judge_model)
-    return JUDGE_CLI_BINARY[backend]
+# Judge routing is the executor seam's call: one CLI serves every model family,
+# so the route is a pass-through and readiness probes the same binary.
+judge_exec_route = executor.judge_exec_route
+JUDGE_CLI_BINARY = executor.JUDGE_CLI_BINARY
+judge_cli_binary = executor.judge_cli_binary
 
 
 def _judge_exec_flags(params: dict[str, Any]) -> list[str]:
     """Agentic-judge CLI flags (eval path). `judge_model` feeds
-    --optimizer_model (chat verdicts, Bedrock Converse via the instance role)
-    AND — routed by family — the host-side judge agent's exec CLI.
+    --optimizer_model (chat verdicts, Bedrock Converse with the hub's API key)
+    AND the host-side judge agent's exec CLI (the seam's route).
 
     Passed for EVERY mode, `chat` included. Whether the agentic judge runs is
     decided by `--judge_mode` alone (vendored `evaluator.should_use_agentic`
     keys on the config's mode, never on flag presence), but a task can still
     escalate under a chat run — an explicit per-task `judge_mode` outranks the
     run-level one. Omitting the flags there left that escalation on the vendored
-    default backend (`claude_code_exec`) regardless of the judge model's family,
-    which is how an openai-family judge reached the claude CLI on the prod host
-    and died with FileNotFoundError."""
+    default backend regardless of what the platform configured — so the route is
+    always stated."""
     backend, model = judge_exec_route(str(params["judge_model"]))
     return [
         "--judge_exec_backend", backend,
@@ -301,49 +291,10 @@ def _judge_exec_flags(params: dict[str, Any]) -> list[str]:
     ]
 
 
-# Provider config the codex judge client starts from. The vendored judge runs
-# codex with an isolated, initially-empty CODEX_HOME (fail-closed: no user
-# config, rules or sessions leak in), which would pin it to codex's default
-# `openai` provider — this seed keeps the isolation but swaps the provider to
-# Bedrock runtime (inference-profile ids such as global.openai.gpt-6-sol; needs
-# codex >= 0.155 — 0.147 only accepts aws auth on the Mantle `amazon-bedrock`
-# provider). Region pinned to us-east-1 like the worker image's baked config.
-_JUDGE_CODEX_CONFIG = """\
-model_provider = "amazon-bedrock-runtime"
-web_search = "disabled"
-model_catalog_json = "{catalog}"
-
-[model_providers.amazon-bedrock-runtime.aws]
-region = "us-east-1"
-
-[features.multi_agent_v2]
-enabled = false
-"""
-
-
-def ensure_judge_codex_home() -> Path:
-    """Materialize the judge codex-home seed (config + bedrock model catalog).
-
-    Rewritten on every job submit — cheap, and it tracks host-catalog updates
-    the same way a worker image rebuild would. The catalog falls back to `{}`
-    when the host has none (mirrors worker_build._codex_catalog_bytes; that
-    file embeds proprietary model instructions and is never committed).
-    """
-    seed = artifacts.JOBS_DIR.parent / "codex-judge-home"
-    seed.mkdir(parents=True, exist_ok=True)
-    catalog = seed / "bedrock-models.json"
-    catalog.write_bytes(_codex_catalog_bytes())
-    (seed / "config.toml").write_text(
-        _JUDGE_CODEX_CONFIG.format(catalog=catalog), encoding="utf-8"
-    )
-    return seed
-
-
 def _train_judge_env(params: dict[str, Any]) -> dict[str, str]:
     """Train-config counterpart of `_judge_exec_flags` (adapter kwarg names).
 
-    Same reasoning: emitted for every mode so an escalation cannot land on a CLI
-    that does not match the judge model's family."""
+    Same reasoning: emitted for every mode so an escalation always has its route."""
     backend, model = judge_exec_route(str(params["judge_model"]))
     return {
         "judge_backend": backend,
@@ -415,11 +366,7 @@ def clamp_taskgen_params(params: dict[str, Any] | None) -> dict[str, Any]:
         )
     merged = {
         "target_backend": backend,
-        "model": (
-            settings.skill_lab_codex_target_model_id
-            if backend == "codex_exec"
-            else settings.skill_lab_target_model_id
-        ),
+        "model": settings.skill_lab_target_model_id,
         "count": 5,
         "guidance": "",
         "timeout": 900,
@@ -538,29 +485,6 @@ def build_job_env(workspace: WorkspaceContext) -> dict[str, str]:
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
             "SKILLOPT_EXEC_RUNNER": "agentcore",
-            # The exec-job payload carries the CLIENT process's codex config into
-            # the worker (agentcore_worker._apply_exec_config overrides the image
-            # env with cfg.get("full_auto")/cfg.get("sandbox")), so these must be
-            # set HERE, not in the Dockerfile. Live-verified 2026-08-18:
-            # - codex >= 0.147 dropped `exec --full-auto`; false makes the
-            #   harness pass `--sandbox <CODEX_EXEC_SANDBOX>` instead.
-            # - codex's linux sandbox is bubblewrap, and the worker microVM's
-            #   kernel can't run it (every command/file-read fails). The microVM
-            #   IS the sandbox — one task per Firecracker VM, destroyed after —
-            #   so OS-level sandboxing is disabled, the exact posture the
-            #   claude_code_exec path has always run with (allow_file_edits +
-            #   Bash, no OS sandbox).
-            "CODEX_EXEC_FULL_AUTO": "false",
-            "CODEX_EXEC_SANDBOX": "danger-full-access",
-            # The agentic judge's claude CLI runs on THIS host (never the
-            # worker) and must take the Bedrock path with the instance role.
-            # Rollout claude runs in the worker with the image's own env, so
-            # this key only affects the judge.
-            "CLAUDE_CODE_USE_BEDROCK": "1",
-            # Same for a codex judge (openai-family judge model): the vendored
-            # harness isolates CODEX_HOME per call, and this seed swaps its
-            # provider from codex's default `openai` to Bedrock Mantle.
-            "SKILLOPT_JUDGE_CODEX_HOME": str(ensure_judge_codex_home()),
             "SKILLOPT_AGENTCORE_RUNTIME_ARN": str(
                 workspace.resources.get("skill_lab_worker_runtime_arn") or ""
             ),
@@ -572,6 +496,13 @@ def build_job_env(workspace: WorkspaceContext) -> dict[str, str]:
             "AWS_REGION": workspace.region,
         }
     )
+    # The executor seam: the OpenAI-compatible root the host-side judge CLI uses,
+    # the Global Bedrock bearer for it and for the bedrock_chat judge/optimizer
+    # (model-credential.md), and the Converse region. The submit paths probe the
+    # same seam first (`require_model_credential`), so a hub without the key is
+    # refused at the request; a key that vanished between submit and start still
+    # fails the job here with the same reason.
+    env.update(require_model_credential(workspace))
     return env
 
 
@@ -605,11 +536,13 @@ def sweep_exec_jobs_prefix(workspace: WorkspaceContext, log: Callable[[str], Non
                 for obj in page.get("Contents", [])
                 if obj.get("LastModified") and obj["LastModified"] < cutoff
             )
-        for start in range(0, len(stale), 1000):
-            s3.delete_objects(
-                Bucket=bucket, Delete={"Objects": stale[start : start + 1000], "Quiet": True}
-            )
-        if stale:
+        # N17-obs190: through the shared reporting deleter — a key S3 refuses inside a 200
+        # `DeleteObjects` answer is counted as refused, not as removed
+        result = s3_sweep.delete_keys(s3, bucket, [obj["Key"] for obj in stale])
+        if result.failed:
+            log(f"exec-jobs janitor: removed {len(result.deleted)} stale object(s), "
+                f"{result.summary()}")
+        elif stale:
             log(f"exec-jobs janitor: removed {len(stale)} stale object(s)")
     except Exception as exc:  # noqa: BLE001 — hygiene must never fail a job
         log(f"exec-jobs janitor skipped: {exc}")

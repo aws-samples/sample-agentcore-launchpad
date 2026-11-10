@@ -67,12 +67,15 @@ Notes:
   A failed target prints a warning and the loop continues.
 - The CDK stack deletion runs `cdk destroy --force`; the S3 artifacts bucket
   auto-empties and the ECR repo force-deletes as part of the stack.
-- Teardown targets are discovered by exact name or name prefix — gateways
+- Teardown targets are discovered by exact name or exact name shape — gateways
   `launchpad-gw` / `launchpad-kb-gw` (by gateway **name**, never by the ids in
   `config/launchpad.yaml`, which may be stale), credential providers
   `launchpad-office-facts-key` / `launchpad-gw-m2m`, `launchpad_memory-*`,
-  `launchpad-registry`, the Skill Lab worker, stack `launchpad-base` —
-  resources outside those names are never touched.
+  `launchpad-registry`, the Skill Lab worker, stack `launchpad-base`, and the
+  evaluation worker Runtime by the exact shape `<base>_<6 hex>` of its
+  env-suffixed name (a bare prefix would also match a suffixed environment's
+  worker from the default environment — N12-bug12) — resources outside those
+  names are never touched.
 - Per-agent IAM roles are swept only when **both** hold: the name starts with
   `launchpad-agent-` **and** the role carries the `launchpad:agent-id` tag. The
   shared `launchpad-agent-execution-role` belongs to the CDK stack and is never

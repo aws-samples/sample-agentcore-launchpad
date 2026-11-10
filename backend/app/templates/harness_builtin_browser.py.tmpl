@@ -1,0 +1,217 @@
+"""launchpad_browser_tool.py — the AgentCore Browser builtin for the self-built Harness (方式B).
+
+Rendered only when the spec selects builtin tool ``browser`` (N15-obs16). One Strands tool,
+``browser(url)``: starts a session on the managed AgentCore Browser (``aws.browser.v1``) in
+the runtime's own region with its execution role (agent_iam Sid AgentCoreBrowser), drives
+it over the Chrome DevTools Protocol on the session's automation stream (plain websocket —
+no Playwright in the bundle), navigates once, returns the page title, final URL and visible
+text (bounded), and ALWAYS stops the session. Nothing is written to disk; the model never
+sees a traceback — every failure is one ``browser error: …`` line.
+
+Partition note (SDK 1.17.0): ``BrowserClient.generate_ws_headers()`` builds the stream host
+from a Global-only suffix, so this module signs the stream URL itself from the boto3
+data-plane endpoint the client already resolved for its region (aws-cn included).
+"""
+
+import datetime
+import ipaddress
+import json
+import os
+import time
+from urllib.parse import urlparse
+
+from strands import tool
+
+BROWSER_REGION = os.environ.get("AWS_REGION", "cn-northwest-1")
+BROWSER_IDENTIFIER = "aws.browser.v1"
+BROWSER_SESSION_SECONDS = 300  # sessionTimeoutSeconds: the service reaps a leaked session
+BROWSER_CONNECT_SECONDS = 20
+BROWSER_NAVIGATE_SECONDS = 30
+BROWSER_MAX_CHARS = 20_000
+BROWSER_TITLE_CHARS = 300
+BROWSER_URL_CHARS = 2048
+_ERROR_CHARS = 300
+# every field is bounded in the page AND again in Python (a hostile page controls all three)
+_PAGE_READ_JS = (
+    "(() => ({title: (document.title || '').slice(0, %d), "
+    "url: String(location.href).slice(0, %d), "
+    "text: ((document.body && document.body.innerText) || '').slice(0, %d)}))()"
+    % (BROWSER_TITLE_CHARS, BROWSER_URL_CHARS, BROWSER_MAX_CHARS)
+)
+_BLOCKED_HOST_SUFFIXES = (".localhost", ".internal", ".local")
+
+
+def _host_allowed(hostname):
+    """Defence in depth: no literal IP (loopback, link-local incl. the instance metadata
+    address, RFC1918 / unique-local, or any other), no local-only name. The sandbox browser
+    is not in our VPC, but the tool still never points it at an address class like that."""
+    host = (hostname or "").lower().rstrip(".")
+    if not host or host == "localhost" or host.endswith(_BLOCKED_HOST_SUFFIXES):
+        return False
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return True  # a DNS name
+    return False
+
+
+def _stream_endpoint(client):
+    """``(wss URL, SigV4 headers)`` for the session's CDP automation stream.
+
+    Mirrors the SDK's ``generate_ws_headers`` but takes the host from the client's boto3
+    data-plane endpoint (partition-aware) and leaves the websocket handshake headers to
+    the websocket library.
+    """
+    import boto3
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
+
+    host = urlparse(client.data_plane_client.meta.endpoint_url).netloc
+    path = f"/browser-streams/{client.identifier}/sessions/{client.session_id}/automation"
+    credentials = boto3.Session().get_credentials()
+    if credentials is None:
+        raise RuntimeError("no AWS credentials in the runtime")
+    frozen = credentials.get_frozen_credentials()
+    request = AWSRequest(
+        method="GET",
+        url=f"https://{host}{path}",
+        headers={
+            "host": host,
+            "x-amz-date": datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ"),
+        },
+    )
+    SigV4Auth(frozen, "bedrock-agentcore", client.region).add_auth(request)
+    headers = {
+        "X-Amz-Date": request.headers["x-amz-date"],
+        "Authorization": request.headers["Authorization"],
+    }
+    if frozen.token:
+        headers["X-Amz-Security-Token"] = frozen.token
+    return f"wss://{host}{path}", headers
+
+
+class _Cdp:
+    """Minimal synchronous CDP client over one websocket (flattened target sessions)."""
+
+    def __init__(self, ws):
+        self._ws = ws
+        self._next_id = 0
+        self._events: list[dict] = []
+
+    def call(self, method, params=None, session_id=None, timeout=BROWSER_CONNECT_SECONDS):
+        self._next_id += 1
+        message = {"id": self._next_id, "method": method, "params": params or {}}
+        if session_id:
+            message["sessionId"] = session_id
+        self._ws.send(json.dumps(message))
+        deadline = time.monotonic() + timeout
+        while True:
+            frame = self._recv(deadline, f"{method} timed out after {timeout}s")
+            if frame.get("id") == self._next_id:
+                if "error" in frame:
+                    raise RuntimeError(f"{method}: {frame['error'].get('message', 'CDP error')}")
+                return frame.get("result") or {}
+            if "method" in frame:
+                self._events.append(frame)
+
+    def wait_event(self, method, session_id, timeout):
+        """True once ``method`` fired for ``session_id``; False after ``timeout`` seconds."""
+        for i, frame in enumerate(self._events):
+            if frame.get("method") == method and frame.get("sessionId") == session_id:
+                del self._events[i]
+                return True
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                frame = self._recv(deadline, "")
+            except TimeoutError:
+                return False
+            if frame.get("method") == method and frame.get("sessionId") == session_id:
+                return True
+        return False
+
+    def _recv(self, deadline, message):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(message)
+        try:
+            raw = self._ws.recv(timeout=remaining)
+        except TimeoutError as exc:
+            raise TimeoutError(message) from exc
+        return json.loads(raw)
+
+
+def _read_page(cdp, url):
+    """Open ``url`` in a fresh target, return ``(title, final_url, text)``, close the target."""
+    target_id = cdp.call("Target.createTarget", {"url": "about:blank"})["targetId"]
+    try:
+        session_id = cdp.call(
+            "Target.attachToTarget", {"targetId": target_id, "flatten": True}
+        )["sessionId"]
+        cdp.call("Page.enable", session_id=session_id)
+        navigation = cdp.call(
+            "Page.navigate", {"url": url}, session_id=session_id,
+            timeout=BROWSER_NAVIGATE_SECONDS,
+        )
+        if navigation.get("errorText"):
+            raise RuntimeError(f"navigation failed: {navigation['errorText']}")
+        # best effort: a page that never fires load still gets read after the budget
+        cdp.wait_event("Page.loadEventFired", session_id, BROWSER_NAVIGATE_SECONDS)
+        result = cdp.call(
+            "Runtime.evaluate", {"expression": _PAGE_READ_JS, "returnByValue": True},
+            session_id=session_id,
+        )
+        value = (result.get("result") or {}).get("value") or {}
+        return (
+            str(value.get("title") or "")[:BROWSER_TITLE_CHARS],
+            str(value.get("url") or url)[:BROWSER_URL_CHARS],
+            str(value.get("text") or ""),
+        )
+    finally:
+        try:
+            cdp.call("Target.closeTarget", {"targetId": target_id}, timeout=5)
+        except Exception:  # noqa: BLE001 — the session stop below reaps it anyway
+            pass
+
+
+@tool
+def browser(url: str) -> str:
+    """Open a public web page in the managed AgentCore Browser and return its title, final
+    URL and visible text (at most 20,000 characters). One http(s) URL per call; the page is
+    read once — no clicks, no form input, no screenshots.
+
+    Args:
+        url: The http or https URL to open.
+    """
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return "browser error: url must be an absolute http(s) URL"
+    if not _host_allowed(parsed.hostname):
+        return "browser error: host not allowed"
+    from bedrock_agentcore.tools.browser_client import BrowserClient
+
+    client = BrowserClient(region=BROWSER_REGION)
+    try:
+        client.start(
+            identifier=BROWSER_IDENTIFIER, session_timeout_seconds=BROWSER_SESSION_SECONDS
+        )
+        ws_url, headers = _stream_endpoint(client)
+        from websockets.sync.client import connect
+
+        with connect(
+            ws_url, additional_headers=headers, max_size=None,
+            open_timeout=BROWSER_CONNECT_SECONDS, close_timeout=5,
+        ) as ws:
+            title, final_url, text = _read_page(_Cdp(ws), parsed.geturl())
+    except Exception as exc:  # noqa: BLE001 — the model gets one line, never a traceback
+        detail = f"{type(exc).__name__}: {exc}".strip()[:_ERROR_CHARS]
+        return f"browser error: {detail}"
+    finally:
+        try:
+            client.stop()
+        except Exception:  # noqa: BLE001 — the service's sessionTimeoutSeconds reaps it
+            pass
+    truncated = len(text) > BROWSER_MAX_CHARS
+    text = text[:BROWSER_MAX_CHARS]
+    note = f"\n\n[truncated to {BROWSER_MAX_CHARS} characters]" if truncated else ""
+    return f"title: {title}\nurl: {final_url}\n\n{text}{note}"

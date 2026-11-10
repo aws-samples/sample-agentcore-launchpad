@@ -1,6 +1,7 @@
 """SSRF guard of the user-supplied OIDC discovery fetch (`services.public_fetch`):
 https only, every resolved address public, pinned connect, no redirects, and a
-generic 422 by category from both callers (inbound JWT probe, OBO Connection)."""
+generic 422 by category from its caller (the OBO Connection check) and from
+`services.inbound_auth.fetch_discovery_document` directly."""
 
 import json
 import socket
@@ -160,7 +161,7 @@ def test_transport_errors_read_as_unreachable():
 def test_the_default_probe_uses_the_guard():
     # an http URL never leaves the process, and the 422 carries only the category
     with pytest.raises(AppError) as err:
-        svc.probe_discovery("http://10.0.0.5/.well-known/openid-configuration")
+        svc.fetch_discovery_document("http://10.0.0.5/.well-known/openid-configuration")
     assert err.value.code == "identity.discovery_unreachable"
     assert err.value.message.endswith("(not https)")
     assert err.value.detail == {"reason": "not_https"}

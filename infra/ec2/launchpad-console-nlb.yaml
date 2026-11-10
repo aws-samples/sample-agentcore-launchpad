@@ -1,0 +1,414 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  AgentCore Launchpad CN console NLB (optional, N12-obs52): a Network Load
+  Balancer with a STATIC Elastic IP in front of ONE console host created by
+  launchpad-cn-ec2.yaml, so the console has a fixed public address that
+  survives instance replacement. TCP passthrough on ListenerPort (8443) only -
+  the host's own self-signed TLS stays, no certificate is imported. User
+  decision 2026-10-16: AccessMode=OpenToInternet (any source IP, this one port)
+  is the default; AllowedCidrs keeps a CIDR allowlist available. The stack owns
+  the EIP, the NLB, its security group and the one instance-SG rule that admits
+  the NLB, and is deletable without touching the host (the EIP is retained - the
+  user advertises it). One stack per VPC/host:
+  every launchpad-cn-ec2 stack has its own 10.44.0.0/16 VPC and a load balancer
+  cannot target an instance in another VPC.
+
+Parameters:
+  ConsoleHttpLab:
+    Type: String
+    Default: "false"
+    AllowedValues: ["false", "true"]
+    Description: Explicit isolated-demo opt-in. Add a plaintext primary console entry; retain TLS for operations.
+  HttpPort:
+    Type: Number
+    Default: 8088
+    MinValue: 1024
+    MaxValue: 65535
+    Description: Plaintext demo console port. Used only when ConsoleHttpLab=true.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: The console host's VPC (the `Vpc` resource of its launchpad-cn-ec2 stack).
+  PublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: >
+      The host's public subnet (`PublicSubnet` of its stack). An NLB needs one
+      subnet only; the EIP is mapped onto it.
+  InstanceId:
+    Type: AWS::EC2::Instance::Id
+    Description: The console host (`InstanceId` output of its stack); must be in VpcId.
+  InstanceSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: >
+      The host's security group (`ConsoleSecurityGroup` of its stack). This stack
+      ADDS one ingress rule to it (InstancePort from the NLB) and never touches
+      its existing AllowedCidr rule, so the direct Elastic-IP path keeps working.
+  InstancePort:
+    Type: Number
+    Default: 8443
+    MinValue: 1024
+    MaxValue: 65535
+    Description: The port nginx serves the console on (the host stack's ConsolePort).
+  ListenerPort:
+    Type: Number
+    Default: 8443
+    MinValue: 1024
+    MaxValue: 65535
+    Description: >
+      The ONLY port the NLB listens on. N11-bug12: in the China partition
+      inbound 80/443 (and 8080) to a public endpoint is blocked unless the site
+      has an ICP filing; 8443 is known to work, so 80/443/8080 are refused by
+      the Rules block.
+  AccessMode:
+    Type: String
+    Default: OpenToInternet
+    AllowedValues:
+      - OpenToInternet
+      - AllowedCidrs
+    Description: >
+      OpenToInternet (user decision 2026-10-16): the listener port is reachable
+      from any source IP - the console sign-in is the only gate, and the
+      account's security monitoring may flag the open port. AllowedCidrs: only
+      the AllowedCidrs blocks may connect.
+  AllowedCidrs:
+    Type: String
+    Default: 198.51.100.10/32
+    Description: >
+      One to four comma-separated CIDR blocks allowed on ListenerPort when
+      AccessMode=AllowedCidrs (ignored otherwise), e.g. "1.2.3.4/32,10.0.0.0/8".
+      A String (not a CommaDelimitedList) so AllowedPattern can refuse a fifth
+      entry - CloudFormation Rules cannot count list members - and any /0: use
+      AccessMode=OpenToInternet to open the port deliberately.
+    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([1-9]|[12][0-9]|3[0-2])(,([0-9]{1,3}\\.){3}[0-9]{1,3}/([1-9]|[12][0-9]|3[0-2])){0,3}$"
+    ConstraintDescription: one to four comma-separated CIDR blocks, each with a /1-/32 prefix (no /0)
+  NlbSecurityGroupMode:
+    Type: String
+    Default: enabled
+    AllowedValues:
+      - enabled
+      - disabled
+    Description: >
+      enabled: the NLB carries its own security group (ingress per AccessMode,
+      egress to the instance security group only) and the host admits the NLB
+      security group. disabled (escape hatch, only if the region rejects
+      security groups on a Network Load Balancer): no security group on the NLB,
+      the host admits PublicSubnetCidr instead (the NLB's private addresses) -
+      AccessMode must then be OpenToInternet, since nothing could enforce a list.
+  PublicSubnetCidr:
+    Type: String
+    Default: 10.44.0.0/24
+    Description: >
+      PublicSubnetId's CIDR - used only with NlbSecurityGroupMode=disabled as the
+      source the host admits.
+    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([1-9]|[12][0-9]|3[0-2])$"
+    ConstraintDescription: a specific CIDR block with a /1-/32 prefix, not a /0
+
+Rules:
+  HttpLabRequiresProtectedHostIngress:
+    RuleCondition: !Equals [!Ref ConsoleHttpLab, "true"]
+    Assertions:
+      - Assert: !Equals [!Ref NlbSecurityGroupMode, "enabled"]
+        AssertDescription: HTTP lab requires the NLB security group; the EC2 port accepts only that group.
+      - Assert: !Equals [!Ref AccessMode, "OpenToInternet"]
+        AssertDescription: HTTP lab is an explicit public demo entry.
+      - Assert: !Not [!Equals [!Ref HttpPort, !Ref ListenerPort]]
+        AssertDescription: HTTP and compatibility HTTPS need distinct ports.
+      - Assert: !Not [!Equals [!Ref HttpPort, !Ref InstancePort]]
+        AssertDescription: HTTP and host HTTPS need distinct ports.
+      - Assert: !Not [!Equals [!Ref HttpPort, "8080"]]
+        AssertDescription: HTTP lab does not use ICP-gated port 8080.
+  ListenerPortIsNotIcpGated:
+    Assertions:
+      - Assert: !Not
+          - !Or
+            - !Equals [!Ref ListenerPort, "80"]
+            - !Equals [!Ref ListenerPort, "443"]
+            - !Equals [!Ref ListenerPort, "8080"]
+        AssertDescription: >
+          80, 443 and 8080 are not used (ICP recordal, N11-bug12); the console
+          entry is 8443.
+  AllowlistNeedsTheSecurityGroup:
+    RuleCondition: !Equals [!Ref NlbSecurityGroupMode, "disabled"]
+    Assertions:
+      - Assert: !Equals [!Ref AccessMode, "OpenToInternet"]
+        AssertDescription: >
+          Without a security group on the NLB nothing can enforce AllowedCidrs;
+          use NlbSecurityGroupMode=enabled for an allowlist.
+
+Conditions:
+  HttpLab: !Equals [!Ref ConsoleHttpLab, "true"]
+  Open: !Equals [!Ref AccessMode, "OpenToInternet"]
+  UseSg: !Equals [!Ref NlbSecurityGroupMode, "enabled"]
+  OpenIngress: !And [!Condition Open, !Condition UseSg]
+  Allowlist: !And [!Not [!Condition Open], !Condition UseSg]
+  # AllowedCidrs padded with three empties so !Select never runs off the end of a short list
+  # (AllowedPattern already caps it at four entries)
+  HasCidr2: !And
+    - !Condition Allowlist
+    - !Not [!Equals [!Select [1, !Split [",", !Join ["", [!Ref AllowedCidrs, ",,,"]]]], ""]]
+  HasCidr3: !And
+    - !Condition Allowlist
+    - !Not [!Equals [!Select [2, !Split [",", !Join ["", [!Ref AllowedCidrs, ",,,"]]]], ""]]
+  HasCidr4: !And
+    - !Condition Allowlist
+    - !Not [!Equals [!Select [3, !Split [",", !Join ["", [!Ref AllowedCidrs, ",,,"]]]], ""]]
+  NoSg: !Not [!Condition UseSg]
+
+Resources:
+  HttpIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HttpLab
+    Properties:
+      GroupId: !Ref NlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref HttpPort
+      ToPort: !Ref HttpPort
+      CidrIp: 0.0.0.0/0
+      Description: Explicit HTTP demo console entry
+  HttpEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Condition: HttpLab
+    Properties:
+      GroupId: !Ref NlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref HttpPort
+      ToPort: !Ref HttpPort
+      DestinationSecurityGroupId: !Ref InstanceSecurityGroupId
+  HttpInstanceIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HttpLab
+    Properties:
+      GroupId: !Ref InstanceSecurityGroupId
+      IpProtocol: tcp
+      FromPort: !Ref HttpPort
+      ToPort: !Ref HttpPort
+      SourceSecurityGroupId: !Ref NlbSecurityGroup
+  HttpTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: HttpLab
+    Properties:
+      TargetType: instance
+      Protocol: TCP
+      Port: !Ref HttpPort
+      VpcId: !Ref VpcId
+      Targets:
+        - Id: !Ref InstanceId
+          Port: !Ref HttpPort
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: traffic-port
+      HealthCheckPath: /api/health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        - Key: preserve_client_ip.enabled
+          Value: "false"
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HttpLab
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: TCP
+      Port: !Ref HttpPort
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref HttpTargetGroup
+  # ---- the fixed public address ----
+  StaticIp:
+    Type: AWS::EC2::EIP
+    # the user advertises this address: it survives stack deletion / replacement and is
+    # released by hand (aws ec2 release-address --allocation-id <EipAllocationId>)
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-console"
+
+  # ---- NLB security group: ListenerPort per AccessMode, egress to the host only ----
+  NlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: UseSg
+    Properties:
+      GroupDescription: !Sub "${AWS::StackName} - console NLB: ListenerPort per AccessMode, egress to the console host only."
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: !Ref InstancePort
+          ToPort: !Ref InstancePort
+          DestinationSecurityGroupId: !Ref InstanceSecurityGroupId
+          Description: console host on its console port (traffic + health checks)
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nlb"
+
+  NlbIngressOpen:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: OpenIngress
+    Properties:
+      GroupId: !Ref NlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref ListenerPort
+      ToPort: !Ref ListenerPort
+      CidrIp: 0.0.0.0/0
+      Description: console listener - open to any source (AccessMode=OpenToInternet, user decision 2026-10-16)
+
+  NlbIngressCidr1:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: Allowlist
+    Properties:
+      GroupId: !Ref NlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref ListenerPort
+      ToPort: !Ref ListenerPort
+      CidrIp: !Select [0, !Split [",", !Ref AllowedCidrs]]
+      Description: console listener (AllowedCidrs 1)
+  NlbIngressCidr2:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr2
+    Properties:
+      GroupId: !Ref NlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref ListenerPort
+      ToPort: !Ref ListenerPort
+      CidrIp: !Select [1, !Split [",", !Ref AllowedCidrs]]
+      Description: console listener (AllowedCidrs 2)
+  NlbIngressCidr3:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr3
+    Properties:
+      GroupId: !Ref NlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref ListenerPort
+      ToPort: !Ref ListenerPort
+      CidrIp: !Select [2, !Split [",", !Ref AllowedCidrs]]
+      Description: console listener (AllowedCidrs 3)
+  NlbIngressCidr4:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasCidr4
+    Properties:
+      GroupId: !Ref NlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref ListenerPort
+      ToPort: !Ref ListenerPort
+      CidrIp: !Select [3, !Split [",", !Ref AllowedCidrs]]
+      Description: console listener (AllowedCidrs 4)
+
+  # ---- admit the NLB on the host's security group; the host's own AllowedCidr rule stays ----
+  InstanceIngressFromNlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: UseSg
+    Properties:
+      GroupId: !Ref InstanceSecurityGroupId
+      IpProtocol: tcp
+      FromPort: !Ref InstancePort
+      ToPort: !Ref InstancePort
+      SourceSecurityGroupId: !Ref NlbSecurityGroup
+      Description: !Sub "console NLB (${AWS::StackName})"
+
+  InstanceIngressFromSubnet:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: NoSg
+    Properties:
+      GroupId: !Ref InstanceSecurityGroupId
+      IpProtocol: tcp
+      FromPort: !Ref InstancePort
+      ToPort: !Ref InstancePort
+      CidrIp: !Ref PublicSubnetCidr
+      Description: !Sub "console NLB (${AWS::StackName}) - NLB private addresses (no NLB security group)"
+
+  # ---- the load balancer ----
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: network
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      SecurityGroups: !If [UseSg, [!Ref NlbSecurityGroup], !Ref AWS::NoValue]
+      SubnetMappings:
+        - SubnetId: !Ref PublicSubnetId
+          AllocationId: !GetAtt StaticIp.AllocationId
+      LoadBalancerAttributes:
+        - Key: deletion_protection.enabled
+          Value: "false"
+        - Key: load_balancing.cross_zone.enabled
+          Value: "false"
+        - Key: access_logs.s3.enabled
+          Value: "false"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}"
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      TargetType: instance
+      Protocol: TCP
+      Port: !Ref InstancePort
+      VpcId: !Ref VpcId
+      Targets:
+        - Id: !Ref InstanceId
+          Port: !Ref InstancePort
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTPS
+      HealthCheckPort: traffic-port
+      HealthCheckPath: /api/health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        # the host then sees the NLB's private address, not the client's, so its security
+        # group can trust the NLB alone (backend logs lose the client IP; the console
+        # records usernames)
+        - Key: preserve_client_ip.enabled
+          Value: "false"
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-console"
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: TCP
+      Port: !Ref ListenerPort
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  StaticIp:
+    Description: >
+      The fixed public IPv4 of the console. RETAINED when the stack is deleted
+      (DeletionPolicy Retain) - release it by hand when truly done.
+    Value: !Ref StaticIp
+  EipAllocationId:
+    Value: !GetAtt StaticIp.AllocationId
+  NlbDnsName:
+    Description: DNS name of the NLB (resolves to StaticIp).
+    Value: !GetAtt LoadBalancer.DNSName
+  ConsoleUrl:
+    Description: Primary console URL through the NLB.
+    Value: !If [HttpLab, !Sub "http://${StaticIp}:${HttpPort}", !Sub "https://${StaticIp}:${ListenerPort}"]
+  CompatibilityHttpsUrl:
+    Condition: HttpLab
+    Description: Operations-only compatibility endpoint; not the demo entry.
+    Value: !Sub "https://${StaticIp}:${ListenerPort}"
+  AccessMode:
+    Value: !Ref AccessMode
+  SecurityGroupId:
+    Condition: UseSg
+    Description: The NLB's security group (the only source the host admits besides its own AllowedCidr).
+    Value: !Ref NlbSecurityGroup
+  TargetGroupArn:
+    Value: !If [HttpLab, !Ref HttpTargetGroup, !Ref TargetGroup]

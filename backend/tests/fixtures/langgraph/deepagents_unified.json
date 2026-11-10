@@ -1,0 +1,1996 @@
+{
+ "session_id": "r17bf7-deepagents-session-0001",
+ "records": [
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "a83984652f232b7c",
+   "name": "execute_task SkillsMiddleware.before_agent",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428851191925,
+   "endTimeUnixNano": 1792821428852181232,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 6,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.before_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.before_agent"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.before_agent"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.before_agent:f205b284-0e8f-0470-bdf3-619fe9f27879",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.before_agent",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.before_agent",
+    "gen_ai.task.id": "01a16c7c-0273-731a-80cc-0da4161738a4",
+    "gen_ai.task.parent.id": "01a16c7c-026e-7081-851d-0c8a41f3b28b",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:6\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 6, \"langgraph_node\": \"SkillsMiddleware.before_agent\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_agent\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_agent\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_agent:f205b284-0e8f-0470-bdf3-619fe9f27879\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_agent\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:6\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 6, \"langgraph_node\": \"SkillsMiddleware.before_agent\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_agent\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_agent\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_agent:f205b284-0e8f-0470-bdf3-619fe9f27879\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_agent\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": {\"skills_metadata\": [{\"name\": \"haiku-writer\", \"description\": \"Write a haiku (5-7-5 syllables) on a topic the user names.\", \"path\": \"/skills/haiku-writer/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}, {\"name\": \"trip-plan\", \"description\": \"Plan a short business trip itinerary.\", \"path\": \"/skills/trip-plan/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}], \"skills_load_errors\": []}, \"kwargs\": {\"tags\": [\"graph:step:6\"]}}",
+    "gen_ai.task.output": "{\"outputs\": {\"skills_metadata\": [{\"name\": \"haiku-writer\", \"description\": \"Write a haiku (5-7-5 syllables) on a topic the user names.\", \"path\": \"/skills/haiku-writer/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}, {\"name\": \"trip-plan\", \"description\": \"Plan a short business trip itinerary.\", \"path\": \"/skills/trip-plan/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}], \"skills_load_errors\": []}, \"kwargs\": {\"tags\": [\"graph:step:6\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "c9eab62757d70374"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "432e27dbd706ea56",
+   "name": "execute_task SkillsMiddleware.before_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428855769905,
+   "endTimeUnixNano": 1792821428855853078,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 14,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.before_model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.before_model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.before_model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.before_model:02698448-3e0b-0862-3f7c-0c4ea6b43fb5",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.before_model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.before_model",
+    "gen_ai.task.id": "01a16c7c-0277-7431-81a0-459d9d0132f0",
+    "gen_ai.task.parent.id": "01a16c7c-026e-7081-851d-0c8a41f3b28b",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:14\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 14, \"langgraph_node\": \"SkillsMiddleware.before_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_model:02698448-3e0b-0862-3f7c-0c4ea6b43fb5\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:14\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 14, \"langgraph_node\": \"SkillsMiddleware.before_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_model:02698448-3e0b-0862-3f7c-0c4ea6b43fb5\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:14\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:14\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "c9eab62757d70374"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "737552121a084dbb",
+   "name": "ScriptedModel.chat",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428863128882,
+   "endTimeUnixNano": 1792821428863433432,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "model",
+    "traceloop.association.properties.ls_integration": "langchain_chat_model",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\", \"langchain-core\": \"1.7.0\", \"langchain\": \"1.4.7\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 17,
+    "traceloop.association.properties.langgraph_node": "model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:9e5b7cf2-a6d3-16b8-765b-4a67de2ef637",
+    "traceloop.association.properties.checkpoint_ns": "model:9e5b7cf2-a6d3-16b8-765b-4a67de2ef637",
+    "traceloop.association.properties.ls_provider": "scriptedmodel",
+    "traceloop.association.properties.ls_model_type": "chat",
+    "gen_ai.provider.name": "langchain",
+    "gen_ai.operation.name": "chat",
+    "gen_ai.request.model": "unknown",
+    "gen_ai.response.model": "unknown",
+    "gen_ai.system_instructions": "[{\"type\": \"text\", \"content\": \"## Skills System\\n\\nYou have access to a skills library that provides specialized capabilities and domain knowledge.\\n\\n**Skills Skills**: `/skills/` (higher priority)\\n\\nSources labeled \\\"Deepagents\\\" are specific to this agent tool; sources labeled \\\"Agents\\\" are shared across all agent tools on this machine.\\n\\n**Available Skills:**\\n\\n- **haiku-writer**: Write a haiku (5-7-5 syllables) on a topic the user names.\\n  -> Read `/skills/haiku-writer/SKILL.md` for full instructions\\n- **trip-plan**: Plan a short business trip itinerary.\\n  -> Read `/skills/trip-plan/SKILL.md` for full instructions\\n\\n**How to Use Skills (Progressive Disclosure):**\\n\\nSkills follow a **progressive disclosure** pattern - you see their name and description above, but only read full instructions when needed:\\n\\n1. **Recognize when a skill applies**: Check if the user's task matches a skill's description\\n2. **Read the skill's full instructions**: Use `read_file` on the path shown in the skill list above.\\n    Pass `limit=1000` since the default of 100 lines is too small for most skill files.\\n3. **Follow the skill's instructions**: SKILL.md contains step-by-step workflows, best practices, and examples\\n4. **Access supporting files**: Skills may include helper scripts, configs, or reference docs - use absolute paths\\n\\n**When to Use Skills:**\\n\\n- User's request matches a skill's domain (e.g., \\\"research X\\\" -> web-research skill)\\n- You need specialized knowledge or structured workflows\\n- A skill provides proven patterns for complex tasks\\n\\n**Executing Skill Scripts:**\\nSkills may contain Python scripts or other executable files. Always use absolute paths from the skill list.\\n\\n**Example Workflow:**\\n\\nUser: \\\"Can you research the latest developments in quantum computing?\\\"\\n\\n1. Check available skills -> See \\\"web-research\\\" skill with its path\\n2. Read the full skill file: `read_file(file_path=\\\"...\\\", limit=1000)`\\n3. Follow the skill's research workflow (search -> organize -> synthesize)\\n4. Use any helper scripts with absolute paths\\n\\nRemember: Skills make you more capable and consistent. When in doubt, check if a skill exists for the task!\"}]",
+    "gen_ai.input.messages": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"Write a haiku about autumn\"}]}]",
+    "gen_ai.output.messages": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"PREAMBLE-T1: Let me read the haiku skill.\"}, {\"type\": \"tool_call\", \"id\": \"call_read_1\", \"name\": \"read_file\", \"arguments\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}}], \"finish_reason\": \"\"}]",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "1525d5ccc73b233a"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "1525d5ccc73b233a",
+   "name": "execute_task model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428857253102,
+   "endTimeUnixNano": 1792821428863660583,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 17,
+    "traceloop.association.properties.langgraph_node": "model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:9e5b7cf2-a6d3-16b8-765b-4a67de2ef637",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "model",
+    "gen_ai.task.id": "01a16c7c-0279-76af-abf3-fae6b2b65a5a",
+    "gen_ai.task.parent.id": "01a16c7c-026e-7081-851d-0c8a41f3b28b",
+    "traceloop.entity.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}], \"pinned_skills\": [], \"skills_metadata\": [{\"name\": \"haiku-writer\", \"description\": \"Write a haiku (5-7-5 syllables) on a topic the user names.\", \"path\": \"/skills/haiku-writer/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}, {\"name\": \"trip-plan\", \"description\": \"Plan a short business trip itinerary.\", \"path\": \"/skills/trip-plan/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}], \"skills_load_errors\": []}, \"tags\": [\"graph:step:17\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 17, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:9e5b7cf2-a6d3-16b8-765b-4a67de2ef637\"}, \"kwargs\": {\"name\": \"model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}], \"pinned_skills\": [], \"skills_metadata\": [{\"name\": \"haiku-writer\", \"description\": \"Write a haiku (5-7-5 syllables) on a topic the user names.\", \"path\": \"/skills/haiku-writer/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}, {\"name\": \"trip-plan\", \"description\": \"Plan a short business trip itinerary.\", \"path\": \"/skills/trip-plan/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}], \"skills_load_errors\": []}, \"tags\": [\"graph:step:17\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 17, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:9e5b7cf2-a6d3-16b8-765b-4a67de2ef637\"}, \"kwargs\": {\"name\": \"model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}, {\"graph\": null, \"update\": {\"_skill_tools_disclosed\": {}}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:17\"]}}",
+    "gen_ai.task.output": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}, {\"graph\": null, \"update\": {\"_skill_tools_disclosed\": {}}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:17\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "c9eab62757d70374"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "483f0edb44b6e4de",
+   "name": "execute_task SkillsMiddleware.after_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428864890137,
+   "endTimeUnixNano": 1792821428864899200,
+   "attributes": {
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.kind": "SkillsMiddleware",
+    "gen_ai.task.name": "SkillsMiddleware.after_model",
+    "gen_ai.provider.name": "langchain",
+    "gen_ai.task.status": "success",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "26b25c587facf18e"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "26b25c587facf18e",
+   "name": "execute_task SkillsMiddleware.after_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428864813106,
+   "endTimeUnixNano": 1792821428864936300,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 20,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.after_model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.after_model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.after_model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.after_model:574437a8-331b-205c-5045-0c80516eb43b",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.after_model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.after_model",
+    "gen_ai.task.id": "01a16c7c-0280-74a8-99e1-f94f6354dc97",
+    "gen_ai.task.parent.id": "01a16c7c-026e-7081-851d-0c8a41f3b28b",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:20\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 20, \"langgraph_node\": \"SkillsMiddleware.after_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_model:574437a8-331b-205c-5045-0c80516eb43b\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:20\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 20, \"langgraph_node\": \"SkillsMiddleware.after_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_model:574437a8-331b-205c-5045-0c80516eb43b\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:20\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:20\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "c9eab62757d70374"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "61e57538b0feacae",
+   "name": "execute_tool read_file",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428869775887,
+   "endTimeUnixNano": 1792821428870442721,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "tools",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 26,
+    "traceloop.association.properties.langgraph_node": "tools",
+    "traceloop.association.properties.langgraph_triggers": [
+     "__pregel_push"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_push",
+     "0",
+     "False"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "tools:830d8219-2362-ed7d-1fe6-85a6762dec63",
+    "traceloop.association.properties.checkpoint_ns": "tools:830d8219-2362-ed7d-1fe6-85a6762dec63",
+    "traceloop.span.kind": "tool",
+    "traceloop.entity.name": "read_file",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_tool",
+    "gen_ai.tool.name": "read_file",
+    "gen_ai.tool.type": "function",
+    "gen_ai.tool.description": "Reads a file from the filesystem. Assume any path the user provides is valid; reading a missing file returns an error.\n\nUsage:\n- By default, it reads up to 100 lines starting from the beginning of the file. Use `offset`/`limit` to page through large files instead of reading them whole.\n- A status header, `@@ field | field | ... @@`, sits above the file content, and every line after it is verbatim file content. When content is truncated, there may be an explanation before the header. Never include the header when editing.\n- Speculatively batch multiple `read_file` calls in one response when several files may be useful.\n- An empty file returns a system-reminder warning in place of contents.\n- Large tool results may be offloaded to a file; the tool message gives the path. Read that path here, paging with `offset`/`limit`.\n- Images (`.png`, `.jpg`, etc.), audio, video, and PDFs return multimodal content blocks (https://docs.langchain.com/oss/python/langchain/messages#multimodal).\n- For images and PDFs, pagination via `offset`/`limit` is text-only - supply `file_path` only\n- Always read a file before editing it.",
+    "traceloop.entity.input": "{\"input_str\": \"{'file_path': '/skills/haiku-writer/SKILL.md', 'limit': 1000}\", \"tags\": [\"seq:step:1\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 26, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:830d8219-2362-ed7d-1fe6-85a6762dec63\", \"checkpoint_ns\": \"tools:830d8219-2362-ed7d-1fe6-85a6762dec63\"}, \"inputs\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"kwargs\": {\"color\": \"green\", \"name\": null, \"tool_call_id\": \"call_read_1\"}}",
+    "gen_ai.tool.call.arguments": "{\"input_str\": \"{'file_path': '/skills/haiku-writer/SKILL.md', 'limit': 1000}\", \"tags\": [\"seq:step:1\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 26, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:830d8219-2362-ed7d-1fe6-85a6762dec63\", \"checkpoint_ns\": \"tools:830d8219-2362-ed7d-1fe6-85a6762dec63\"}, \"inputs\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"kwargs\": {\"color\": \"green\", \"name\": null, \"tool_call_id\": \"call_read_1\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}, \"kwargs\": {\"tags\": [\"seq:step:1\"], \"color\": \"green\", \"name\": \"read_file\"}}",
+    "gen_ai.tool.call.result": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}, \"kwargs\": {\"tags\": [\"seq:step:1\"], \"color\": \"green\", \"name\": \"read_file\"}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "470f94c6dab80a86"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "470f94c6dab80a86",
+   "name": "execute_task tools",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428868461382,
+   "endTimeUnixNano": 1792821428870802807,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 26,
+    "traceloop.association.properties.langgraph_node": "tools",
+    "traceloop.association.properties.langgraph_triggers": [
+     "__pregel_push"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_push",
+     "0",
+     "False"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "tools:830d8219-2362-ed7d-1fe6-85a6762dec63",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "tools",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "tools",
+    "gen_ai.task.id": "01a16c7c-0284-77a6-9ca5-2a7d9625f619",
+    "gen_ai.task.parent.id": "01a16c7c-026e-7081-851d-0c8a41f3b28b",
+    "traceloop.entity.input": "{\"inputs\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"tags\": [\"graph:step:26\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 26, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:830d8219-2362-ed7d-1fe6-85a6762dec63\"}, \"kwargs\": {\"name\": \"tools\"}}",
+    "gen_ai.task.input": "{\"inputs\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"tags\": [\"graph:step:26\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 26, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:830d8219-2362-ed7d-1fe6-85a6762dec63\"}, \"kwargs\": {\"name\": \"tools\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}]}, \"kwargs\": {\"tags\": [\"graph:step:26\"]}}",
+    "gen_ai.task.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}]}, \"kwargs\": {\"tags\": [\"graph:step:26\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "c9eab62757d70374"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "c429f22e7658d9eb",
+   "name": "execute_task SkillsMiddleware.before_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428873621514,
+   "endTimeUnixNano": 1792821428873700125,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 32,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.before_model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.before_model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.before_model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.before_model:8348c3c7-0c8c-811b-9401-7c0861ba95ec",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.before_model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.before_model",
+    "gen_ai.task.id": "01a16c7c-0289-7337-8021-de5f0b0b0611",
+    "gen_ai.task.parent.id": "01a16c7c-026e-7081-851d-0c8a41f3b28b",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:32\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 32, \"langgraph_node\": \"SkillsMiddleware.before_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_model:8348c3c7-0c8c-811b-9401-7c0861ba95ec\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:32\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 32, \"langgraph_node\": \"SkillsMiddleware.before_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_model:8348c3c7-0c8c-811b-9401-7c0861ba95ec\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:32\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:32\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "c9eab62757d70374"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "c6dd6736b418eb1a",
+   "name": "ScriptedModel.chat",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428877778209,
+   "endTimeUnixNano": 1792821428878033470,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "model",
+    "traceloop.association.properties.ls_integration": "langchain_chat_model",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\", \"langchain-core\": \"1.7.0\", \"langchain\": \"1.4.7\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 35,
+    "traceloop.association.properties.langgraph_node": "model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:cf8e22e0-e70c-1c9f-393a-3c0cb059a3fd",
+    "traceloop.association.properties.checkpoint_ns": "model:cf8e22e0-e70c-1c9f-393a-3c0cb059a3fd",
+    "traceloop.association.properties.ls_provider": "scriptedmodel",
+    "traceloop.association.properties.ls_model_type": "chat",
+    "gen_ai.provider.name": "langchain",
+    "gen_ai.operation.name": "chat",
+    "gen_ai.request.model": "unknown",
+    "gen_ai.response.model": "unknown",
+    "gen_ai.system_instructions": "[{\"type\": \"text\", \"content\": \"## Skills System\\n\\nYou have access to a skills library that provides specialized capabilities and domain knowledge.\\n\\n**Skills Skills**: `/skills/` (higher priority)\\n\\nSources labeled \\\"Deepagents\\\" are specific to this agent tool; sources labeled \\\"Agents\\\" are shared across all agent tools on this machine.\\n\\n**Available Skills:**\\n\\n- **haiku-writer**: Write a haiku (5-7-5 syllables) on a topic the user names.\\n  -> Read `/skills/haiku-writer/SKILL.md` for full instructions\\n- **trip-plan**: Plan a short business trip itinerary.\\n  -> Read `/skills/trip-plan/SKILL.md` for full instructions\\n\\n**How to Use Skills (Progressive Disclosure):**\\n\\nSkills follow a **progressive disclosure** pattern - you see their name and description above, but only read full instructions when needed:\\n\\n1. **Recognize when a skill applies**: Check if the user's task matches a skill's description\\n2. **Read the skill's full instructions**: Use `read_file` on the path shown in the skill list above.\\n    Pass `limit=1000` since the default of 100 lines is too small for most skill files.\\n3. **Follow the skill's instructions**: SKILL.md contains step-by-step workflows, best practices, and examples\\n4. **Access supporting files**: Skills may include helper scripts, configs, or reference docs - use absolute paths\\n\\n**When to Use Skills:**\\n\\n- User's request matches a skill's domain (e.g., \\\"research X\\\" -> web-research skill)\\n- You need specialized knowledge or structured workflows\\n- A skill provides proven patterns for complex tasks\\n\\n**Executing Skill Scripts:**\\nSkills may contain Python scripts or other executable files. Always use absolute paths from the skill list.\\n\\n**Example Workflow:**\\n\\nUser: \\\"Can you research the latest developments in quantum computing?\\\"\\n\\n1. Check available skills -> See \\\"web-research\\\" skill with its path\\n2. Read the full skill file: `read_file(file_path=\\\"...\\\", limit=1000)`\\n3. Follow the skill's research workflow (search -> organize -> synthesize)\\n4. Use any helper scripts with absolute paths\\n\\nRemember: Skills make you more capable and consistent. When in doubt, check if a skill exists for the task!\"}]",
+    "gen_ai.input.messages": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"Write a haiku about autumn\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"PREAMBLE-T1: Let me read the haiku skill.\"}, {\"type\": \"tool_call\", \"id\": \"call_read_1\", \"name\": \"read_file\", \"arguments\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}}]}, {\"role\": \"tool\", \"parts\": [{\"type\": \"tool_call_response\", \"id\": \"call_read_1\", \"response\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\"}]}]",
+    "gen_ai.output.messages": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\"}], \"finish_reason\": \"\"}]",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "bbeff7e721c5933b"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "bbeff7e721c5933b",
+   "name": "execute_task model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428875349697,
+   "endTimeUnixNano": 1792821428878237319,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 35,
+    "traceloop.association.properties.langgraph_node": "model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:cf8e22e0-e70c-1c9f-393a-3c0cb059a3fd",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "model",
+    "gen_ai.task.id": "01a16c7c-028b-7746-aa57-51912a11cc11",
+    "gen_ai.task.parent.id": "01a16c7c-026e-7081-851d-0c8a41f3b28b",
+    "traceloop.entity.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"a6902edd-b38a-4f70-b031-bad2bb712f8d\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}], \"pinned_skills\": [], \"skills_metadata\": [{\"name\": \"haiku-writer\", \"description\": \"Write a haiku (5-7-5 syllables) on a topic the user names.\", \"path\": \"/skills/haiku-writer/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}, {\"name\": \"trip-plan\", \"description\": \"Plan a short business trip itinerary.\", \"path\": \"/skills/trip-plan/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}], \"skills_load_errors\": [], \"_skill_tools_disclosed\": {}}, \"tags\": [\"graph:step:35\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 35, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:cf8e22e0-e70c-1c9f-393a-3c0cb059a3fd\"}, \"kwargs\": {\"name\": \"model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"a6902edd-b38a-4f70-b031-bad2bb712f8d\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}], \"pinned_skills\": [], \"skills_metadata\": [{\"name\": \"haiku-writer\", \"description\": \"Write a haiku (5-7-5 syllables) on a topic the user names.\", \"path\": \"/skills/haiku-writer/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}, {\"name\": \"trip-plan\", \"description\": \"Plan a short business trip itinerary.\", \"path\": \"/skills/trip-plan/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}], \"skills_load_errors\": [], \"_skill_tools_disclosed\": {}}, \"tags\": [\"graph:step:35\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 35, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:cf8e22e0-e70c-1c9f-393a-3c0cb059a3fd\"}, \"kwargs\": {\"name\": \"model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-028d-77b9-9715-97cb16c5dadf-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}, {\"graph\": null, \"update\": {\"_skill_tools_disclosed\": {}}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:35\"]}}",
+    "gen_ai.task.output": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-028d-77b9-9715-97cb16c5dadf-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}, {\"graph\": null, \"update\": {\"_skill_tools_disclosed\": {}}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:35\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "c9eab62757d70374"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "52f1ca1dd088ef0f",
+   "name": "execute_task SkillsMiddleware.after_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428880152410,
+   "endTimeUnixNano": 1792821428880168019,
+   "attributes": {
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.kind": "SkillsMiddleware",
+    "gen_ai.task.name": "SkillsMiddleware.after_model",
+    "gen_ai.provider.name": "langchain",
+    "gen_ai.task.status": "success",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "865aca85bce2ad89"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "865aca85bce2ad89",
+   "name": "execute_task SkillsMiddleware.after_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428880007141,
+   "endTimeUnixNano": 1792821428880224126,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 38,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.after_model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.after_model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.after_model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.after_model:9034c713-c016-5e7b-2a8b-860d0c3be304",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.after_model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.after_model",
+    "gen_ai.task.id": "01a16c7c-028f-7731-b843-17e8d4bd8c86",
+    "gen_ai.task.parent.id": "01a16c7c-026e-7081-851d-0c8a41f3b28b",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:38\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 38, \"langgraph_node\": \"SkillsMiddleware.after_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_model:9034c713-c016-5e7b-2a8b-860d0c3be304\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:38\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 38, \"langgraph_node\": \"SkillsMiddleware.after_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_model:9034c713-c016-5e7b-2a8b-860d0c3be304\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:38\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:38\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "c9eab62757d70374"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "6f48f636cec57953",
+   "name": "execute_task SkillsMiddleware.after_agent",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428884558711,
+   "endTimeUnixNano": 1792821428884567950,
+   "attributes": {
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.kind": "SkillsMiddleware",
+    "gen_ai.task.name": "SkillsMiddleware.after_agent",
+    "gen_ai.provider.name": "langchain",
+    "gen_ai.task.status": "success",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "d0021868c56f57b7"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "d0021868c56f57b7",
+   "name": "execute_task SkillsMiddleware.after_agent",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428884488500,
+   "endTimeUnixNano": 1792821428884610843,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 46,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.after_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.after_agent"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.after_agent"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.after_agent:a61edf18-f789-a675-b5f8-bd802ab7a61f",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.after_agent",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.after_agent",
+    "gen_ai.task.id": "01a16c7c-0294-7012-9d4f-1dea54617975",
+    "gen_ai.task.parent.id": "01a16c7c-026e-7081-851d-0c8a41f3b28b",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:46\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 46, \"langgraph_node\": \"SkillsMiddleware.after_agent\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_agent\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_agent\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_agent:a61edf18-f789-a675-b5f8-bd802ab7a61f\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_agent\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:46\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 46, \"langgraph_node\": \"SkillsMiddleware.after_agent\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_agent\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_agent\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_agent:a61edf18-f789-a675-b5f8-bd802ab7a61f\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_agent\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:46\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:46\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "c9eab62757d70374"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "c9eab62757d70374",
+   "name": "haiku_agent.workflow",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428846825152,
+   "endTimeUnixNano": 1792821428888756870,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.span.kind": "workflow",
+    "traceloop.entity.name": "haiku_agent",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "invoke_agent",
+    "gen_ai.agent.name": "haiku_agent",
+    "gen_ai.agent.id": "01a16c7c-026e-7081-851d-0c8a41f3b28b",
+    "traceloop.entity.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\"}}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\"}, \"kwargs\": {\"name\": \"haiku_agent\"}}",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\"}}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\"}, \"kwargs\": {\"name\": \"haiku_agent\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"a6902edd-b38a-4f70-b031-bad2bb712f8d\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-028d-77b9-9715-97cb16c5dadf-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"kwargs\": {\"tags\": []}}",
+    "gen_ai.task.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"a6902edd-b38a-4f70-b031-bad2bb712f8d\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-028d-77b9-9715-97cb16c5dadf-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"kwargs\": {\"tags\": []}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "54f687ba283fc9b6"
+  },
+  {
+   "traceId": "e491ff0979a1f661cbaa48c42476e5ce",
+   "spanId": "54f687ba283fc9b6",
+   "name": "invoke_agent haiku_agent",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428841326397,
+   "endTimeUnixNano": 1792821428888818299,
+   "attributes": {
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "invoke_agent",
+    "gen_ai.agent.name": "haiku_agent",
+    "gen_ai.conversation.id": "r17bf7-da",
+    "gen_ai.workflow.nodes": [
+     "model",
+     "tools",
+     "FilesystemMiddleware.before_agent",
+     "FilesystemMiddleware.before_model",
+     "FilesystemMiddleware.after_model",
+     "FilesystemMiddleware.after_agent",
+     "SubAgentMiddleware.before_agent",
+     "SubAgentMiddleware.before_model",
+     "SubAgentMiddleware.after_model",
+     "SubAgentMiddleware.after_agent",
+     "_ParentNotifierMiddleware.before_agent",
+     "_ParentNotifierMiddleware.before_model",
+     "_ParentNotifierMiddleware.after_model",
+     "_ParentNotifierMiddleware.after_agent",
+     "SummarizationMiddleware.before_agent",
+     "SummarizationMiddleware.before_model",
+     "SummarizationMiddleware.after_model",
+     "SummarizationMiddleware.after_agent",
+     "PatchToolCallsMiddleware.before_agent",
+     "PatchToolCallsMiddleware.before_model",
+     "PatchToolCallsMiddleware.after_model",
+     "PatchToolCallsMiddleware.after_agent",
+     "SkillsMiddleware.before_agent",
+     "SkillsMiddleware.before_model",
+     "SkillsMiddleware.after_model",
+     "SkillsMiddleware.after_agent",
+     "AnthropicPromptCachingMiddleware.before_agent",
+     "AnthropicPromptCachingMiddleware.before_model",
+     "AnthropicPromptCachingMiddleware.after_model",
+     "AnthropicPromptCachingMiddleware.after_agent",
+     "UnsupportedContentMiddleware.before_agent",
+     "UnsupportedContentMiddleware.before_model",
+     "UnsupportedContentMiddleware.after_model",
+     "UnsupportedContentMiddleware.after_agent"
+    ],
+    "gen_ai.workflow.edges": [
+     "AnthropicPromptCachingMiddleware.after_agent -> SkillsMiddleware.after_agent",
+     "AnthropicPromptCachingMiddleware.after_model -> SkillsMiddleware.after_model",
+     "AnthropicPromptCachingMiddleware.before_agent -> UnsupportedContentMiddleware.before_agent",
+     "AnthropicPromptCachingMiddleware.before_model -> UnsupportedContentMiddleware.before_model",
+     "FilesystemMiddleware.after_model -> FilesystemMiddleware.before_model",
+     "FilesystemMiddleware.after_model -> UnsupportedContentMiddleware.after_agent",
+     "FilesystemMiddleware.after_model -> tools",
+     "FilesystemMiddleware.before_agent -> SubAgentMiddleware.before_agent",
+     "FilesystemMiddleware.before_model -> SubAgentMiddleware.before_model",
+     "PatchToolCallsMiddleware.after_agent -> SummarizationMiddleware.after_agent",
+     "PatchToolCallsMiddleware.after_model -> SummarizationMiddleware.after_model",
+     "PatchToolCallsMiddleware.before_agent -> SkillsMiddleware.before_agent",
+     "PatchToolCallsMiddleware.before_model -> SkillsMiddleware.before_model",
+     "SkillsMiddleware.after_agent -> PatchToolCallsMiddleware.after_agent",
+     "SkillsMiddleware.after_model -> PatchToolCallsMiddleware.after_model",
+     "SkillsMiddleware.before_agent -> AnthropicPromptCachingMiddleware.before_agent",
+     "SkillsMiddleware.before_model -> AnthropicPromptCachingMiddleware.before_model",
+     "SubAgentMiddleware.after_agent -> FilesystemMiddleware.after_agent",
+     "SubAgentMiddleware.after_model -> FilesystemMiddleware.after_model",
+     "SubAgentMiddleware.before_agent -> _ParentNotifierMiddleware.before_agent",
+     "SubAgentMiddleware.before_model -> _ParentNotifierMiddleware.before_model",
+     "SummarizationMiddleware.after_agent -> _ParentNotifierMiddleware.after_agent",
+     "SummarizationMiddleware.after_model -> _ParentNotifierMiddleware.after_model",
+     "SummarizationMiddleware.before_agent -> PatchToolCallsMiddleware.before_agent",
+     "SummarizationMiddleware.before_model -> PatchToolCallsMiddleware.before_model",
+     "UnsupportedContentMiddleware.after_agent -> AnthropicPromptCachingMiddleware.after_agent",
+     "UnsupportedContentMiddleware.after_model -> AnthropicPromptCachingMiddleware.after_model",
+     "UnsupportedContentMiddleware.before_agent -> FilesystemMiddleware.before_model",
+     "UnsupportedContentMiddleware.before_model -> model",
+     "_ParentNotifierMiddleware.after_agent -> SubAgentMiddleware.after_agent",
+     "_ParentNotifierMiddleware.after_model -> SubAgentMiddleware.after_model",
+     "_ParentNotifierMiddleware.before_agent -> SummarizationMiddleware.before_agent",
+     "_ParentNotifierMiddleware.before_model -> SummarizationMiddleware.before_model",
+     "model -> UnsupportedContentMiddleware.after_model",
+     "tools -> FilesystemMiddleware.before_model"
+    ],
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   }
+  },
+  {
+   "traceId": "ed91984069a5f6c491d9f827a5199886",
+   "spanId": "d75965486c4865cd",
+   "name": "execute_task SkillsMiddleware.before_agent",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428896794937,
+   "endTimeUnixNano": 1792821428896883264,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 59,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.before_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.before_agent"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.before_agent"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.before_agent:347df47e-58a4-7a91-f5d2-5c1fcc79762e",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.before_agent",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.before_agent",
+    "gen_ai.task.id": "01a16c7c-02a0-7086-a1e3-3ce70347aed3",
+    "gen_ai.task.parent.id": "01a16c7c-029c-73c7-ad08-5e1cdfae9bce",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:59\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 59, \"langgraph_node\": \"SkillsMiddleware.before_agent\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_agent\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_agent\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_agent:347df47e-58a4-7a91-f5d2-5c1fcc79762e\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_agent\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:59\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 59, \"langgraph_node\": \"SkillsMiddleware.before_agent\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_agent\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_agent\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_agent:347df47e-58a4-7a91-f5d2-5c1fcc79762e\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_agent\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:59\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:59\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "54a199a57994ed9e"
+  },
+  {
+   "traceId": "ed91984069a5f6c491d9f827a5199886",
+   "spanId": "16b6c018133c36bb",
+   "name": "execute_task SkillsMiddleware.before_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428900800733,
+   "endTimeUnixNano": 1792821428900883094,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 67,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.before_model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.before_model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.before_model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.before_model:ae432bd5-fdba-2e4f-aeea-213c909f5848",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.before_model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.before_model",
+    "gen_ai.task.id": "01a16c7c-02a4-7357-9925-badb374be160",
+    "gen_ai.task.parent.id": "01a16c7c-029c-73c7-ad08-5e1cdfae9bce",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:67\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 67, \"langgraph_node\": \"SkillsMiddleware.before_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_model:ae432bd5-fdba-2e4f-aeea-213c909f5848\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:67\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 67, \"langgraph_node\": \"SkillsMiddleware.before_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_model:ae432bd5-fdba-2e4f-aeea-213c909f5848\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:67\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:67\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "54a199a57994ed9e"
+  },
+  {
+   "traceId": "ed91984069a5f6c491d9f827a5199886",
+   "spanId": "ea43358955d28ec0",
+   "name": "ScriptedModel.chat",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428904206895,
+   "endTimeUnixNano": 1792821428904432054,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "model",
+    "traceloop.association.properties.ls_integration": "langchain_chat_model",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\", \"langchain-core\": \"1.7.0\", \"langchain\": \"1.4.7\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 70,
+    "traceloop.association.properties.langgraph_node": "model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:f0fd0fbc-afe5-21f8-8b69-1bf820ee2ca2",
+    "traceloop.association.properties.checkpoint_ns": "model:f0fd0fbc-afe5-21f8-8b69-1bf820ee2ca2",
+    "traceloop.association.properties.ls_provider": "scriptedmodel",
+    "traceloop.association.properties.ls_model_type": "chat",
+    "gen_ai.provider.name": "langchain",
+    "gen_ai.operation.name": "chat",
+    "gen_ai.request.model": "unknown",
+    "gen_ai.response.model": "unknown",
+    "gen_ai.system_instructions": "[{\"type\": \"text\", \"content\": \"## Skills System\\n\\nYou have access to a skills library that provides specialized capabilities and domain knowledge.\\n\\n**Skills Skills**: `/skills/` (higher priority)\\n\\nSources labeled \\\"Deepagents\\\" are specific to this agent tool; sources labeled \\\"Agents\\\" are shared across all agent tools on this machine.\\n\\n**Available Skills:**\\n\\n- **haiku-writer**: Write a haiku (5-7-5 syllables) on a topic the user names.\\n  -> Read `/skills/haiku-writer/SKILL.md` for full instructions\\n- **trip-plan**: Plan a short business trip itinerary.\\n  -> Read `/skills/trip-plan/SKILL.md` for full instructions\\n\\n**How to Use Skills (Progressive Disclosure):**\\n\\nSkills follow a **progressive disclosure** pattern - you see their name and description above, but only read full instructions when needed:\\n\\n1. **Recognize when a skill applies**: Check if the user's task matches a skill's description\\n2. **Read the skill's full instructions**: Use `read_file` on the path shown in the skill list above.\\n    Pass `limit=1000` since the default of 100 lines is too small for most skill files.\\n3. **Follow the skill's instructions**: SKILL.md contains step-by-step workflows, best practices, and examples\\n4. **Access supporting files**: Skills may include helper scripts, configs, or reference docs - use absolute paths\\n\\n**When to Use Skills:**\\n\\n- User's request matches a skill's domain (e.g., \\\"research X\\\" -> web-research skill)\\n- You need specialized knowledge or structured workflows\\n- A skill provides proven patterns for complex tasks\\n\\n**Executing Skill Scripts:**\\nSkills may contain Python scripts or other executable files. Always use absolute paths from the skill list.\\n\\n**Example Workflow:**\\n\\nUser: \\\"Can you research the latest developments in quantum computing?\\\"\\n\\n1. Check available skills -> See \\\"web-research\\\" skill with its path\\n2. Read the full skill file: `read_file(file_path=\\\"...\\\", limit=1000)`\\n3. Follow the skill's research workflow (search -> organize -> synthesize)\\n4. Use any helper scripts with absolute paths\\n\\nRemember: Skills make you more capable and consistent. When in doubt, check if a skill exists for the task!\"}]",
+    "gen_ai.input.messages": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"Write a haiku about autumn\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"PREAMBLE-T1: Let me read the haiku skill.\"}, {\"type\": \"tool_call\", \"id\": \"call_read_1\", \"name\": \"read_file\", \"arguments\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}}]}, {\"role\": \"tool\", \"parts\": [{\"type\": \"tool_call_response\", \"id\": \"call_read_1\", \"response\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\"}]}, {\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"thanks!\"}]}]",
+    "gen_ai.output.messages": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"ANSWER-T2: You're welcome.\"}], \"finish_reason\": \"\"}]",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "75256da96f6295bf"
+  },
+  {
+   "traceId": "ed91984069a5f6c491d9f827a5199886",
+   "spanId": "75256da96f6295bf",
+   "name": "execute_task model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428902298038,
+   "endTimeUnixNano": 1792821428904599431,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 70,
+    "traceloop.association.properties.langgraph_node": "model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:f0fd0fbc-afe5-21f8-8b69-1bf820ee2ca2",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "model",
+    "gen_ai.task.id": "01a16c7c-02a6-73d7-b8c1-abbc15efef1b",
+    "gen_ai.task.parent.id": "01a16c7c-029c-73c7-ad08-5e1cdfae9bce",
+    "traceloop.entity.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"a6902edd-b38a-4f70-b031-bad2bb712f8d\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-028d-77b9-9715-97cb16c5dadf-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"thanks!\", \"type\": \"human\", \"id\": \"37612f9a-110d-44b8-a0fd-0a30e7c2a4dc\"}}], \"pinned_skills\": [], \"skills_metadata\": [{\"name\": \"haiku-writer\", \"description\": \"Write a haiku (5-7-5 syllables) on a topic the user names.\", \"path\": \"/skills/haiku-writer/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}, {\"name\": \"trip-plan\", \"description\": \"Plan a short business trip itinerary.\", \"path\": \"/skills/trip-plan/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}], \"skills_load_errors\": [], \"_skill_tools_disclosed\": {}}, \"tags\": [\"graph:step:70\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 70, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:f0fd0fbc-afe5-21f8-8b69-1bf820ee2ca2\"}, \"kwargs\": {\"name\": \"model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"a6902edd-b38a-4f70-b031-bad2bb712f8d\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-028d-77b9-9715-97cb16c5dadf-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"thanks!\", \"type\": \"human\", \"id\": \"37612f9a-110d-44b8-a0fd-0a30e7c2a4dc\"}}], \"pinned_skills\": [], \"skills_metadata\": [{\"name\": \"haiku-writer\", \"description\": \"Write a haiku (5-7-5 syllables) on a topic the user names.\", \"path\": \"/skills/haiku-writer/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}, {\"name\": \"trip-plan\", \"description\": \"Plan a short business trip itinerary.\", \"path\": \"/skills/trip-plan/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}], \"skills_load_errors\": [], \"_skill_tools_disclosed\": {}}, \"tags\": [\"graph:step:70\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 70, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:f0fd0fbc-afe5-21f8-8b69-1bf820ee2ca2\"}, \"kwargs\": {\"name\": \"model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T2: You're welcome.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02a8-7764-8b43-163e4e7d8163-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}, {\"graph\": null, \"update\": {\"_skill_tools_disclosed\": {}}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:70\"]}}",
+    "gen_ai.task.output": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T2: You're welcome.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02a8-7764-8b43-163e4e7d8163-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}, {\"graph\": null, \"update\": {\"_skill_tools_disclosed\": {}}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:70\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "54a199a57994ed9e"
+  },
+  {
+   "traceId": "ed91984069a5f6c491d9f827a5199886",
+   "spanId": "87967145d8033bce",
+   "name": "execute_task SkillsMiddleware.after_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428905774641,
+   "endTimeUnixNano": 1792821428905783213,
+   "attributes": {
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.kind": "SkillsMiddleware",
+    "gen_ai.task.name": "SkillsMiddleware.after_model",
+    "gen_ai.provider.name": "langchain",
+    "gen_ai.task.status": "success",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "afa3f707a2b2b828"
+  },
+  {
+   "traceId": "ed91984069a5f6c491d9f827a5199886",
+   "spanId": "afa3f707a2b2b828",
+   "name": "execute_task SkillsMiddleware.after_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428905706406,
+   "endTimeUnixNano": 1792821428905817368,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 73,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.after_model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.after_model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.after_model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.after_model:2916125f-8b84-490d-165e-77a1d65be06a",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.after_model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.after_model",
+    "gen_ai.task.id": "01a16c7c-02a9-7082-8217-76c3063aae80",
+    "gen_ai.task.parent.id": "01a16c7c-029c-73c7-ad08-5e1cdfae9bce",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:73\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 73, \"langgraph_node\": \"SkillsMiddleware.after_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_model:2916125f-8b84-490d-165e-77a1d65be06a\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:73\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 73, \"langgraph_node\": \"SkillsMiddleware.after_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_model:2916125f-8b84-490d-165e-77a1d65be06a\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:73\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:73\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "54a199a57994ed9e"
+  },
+  {
+   "traceId": "ed91984069a5f6c491d9f827a5199886",
+   "spanId": "a7b341d99c28c56a",
+   "name": "execute_task SkillsMiddleware.after_agent",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428911242601,
+   "endTimeUnixNano": 1792821428911250881,
+   "attributes": {
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.kind": "SkillsMiddleware",
+    "gen_ai.task.name": "SkillsMiddleware.after_agent",
+    "gen_ai.provider.name": "langchain",
+    "gen_ai.task.status": "success",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "fcb63e3457cf9019"
+  },
+  {
+   "traceId": "ed91984069a5f6c491d9f827a5199886",
+   "spanId": "fcb63e3457cf9019",
+   "name": "execute_task SkillsMiddleware.after_agent",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428911170658,
+   "endTimeUnixNano": 1792821428911286348,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 81,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.after_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.after_agent"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.after_agent"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.after_agent:3e38523b-986d-edcc-4b44-0ff68e5ac72d",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.after_agent",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.after_agent",
+    "gen_ai.task.id": "01a16c7c-02af-72b3-8f47-40784e1aa55b",
+    "gen_ai.task.parent.id": "01a16c7c-029c-73c7-ad08-5e1cdfae9bce",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:81\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 81, \"langgraph_node\": \"SkillsMiddleware.after_agent\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_agent\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_agent\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_agent:3e38523b-986d-edcc-4b44-0ff68e5ac72d\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_agent\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:81\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 81, \"langgraph_node\": \"SkillsMiddleware.after_agent\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_agent\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_agent\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_agent:3e38523b-986d-edcc-4b44-0ff68e5ac72d\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_agent\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:81\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:81\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "54a199a57994ed9e"
+  },
+  {
+   "traceId": "ed91984069a5f6c491d9f827a5199886",
+   "spanId": "54a199a57994ed9e",
+   "name": "haiku_agent.workflow",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428892686679,
+   "endTimeUnixNano": 1792821428915492431,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.span.kind": "workflow",
+    "traceloop.entity.name": "haiku_agent",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "invoke_agent",
+    "gen_ai.agent.name": "haiku_agent",
+    "gen_ai.agent.id": "01a16c7c-029c-73c7-ad08-5e1cdfae9bce",
+    "traceloop.entity.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"thanks!\", \"type\": \"human\"}}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\"}, \"kwargs\": {\"name\": \"haiku_agent\"}}",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"thanks!\", \"type\": \"human\"}}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\"}, \"kwargs\": {\"name\": \"haiku_agent\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"a6902edd-b38a-4f70-b031-bad2bb712f8d\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-028d-77b9-9715-97cb16c5dadf-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"thanks!\", \"type\": \"human\", \"id\": \"37612f9a-110d-44b8-a0fd-0a30e7c2a4dc\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T2: You're welcome.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02a8-7764-8b43-163e4e7d8163-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"kwargs\": {\"tags\": []}}",
+    "gen_ai.task.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"a6902edd-b38a-4f70-b031-bad2bb712f8d\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-028d-77b9-9715-97cb16c5dadf-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"thanks!\", \"type\": \"human\", \"id\": \"37612f9a-110d-44b8-a0fd-0a30e7c2a4dc\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T2: You're welcome.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02a8-7764-8b43-163e4e7d8163-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"kwargs\": {\"tags\": []}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "e26817e07eb8fb55"
+  },
+  {
+   "traceId": "ed91984069a5f6c491d9f827a5199886",
+   "spanId": "e26817e07eb8fb55",
+   "name": "invoke_agent haiku_agent",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428888880942,
+   "endTimeUnixNano": 1792821428915550980,
+   "attributes": {
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "invoke_agent",
+    "gen_ai.agent.name": "haiku_agent",
+    "gen_ai.conversation.id": "r17bf7-da",
+    "gen_ai.workflow.nodes": [
+     "model",
+     "tools",
+     "FilesystemMiddleware.before_agent",
+     "FilesystemMiddleware.before_model",
+     "FilesystemMiddleware.after_model",
+     "FilesystemMiddleware.after_agent",
+     "SubAgentMiddleware.before_agent",
+     "SubAgentMiddleware.before_model",
+     "SubAgentMiddleware.after_model",
+     "SubAgentMiddleware.after_agent",
+     "_ParentNotifierMiddleware.before_agent",
+     "_ParentNotifierMiddleware.before_model",
+     "_ParentNotifierMiddleware.after_model",
+     "_ParentNotifierMiddleware.after_agent",
+     "SummarizationMiddleware.before_agent",
+     "SummarizationMiddleware.before_model",
+     "SummarizationMiddleware.after_model",
+     "SummarizationMiddleware.after_agent",
+     "PatchToolCallsMiddleware.before_agent",
+     "PatchToolCallsMiddleware.before_model",
+     "PatchToolCallsMiddleware.after_model",
+     "PatchToolCallsMiddleware.after_agent",
+     "SkillsMiddleware.before_agent",
+     "SkillsMiddleware.before_model",
+     "SkillsMiddleware.after_model",
+     "SkillsMiddleware.after_agent",
+     "AnthropicPromptCachingMiddleware.before_agent",
+     "AnthropicPromptCachingMiddleware.before_model",
+     "AnthropicPromptCachingMiddleware.after_model",
+     "AnthropicPromptCachingMiddleware.after_agent",
+     "UnsupportedContentMiddleware.before_agent",
+     "UnsupportedContentMiddleware.before_model",
+     "UnsupportedContentMiddleware.after_model",
+     "UnsupportedContentMiddleware.after_agent"
+    ],
+    "gen_ai.workflow.edges": [
+     "AnthropicPromptCachingMiddleware.after_agent -> SkillsMiddleware.after_agent",
+     "AnthropicPromptCachingMiddleware.after_model -> SkillsMiddleware.after_model",
+     "AnthropicPromptCachingMiddleware.before_agent -> UnsupportedContentMiddleware.before_agent",
+     "AnthropicPromptCachingMiddleware.before_model -> UnsupportedContentMiddleware.before_model",
+     "FilesystemMiddleware.after_model -> FilesystemMiddleware.before_model",
+     "FilesystemMiddleware.after_model -> UnsupportedContentMiddleware.after_agent",
+     "FilesystemMiddleware.after_model -> tools",
+     "FilesystemMiddleware.before_agent -> SubAgentMiddleware.before_agent",
+     "FilesystemMiddleware.before_model -> SubAgentMiddleware.before_model",
+     "PatchToolCallsMiddleware.after_agent -> SummarizationMiddleware.after_agent",
+     "PatchToolCallsMiddleware.after_model -> SummarizationMiddleware.after_model",
+     "PatchToolCallsMiddleware.before_agent -> SkillsMiddleware.before_agent",
+     "PatchToolCallsMiddleware.before_model -> SkillsMiddleware.before_model",
+     "SkillsMiddleware.after_agent -> PatchToolCallsMiddleware.after_agent",
+     "SkillsMiddleware.after_model -> PatchToolCallsMiddleware.after_model",
+     "SkillsMiddleware.before_agent -> AnthropicPromptCachingMiddleware.before_agent",
+     "SkillsMiddleware.before_model -> AnthropicPromptCachingMiddleware.before_model",
+     "SubAgentMiddleware.after_agent -> FilesystemMiddleware.after_agent",
+     "SubAgentMiddleware.after_model -> FilesystemMiddleware.after_model",
+     "SubAgentMiddleware.before_agent -> _ParentNotifierMiddleware.before_agent",
+     "SubAgentMiddleware.before_model -> _ParentNotifierMiddleware.before_model",
+     "SummarizationMiddleware.after_agent -> _ParentNotifierMiddleware.after_agent",
+     "SummarizationMiddleware.after_model -> _ParentNotifierMiddleware.after_model",
+     "SummarizationMiddleware.before_agent -> PatchToolCallsMiddleware.before_agent",
+     "SummarizationMiddleware.before_model -> PatchToolCallsMiddleware.before_model",
+     "UnsupportedContentMiddleware.after_agent -> AnthropicPromptCachingMiddleware.after_agent",
+     "UnsupportedContentMiddleware.after_model -> AnthropicPromptCachingMiddleware.after_model",
+     "UnsupportedContentMiddleware.before_agent -> FilesystemMiddleware.before_model",
+     "UnsupportedContentMiddleware.before_model -> model",
+     "_ParentNotifierMiddleware.after_agent -> SubAgentMiddleware.after_agent",
+     "_ParentNotifierMiddleware.after_model -> SubAgentMiddleware.after_model",
+     "_ParentNotifierMiddleware.before_agent -> SummarizationMiddleware.before_agent",
+     "_ParentNotifierMiddleware.before_model -> SummarizationMiddleware.before_model",
+     "model -> UnsupportedContentMiddleware.after_model",
+     "tools -> FilesystemMiddleware.before_model"
+    ],
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   }
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "2855a40d7a46ecfa",
+   "name": "execute_task SkillsMiddleware.before_agent",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428924033136,
+   "endTimeUnixNano": 1792821428924135428,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 94,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.before_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.before_agent"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.before_agent"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.before_agent:7a64bb8f-8fdf-c114-d3d4-a2bb594f3255",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.before_agent",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.before_agent",
+    "gen_ai.task.id": "01a16c7c-02bc-724d-99fa-d0de6e32f3c7",
+    "gen_ai.task.parent.id": "01a16c7c-02b7-7635-85ef-d61e24b20fd3",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:94\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 94, \"langgraph_node\": \"SkillsMiddleware.before_agent\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_agent\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_agent\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_agent:7a64bb8f-8fdf-c114-d3d4-a2bb594f3255\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_agent\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:94\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 94, \"langgraph_node\": \"SkillsMiddleware.before_agent\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_agent\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_agent\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_agent:7a64bb8f-8fdf-c114-d3d4-a2bb594f3255\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_agent\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:94\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:94\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "807a55d64a29e811"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "b103814c7ad912d4",
+   "name": "execute_task SkillsMiddleware.before_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428928391731,
+   "endTimeUnixNano": 1792821428928473147,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 102,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.before_model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.before_model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.before_model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.before_model:3cf97198-d579-baf1-8fb0-22353d6e8f78",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.before_model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.before_model",
+    "gen_ai.task.id": "01a16c7c-02c0-7753-9d0f-b5436ae2d255",
+    "gen_ai.task.parent.id": "01a16c7c-02b7-7635-85ef-d61e24b20fd3",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:102\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 102, \"langgraph_node\": \"SkillsMiddleware.before_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_model:3cf97198-d579-baf1-8fb0-22353d6e8f78\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:102\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 102, \"langgraph_node\": \"SkillsMiddleware.before_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_model:3cf97198-d579-baf1-8fb0-22353d6e8f78\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:102\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:102\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "807a55d64a29e811"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "8a1e9814e21bb950",
+   "name": "ScriptedModel.chat",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428931826252,
+   "endTimeUnixNano": 1792821428932081455,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "model",
+    "traceloop.association.properties.ls_integration": "langchain_chat_model",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\", \"langchain-core\": \"1.7.0\", \"langchain\": \"1.4.7\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 105,
+    "traceloop.association.properties.langgraph_node": "model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:9173e536-d2a4-4c77-9871-7ca6d801f44b",
+    "traceloop.association.properties.checkpoint_ns": "model:9173e536-d2a4-4c77-9871-7ca6d801f44b",
+    "traceloop.association.properties.ls_provider": "scriptedmodel",
+    "traceloop.association.properties.ls_model_type": "chat",
+    "gen_ai.provider.name": "langchain",
+    "gen_ai.operation.name": "chat",
+    "gen_ai.request.model": "unknown",
+    "gen_ai.response.model": "unknown",
+    "gen_ai.system_instructions": "[{\"type\": \"text\", \"content\": \"## Skills System\\n\\nYou have access to a skills library that provides specialized capabilities and domain knowledge.\\n\\n**Skills Skills**: `/skills/` (higher priority)\\n\\nSources labeled \\\"Deepagents\\\" are specific to this agent tool; sources labeled \\\"Agents\\\" are shared across all agent tools on this machine.\\n\\n**Available Skills:**\\n\\n- **haiku-writer**: Write a haiku (5-7-5 syllables) on a topic the user names.\\n  -> Read `/skills/haiku-writer/SKILL.md` for full instructions\\n- **trip-plan**: Plan a short business trip itinerary.\\n  -> Read `/skills/trip-plan/SKILL.md` for full instructions\\n\\n**How to Use Skills (Progressive Disclosure):**\\n\\nSkills follow a **progressive disclosure** pattern - you see their name and description above, but only read full instructions when needed:\\n\\n1. **Recognize when a skill applies**: Check if the user's task matches a skill's description\\n2. **Read the skill's full instructions**: Use `read_file` on the path shown in the skill list above.\\n    Pass `limit=1000` since the default of 100 lines is too small for most skill files.\\n3. **Follow the skill's instructions**: SKILL.md contains step-by-step workflows, best practices, and examples\\n4. **Access supporting files**: Skills may include helper scripts, configs, or reference docs - use absolute paths\\n\\n**When to Use Skills:**\\n\\n- User's request matches a skill's domain (e.g., \\\"research X\\\" -> web-research skill)\\n- You need specialized knowledge or structured workflows\\n- A skill provides proven patterns for complex tasks\\n\\n**Executing Skill Scripts:**\\nSkills may contain Python scripts or other executable files. Always use absolute paths from the skill list.\\n\\n**Example Workflow:**\\n\\nUser: \\\"Can you research the latest developments in quantum computing?\\\"\\n\\n1. Check available skills -> See \\\"web-research\\\" skill with its path\\n2. Read the full skill file: `read_file(file_path=\\\"...\\\", limit=1000)`\\n3. Follow the skill's research workflow (search -> organize -> synthesize)\\n4. Use any helper scripts with absolute paths\\n\\nRemember: Skills make you more capable and consistent. When in doubt, check if a skill exists for the task!\"}]",
+    "gen_ai.input.messages": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"Write a haiku about autumn\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"PREAMBLE-T1: Let me read the haiku skill.\"}, {\"type\": \"tool_call\", \"id\": \"call_read_1\", \"name\": \"read_file\", \"arguments\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}}]}, {\"role\": \"tool\", \"parts\": [{\"type\": \"tool_call_response\", \"id\": \"call_read_1\", \"response\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\"}]}, {\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"thanks!\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"ANSWER-T2: You're welcome.\"}]}, {\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"Now a haiku about rain\"}]}]",
+    "gen_ai.output.messages": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"PREAMBLE-T3: Let me read the haiku skill.\"}, {\"type\": \"tool_call\", \"id\": \"call_read_3\", \"name\": \"read_file\", \"arguments\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}}], \"finish_reason\": \"\"}]",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "b93e087c68b0a250"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "b93e087c68b0a250",
+   "name": "execute_task model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428929867386,
+   "endTimeUnixNano": 1792821428932256770,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 105,
+    "traceloop.association.properties.langgraph_node": "model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:9173e536-d2a4-4c77-9871-7ca6d801f44b",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "model",
+    "gen_ai.task.id": "01a16c7c-02c1-703b-a77d-f7f99b9887ee",
+    "gen_ai.task.parent.id": "01a16c7c-02b7-7635-85ef-d61e24b20fd3",
+    "traceloop.entity.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"a6902edd-b38a-4f70-b031-bad2bb712f8d\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-028d-77b9-9715-97cb16c5dadf-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"thanks!\", \"type\": \"human\", \"id\": \"37612f9a-110d-44b8-a0fd-0a30e7c2a4dc\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T2: You're welcome.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02a8-7764-8b43-163e4e7d8163-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Now a haiku about rain\", \"type\": \"human\", \"id\": \"695f8f4d-2753-4236-9b2f-19b2afddaeff\"}}], \"pinned_skills\": [], \"skills_metadata\": [{\"name\": \"haiku-writer\", \"description\": \"Write a haiku (5-7-5 syllables) on a topic the user names.\", \"path\": \"/skills/haiku-writer/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}, {\"name\": \"trip-plan\", \"description\": \"Plan a short business trip itinerary.\", \"path\": \"/skills/trip-plan/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}], \"skills_load_errors\": [], \"_skill_tools_disclosed\": {}}, \"tags\": [\"graph:step:105\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 105, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:9173e536-d2a4-4c77-9871-7ca6d801f44b\"}, \"kwargs\": {\"name\": \"model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"a6902edd-b38a-4f70-b031-bad2bb712f8d\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-028d-77b9-9715-97cb16c5dadf-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"thanks!\", \"type\": \"human\", \"id\": \"37612f9a-110d-44b8-a0fd-0a30e7c2a4dc\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T2: You're welcome.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02a8-7764-8b43-163e4e7d8163-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Now a haiku about rain\", \"type\": \"human\", \"id\": \"695f8f4d-2753-4236-9b2f-19b2afddaeff\"}}], \"pinned_skills\": [], \"skills_metadata\": [{\"name\": \"haiku-writer\", \"description\": \"Write a haiku (5-7-5 syllables) on a topic the user names.\", \"path\": \"/skills/haiku-writer/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}, {\"name\": \"trip-plan\", \"description\": \"Plan a short business trip itinerary.\", \"path\": \"/skills/trip-plan/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}], \"skills_load_errors\": [], \"_skill_tools_disclosed\": {}}, \"tags\": [\"graph:step:105\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 105, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:9173e536-d2a4-4c77-9871-7ca6d801f44b\"}, \"kwargs\": {\"name\": \"model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T3: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02c3-747d-9161-8fc75995e820-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_3\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}, {\"graph\": null, \"update\": {\"_skill_tools_disclosed\": {}}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:105\"]}}",
+    "gen_ai.task.output": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T3: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02c3-747d-9161-8fc75995e820-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_3\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}, {\"graph\": null, \"update\": {\"_skill_tools_disclosed\": {}}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:105\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "807a55d64a29e811"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "36fd285b800f5a37",
+   "name": "execute_task SkillsMiddleware.after_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428933432316,
+   "endTimeUnixNano": 1792821428933441060,
+   "attributes": {
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.kind": "SkillsMiddleware",
+    "gen_ai.task.name": "SkillsMiddleware.after_model",
+    "gen_ai.provider.name": "langchain",
+    "gen_ai.task.status": "success",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "a745bcaf3397ce37"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "a745bcaf3397ce37",
+   "name": "execute_task SkillsMiddleware.after_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428933361123,
+   "endTimeUnixNano": 1792821428933476816,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 108,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.after_model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.after_model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.after_model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.after_model:347c3fdf-bf74-976d-cbec-9f0482a4f3f9",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.after_model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.after_model",
+    "gen_ai.task.id": "01a16c7c-02c5-7144-be62-edd79c5b885c",
+    "gen_ai.task.parent.id": "01a16c7c-02b7-7635-85ef-d61e24b20fd3",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:108\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 108, \"langgraph_node\": \"SkillsMiddleware.after_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_model:347c3fdf-bf74-976d-cbec-9f0482a4f3f9\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:108\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 108, \"langgraph_node\": \"SkillsMiddleware.after_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_model:347c3fdf-bf74-976d-cbec-9f0482a4f3f9\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:108\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:108\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "807a55d64a29e811"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "16ffcee7f41928bf",
+   "name": "execute_tool read_file",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428937133053,
+   "endTimeUnixNano": 1792821428938411442,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "tools",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 114,
+    "traceloop.association.properties.langgraph_node": "tools",
+    "traceloop.association.properties.langgraph_triggers": [
+     "__pregel_push"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_push",
+     "0",
+     "False"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "tools:0cf19bf2-160f-90ad-8e92-5f93de77bb7f",
+    "traceloop.association.properties.checkpoint_ns": "tools:0cf19bf2-160f-90ad-8e92-5f93de77bb7f",
+    "traceloop.span.kind": "tool",
+    "traceloop.entity.name": "read_file",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_tool",
+    "gen_ai.tool.name": "read_file",
+    "gen_ai.tool.type": "function",
+    "gen_ai.tool.description": "Reads a file from the filesystem. Assume any path the user provides is valid; reading a missing file returns an error.\n\nUsage:\n- By default, it reads up to 100 lines starting from the beginning of the file. Use `offset`/`limit` to page through large files instead of reading them whole.\n- A status header, `@@ field | field | ... @@`, sits above the file content, and every line after it is verbatim file content. When content is truncated, there may be an explanation before the header. Never include the header when editing.\n- Speculatively batch multiple `read_file` calls in one response when several files may be useful.\n- An empty file returns a system-reminder warning in place of contents.\n- Large tool results may be offloaded to a file; the tool message gives the path. Read that path here, paging with `offset`/`limit`.\n- Images (`.png`, `.jpg`, etc.), audio, video, and PDFs return multimodal content blocks (https://docs.langchain.com/oss/python/langchain/messages#multimodal).\n- For images and PDFs, pagination via `offset`/`limit` is text-only - supply `file_path` only\n- Always read a file before editing it.",
+    "traceloop.entity.input": "{\"input_str\": \"{'file_path': '/skills/haiku-writer/SKILL.md', 'limit': 1000}\", \"tags\": [\"seq:step:1\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 114, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:0cf19bf2-160f-90ad-8e92-5f93de77bb7f\", \"checkpoint_ns\": \"tools:0cf19bf2-160f-90ad-8e92-5f93de77bb7f\"}, \"inputs\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"kwargs\": {\"color\": \"green\", \"name\": null, \"tool_call_id\": \"call_read_3\"}}",
+    "gen_ai.tool.call.arguments": "{\"input_str\": \"{'file_path': '/skills/haiku-writer/SKILL.md', 'limit': 1000}\", \"tags\": [\"seq:step:1\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 114, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:0cf19bf2-160f-90ad-8e92-5f93de77bb7f\", \"checkpoint_ns\": \"tools:0cf19bf2-160f-90ad-8e92-5f93de77bb7f\"}, \"inputs\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"kwargs\": {\"color\": \"green\", \"name\": null, \"tool_call_id\": \"call_read_3\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"tool_call_id\": \"call_read_3\", \"status\": \"success\"}}, \"kwargs\": {\"tags\": [\"seq:step:1\"], \"color\": \"green\", \"name\": \"read_file\"}}",
+    "gen_ai.tool.call.result": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"tool_call_id\": \"call_read_3\", \"status\": \"success\"}}, \"kwargs\": {\"tags\": [\"seq:step:1\"], \"color\": \"green\", \"name\": \"read_file\"}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "8993d3ef551489ec"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "8993d3ef551489ec",
+   "name": "execute_task tools",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428936501294,
+   "endTimeUnixNano": 1792821428938746570,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 114,
+    "traceloop.association.properties.langgraph_node": "tools",
+    "traceloop.association.properties.langgraph_triggers": [
+     "__pregel_push"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_push",
+     "0",
+     "False"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "tools:0cf19bf2-160f-90ad-8e92-5f93de77bb7f",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "tools",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "tools",
+    "gen_ai.task.id": "01a16c7c-02c8-72f0-b1ba-89ba3a8c0181",
+    "gen_ai.task.parent.id": "01a16c7c-02b7-7635-85ef-d61e24b20fd3",
+    "traceloop.entity.input": "{\"inputs\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_3\", \"type\": \"tool_call\"}], \"tags\": [\"graph:step:114\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 114, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:0cf19bf2-160f-90ad-8e92-5f93de77bb7f\"}, \"kwargs\": {\"name\": \"tools\"}}",
+    "gen_ai.task.input": "{\"inputs\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_3\", \"type\": \"tool_call\"}], \"tags\": [\"graph:step:114\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 114, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"__pregel_push\"], \"langgraph_path\": [\"__pregel_push\", 0, false], \"langgraph_checkpoint_ns\": \"tools:0cf19bf2-160f-90ad-8e92-5f93de77bb7f\"}, \"kwargs\": {\"name\": \"tools\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"tool_call_id\": \"call_read_3\", \"status\": \"success\"}}]}, \"kwargs\": {\"tags\": [\"graph:step:114\"]}}",
+    "gen_ai.task.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"tool_call_id\": \"call_read_3\", \"status\": \"success\"}}]}, \"kwargs\": {\"tags\": [\"graph:step:114\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "807a55d64a29e811"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "3dc099385a290ab0",
+   "name": "execute_task SkillsMiddleware.before_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428941502636,
+   "endTimeUnixNano": 1792821428941588634,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 120,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.before_model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.before_model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.before_model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.before_model:17d6d85d-eac7-3c24-fd31-76f514a59fb9",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.before_model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.before_model",
+    "gen_ai.task.id": "01a16c7c-02cd-73d7-a0d6-2b52533681e6",
+    "gen_ai.task.parent.id": "01a16c7c-02b7-7635-85ef-d61e24b20fd3",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:120\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 120, \"langgraph_node\": \"SkillsMiddleware.before_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_model:17d6d85d-eac7-3c24-fd31-76f514a59fb9\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:120\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 120, \"langgraph_node\": \"SkillsMiddleware.before_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.before_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.before_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.before_model:17d6d85d-eac7-3c24-fd31-76f514a59fb9\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.before_model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:120\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:120\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "807a55d64a29e811"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "b2da565d6e02b762",
+   "name": "ScriptedModel.chat",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428944507846,
+   "endTimeUnixNano": 1792821428944722271,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "model",
+    "traceloop.association.properties.ls_integration": "langchain_chat_model",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\", \"langchain-core\": \"1.7.0\", \"langchain\": \"1.4.7\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 123,
+    "traceloop.association.properties.langgraph_node": "model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:0c6194cb-1a5b-5c52-9dab-e0871eddc45b",
+    "traceloop.association.properties.checkpoint_ns": "model:0c6194cb-1a5b-5c52-9dab-e0871eddc45b",
+    "traceloop.association.properties.ls_provider": "scriptedmodel",
+    "traceloop.association.properties.ls_model_type": "chat",
+    "gen_ai.provider.name": "langchain",
+    "gen_ai.operation.name": "chat",
+    "gen_ai.request.model": "unknown",
+    "gen_ai.response.model": "unknown",
+    "gen_ai.system_instructions": "[{\"type\": \"text\", \"content\": \"## Skills System\\n\\nYou have access to a skills library that provides specialized capabilities and domain knowledge.\\n\\n**Skills Skills**: `/skills/` (higher priority)\\n\\nSources labeled \\\"Deepagents\\\" are specific to this agent tool; sources labeled \\\"Agents\\\" are shared across all agent tools on this machine.\\n\\n**Available Skills:**\\n\\n- **haiku-writer**: Write a haiku (5-7-5 syllables) on a topic the user names.\\n  -> Read `/skills/haiku-writer/SKILL.md` for full instructions\\n- **trip-plan**: Plan a short business trip itinerary.\\n  -> Read `/skills/trip-plan/SKILL.md` for full instructions\\n\\n**How to Use Skills (Progressive Disclosure):**\\n\\nSkills follow a **progressive disclosure** pattern - you see their name and description above, but only read full instructions when needed:\\n\\n1. **Recognize when a skill applies**: Check if the user's task matches a skill's description\\n2. **Read the skill's full instructions**: Use `read_file` on the path shown in the skill list above.\\n    Pass `limit=1000` since the default of 100 lines is too small for most skill files.\\n3. **Follow the skill's instructions**: SKILL.md contains step-by-step workflows, best practices, and examples\\n4. **Access supporting files**: Skills may include helper scripts, configs, or reference docs - use absolute paths\\n\\n**When to Use Skills:**\\n\\n- User's request matches a skill's domain (e.g., \\\"research X\\\" -> web-research skill)\\n- You need specialized knowledge or structured workflows\\n- A skill provides proven patterns for complex tasks\\n\\n**Executing Skill Scripts:**\\nSkills may contain Python scripts or other executable files. Always use absolute paths from the skill list.\\n\\n**Example Workflow:**\\n\\nUser: \\\"Can you research the latest developments in quantum computing?\\\"\\n\\n1. Check available skills -> See \\\"web-research\\\" skill with its path\\n2. Read the full skill file: `read_file(file_path=\\\"...\\\", limit=1000)`\\n3. Follow the skill's research workflow (search -> organize -> synthesize)\\n4. Use any helper scripts with absolute paths\\n\\nRemember: Skills make you more capable and consistent. When in doubt, check if a skill exists for the task!\"}]",
+    "gen_ai.input.messages": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"Write a haiku about autumn\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"PREAMBLE-T1: Let me read the haiku skill.\"}, {\"type\": \"tool_call\", \"id\": \"call_read_1\", \"name\": \"read_file\", \"arguments\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}}]}, {\"role\": \"tool\", \"parts\": [{\"type\": \"tool_call_response\", \"id\": \"call_read_1\", \"response\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\"}]}, {\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"thanks!\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"ANSWER-T2: You're welcome.\"}]}, {\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"Now a haiku about rain\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"PREAMBLE-T3: Let me read the haiku skill.\"}, {\"type\": \"tool_call\", \"id\": \"call_read_3\", \"name\": \"read_file\", \"arguments\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}}]}, {\"role\": \"tool\", \"parts\": [{\"type\": \"tool_call_response\", \"id\": \"call_read_3\", \"response\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\"}]}]",
+    "gen_ai.output.messages": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"FINAL-T3: Leaves drift on cold wind / ... / -- haiku-writer v1\"}], \"finish_reason\": \"\"}]",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "6432b2900651cb22"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "6432b2900651cb22",
+   "name": "execute_task model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428942491708,
+   "endTimeUnixNano": 1792821428944886897,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 123,
+    "traceloop.association.properties.langgraph_node": "model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "model:0c6194cb-1a5b-5c52-9dab-e0871eddc45b",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "model",
+    "gen_ai.task.id": "01a16c7c-02ce-7799-8cfb-d8e3855191ec",
+    "gen_ai.task.parent.id": "01a16c7c-02b7-7635-85ef-d61e24b20fd3",
+    "traceloop.entity.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"a6902edd-b38a-4f70-b031-bad2bb712f8d\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-028d-77b9-9715-97cb16c5dadf-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"thanks!\", \"type\": \"human\", \"id\": \"37612f9a-110d-44b8-a0fd-0a30e7c2a4dc\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T2: You're welcome.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02a8-7764-8b43-163e4e7d8163-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Now a haiku about rain\", \"type\": \"human\", \"id\": \"695f8f4d-2753-4236-9b2f-19b2afddaeff\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T3: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02c3-747d-9161-8fc75995e820-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_3\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"eb90595d-daee-40f7-80e2-f6806dbc44df\", \"tool_call_id\": \"call_read_3\", \"status\": \"success\"}}], \"pinned_skills\": [], \"skills_metadata\": [{\"name\": \"haiku-writer\", \"description\": \"Write a haiku (5-7-5 syllables) on a topic the user names.\", \"path\": \"/skills/haiku-writer/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}, {\"name\": \"trip-plan\", \"description\": \"Plan a short business trip itinerary.\", \"path\": \"/skills/trip-plan/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}], \"skills_load_errors\": [], \"_skill_tools_disclosed\": {}}, \"tags\": [\"graph:step:123\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 123, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:0c6194cb-1a5b-5c52-9dab-e0871eddc45b\"}, \"kwargs\": {\"name\": \"model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"a6902edd-b38a-4f70-b031-bad2bb712f8d\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-028d-77b9-9715-97cb16c5dadf-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"thanks!\", \"type\": \"human\", \"id\": \"37612f9a-110d-44b8-a0fd-0a30e7c2a4dc\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T2: You're welcome.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02a8-7764-8b43-163e4e7d8163-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Now a haiku about rain\", \"type\": \"human\", \"id\": \"695f8f4d-2753-4236-9b2f-19b2afddaeff\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T3: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02c3-747d-9161-8fc75995e820-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_3\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"eb90595d-daee-40f7-80e2-f6806dbc44df\", \"tool_call_id\": \"call_read_3\", \"status\": \"success\"}}], \"pinned_skills\": [], \"skills_metadata\": [{\"name\": \"haiku-writer\", \"description\": \"Write a haiku (5-7-5 syllables) on a topic the user names.\", \"path\": \"/skills/haiku-writer/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}, {\"name\": \"trip-plan\", \"description\": \"Plan a short business trip itinerary.\", \"path\": \"/skills/trip-plan/SKILL.md\", \"metadata\": {}, \"license\": null, \"compatibility\": null, \"allowed_tools\": []}], \"skills_load_errors\": [], \"_skill_tools_disclosed\": {}}, \"tags\": [\"graph:step:123\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 123, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:0c6194cb-1a5b-5c52-9dab-e0871eddc45b\"}, \"kwargs\": {\"name\": \"model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T3: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02d0-74eb-9f0a-3798160f9ac7-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}, {\"graph\": null, \"update\": {\"_skill_tools_disclosed\": {}}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:123\"]}}",
+    "gen_ai.task.output": "{\"outputs\": [{\"graph\": null, \"update\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T3: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02d0-74eb-9f0a-3798160f9ac7-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"resume\": null, \"goto\": []}, {\"graph\": null, \"update\": {\"_skill_tools_disclosed\": {}}, \"resume\": null, \"goto\": []}], \"kwargs\": {\"tags\": [\"graph:step:123\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "807a55d64a29e811"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "9cddb48d979f26a3",
+   "name": "execute_task SkillsMiddleware.after_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428946627875,
+   "endTimeUnixNano": 1792821428946636198,
+   "attributes": {
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.kind": "SkillsMiddleware",
+    "gen_ai.task.name": "SkillsMiddleware.after_model",
+    "gen_ai.provider.name": "langchain",
+    "gen_ai.task.status": "success",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "1776c04722f9ec36"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "1776c04722f9ec36",
+   "name": "execute_task SkillsMiddleware.after_model",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428946556013,
+   "endTimeUnixNano": 1792821428946671392,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 126,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.after_model",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.after_model"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.after_model"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.after_model:8a54bd4f-0a00-9177-5cc1-49c57cbc6a3f",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.after_model",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.after_model",
+    "gen_ai.task.id": "01a16c7c-02d2-753b-81ac-56c1014632e7",
+    "gen_ai.task.parent.id": "01a16c7c-02b7-7635-85ef-d61e24b20fd3",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:126\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 126, \"langgraph_node\": \"SkillsMiddleware.after_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_model:8a54bd4f-0a00-9177-5cc1-49c57cbc6a3f\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_model\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:126\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 126, \"langgraph_node\": \"SkillsMiddleware.after_model\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_model\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_model\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_model:8a54bd4f-0a00-9177-5cc1-49c57cbc6a3f\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_model\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:126\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:126\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "807a55d64a29e811"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "3058a6148e027616",
+   "name": "execute_task SkillsMiddleware.after_agent",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428951248248,
+   "endTimeUnixNano": 1792821428951257505,
+   "attributes": {
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.kind": "SkillsMiddleware",
+    "gen_ai.task.name": "SkillsMiddleware.after_agent",
+    "gen_ai.provider.name": "langchain",
+    "gen_ai.task.status": "success",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "fdbb4514913f6e33"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "fdbb4514913f6e33",
+   "name": "execute_task SkillsMiddleware.after_agent",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428951172547,
+   "endTimeUnixNano": 1792821428951296447,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.association.properties.langgraph_step": 134,
+    "traceloop.association.properties.langgraph_node": "SkillsMiddleware.after_agent",
+    "traceloop.association.properties.langgraph_triggers": [
+     "branch:to:SkillsMiddleware.after_agent"
+    ],
+    "traceloop.association.properties.langgraph_path": [
+     "__pregel_pull",
+     "SkillsMiddleware.after_agent"
+    ],
+    "traceloop.association.properties.langgraph_checkpoint_ns": "SkillsMiddleware.after_agent:471bff2e-4b30-91e0-d982-28b5c156e2ab",
+    "traceloop.span.kind": "task",
+    "traceloop.entity.name": "SkillsMiddleware.after_agent",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "execute_task",
+    "gen_ai.task.name": "SkillsMiddleware.after_agent",
+    "gen_ai.task.id": "01a16c7c-02d7-735d-bbaa-fe67d80800da",
+    "gen_ai.task.parent.id": "01a16c7c-02b7-7635-85ef-d61e24b20fd3",
+    "traceloop.entity.input": "{\"inputs\": {}, \"tags\": [\"graph:step:134\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 134, \"langgraph_node\": \"SkillsMiddleware.after_agent\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_agent\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_agent\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_agent:471bff2e-4b30-91e0-d982-28b5c156e2ab\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_agent\"}}",
+    "gen_ai.task.input": "{\"inputs\": {}, \"tags\": [\"graph:step:134\"], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\", \"langgraph_step\": 134, \"langgraph_node\": \"SkillsMiddleware.after_agent\", \"langgraph_triggers\": [\"branch:to:SkillsMiddleware.after_agent\"], \"langgraph_path\": [\"__pregel_pull\", \"SkillsMiddleware.after_agent\"], \"langgraph_checkpoint_ns\": \"SkillsMiddleware.after_agent:471bff2e-4b30-91e0-d982-28b5c156e2ab\"}, \"kwargs\": {\"name\": \"SkillsMiddleware.after_agent\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:134\"]}}",
+    "gen_ai.task.output": "{\"outputs\": null, \"kwargs\": {\"tags\": [\"graph:step:134\"]}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "807a55d64a29e811"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "807a55d64a29e811",
+   "name": "haiku_agent.workflow",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428919410779,
+   "endTimeUnixNano": 1792821428958589490,
+   "attributes": {
+    "traceloop.workflow.name": "haiku_agent",
+    "traceloop.entity.path": "",
+    "traceloop.association.properties.ls_integration": "deepagents",
+    "traceloop.association.properties.lc_agent_name": "haiku_agent",
+    "traceloop.association.properties.lc_versions": "{\"deepagents\": \"0.7.32\"}",
+    "traceloop.association.properties.thread_id": "r17bf7-da",
+    "traceloop.span.kind": "workflow",
+    "traceloop.entity.name": "haiku_agent",
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "invoke_agent",
+    "gen_ai.agent.name": "haiku_agent",
+    "gen_ai.agent.id": "01a16c7c-02b7-7635-85ef-d61e24b20fd3",
+    "traceloop.entity.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Now a haiku about rain\", \"type\": \"human\"}}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\"}, \"kwargs\": {\"name\": \"haiku_agent\"}}",
+    "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Now a haiku about rain\", \"type\": \"human\"}}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"haiku_agent\", \"lc_versions\": {\"deepagents\": \"0.7.32\"}, \"thread_id\": \"r17bf7-da\"}, \"kwargs\": {\"name\": \"haiku_agent\"}}",
+    "gen_ai.task.status": "success",
+    "traceloop.entity.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"a6902edd-b38a-4f70-b031-bad2bb712f8d\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-028d-77b9-9715-97cb16c5dadf-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"thanks!\", \"type\": \"human\", \"id\": \"37612f9a-110d-44b8-a0fd-0a30e7c2a4dc\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T2: You're welcome.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02a8-7764-8b43-163e4e7d8163-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Now a haiku about rain\", \"type\": \"human\", \"id\": \"695f8f4d-2753-4236-9b2f-19b2afddaeff\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T3: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02c3-747d-9161-8fc75995e820-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_3\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"eb90595d-daee-40f7-80e2-f6806dbc44df\", \"tool_call_id\": \"call_read_3\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T3: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02d0-74eb-9f0a-3798160f9ac7-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"kwargs\": {\"tags\": []}}",
+    "gen_ai.task.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Write a haiku about autumn\", \"type\": \"human\", \"id\": \"432b5054-57bc-43d9-856e-e2b47c5c3bde\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T1: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-027f-746c-b97a-afdd86451409-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_1\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"a6902edd-b38a-4f70-b031-bad2bb712f8d\", \"tool_call_id\": \"call_read_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T1: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-028d-77b9-9715-97cb16c5dadf-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"thanks!\", \"type\": \"human\", \"id\": \"37612f9a-110d-44b8-a0fd-0a30e7c2a4dc\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"ANSWER-T2: You're welcome.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02a8-7764-8b43-163e4e7d8163-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Now a haiku about rain\", \"type\": \"human\", \"id\": \"695f8f4d-2753-4236-9b2f-19b2afddaeff\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"PREAMBLE-T3: Let me read the haiku skill.\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02c3-747d-9161-8fc75995e820-0\", \"tool_calls\": [{\"name\": \"read_file\", \"args\": {\"file_path\": \"/skills/haiku-writer/SKILL.md\", \"limit\": 1000}, \"id\": \"call_read_3\", \"type\": \"tool_call\"}], \"invalid_tool_calls\": []}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"@@ lines 1-9 of 9 @@\\n---\\nname: haiku-writer\\ndescription: Write a haiku (5-7-5 syllables) on a topic the user names.\\n---\\n# Haiku writer\\n\\n1. Ask nothing; pick the season word from the topic.\\n2. Write exactly three lines: 5, 7 and 5 syllables.\\n3. End with the line \\\"-- haiku-writer v1\\\".\", \"type\": \"tool\", \"name\": \"read_file\", \"id\": \"eb90595d-daee-40f7-80e2-f6806dbc44df\", \"tool_call_id\": \"call_read_3\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"FINAL-T3: Leaves drift on cold wind / ... / -- haiku-writer v1\", \"type\": \"ai\", \"name\": \"haiku_agent\", \"id\": \"lc_run--01a16c7c-02d0-74eb-9f0a-3798160f9ac7-0\", \"tool_calls\": [], \"invalid_tool_calls\": []}}]}, \"kwargs\": {\"tags\": []}}",
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   },
+   "parentSpanId": "962d71eaa9b86d99"
+  },
+  {
+   "traceId": "3d4017360e4b33f23a5f9e0b9e846538",
+   "spanId": "962d71eaa9b86d99",
+   "name": "invoke_agent haiku_agent",
+   "kind": "INTERNAL",
+   "scope": {
+    "name": "opentelemetry.instrumentation.langchain",
+    "version": "0.62.4"
+   },
+   "startTimeUnixNano": 1792821428915611442,
+   "endTimeUnixNano": 1792821428958654278,
+   "attributes": {
+    "gen_ai.provider.name": "langgraph",
+    "gen_ai.operation.name": "invoke_agent",
+    "gen_ai.agent.name": "haiku_agent",
+    "gen_ai.conversation.id": "r17bf7-da",
+    "gen_ai.workflow.nodes": [
+     "model",
+     "tools",
+     "FilesystemMiddleware.before_agent",
+     "FilesystemMiddleware.before_model",
+     "FilesystemMiddleware.after_model",
+     "FilesystemMiddleware.after_agent",
+     "SubAgentMiddleware.before_agent",
+     "SubAgentMiddleware.before_model",
+     "SubAgentMiddleware.after_model",
+     "SubAgentMiddleware.after_agent",
+     "_ParentNotifierMiddleware.before_agent",
+     "_ParentNotifierMiddleware.before_model",
+     "_ParentNotifierMiddleware.after_model",
+     "_ParentNotifierMiddleware.after_agent",
+     "SummarizationMiddleware.before_agent",
+     "SummarizationMiddleware.before_model",
+     "SummarizationMiddleware.after_model",
+     "SummarizationMiddleware.after_agent",
+     "PatchToolCallsMiddleware.before_agent",
+     "PatchToolCallsMiddleware.before_model",
+     "PatchToolCallsMiddleware.after_model",
+     "PatchToolCallsMiddleware.after_agent",
+     "SkillsMiddleware.before_agent",
+     "SkillsMiddleware.before_model",
+     "SkillsMiddleware.after_model",
+     "SkillsMiddleware.after_agent",
+     "AnthropicPromptCachingMiddleware.before_agent",
+     "AnthropicPromptCachingMiddleware.before_model",
+     "AnthropicPromptCachingMiddleware.after_model",
+     "AnthropicPromptCachingMiddleware.after_agent",
+     "UnsupportedContentMiddleware.before_agent",
+     "UnsupportedContentMiddleware.before_model",
+     "UnsupportedContentMiddleware.after_model",
+     "UnsupportedContentMiddleware.after_agent"
+    ],
+    "gen_ai.workflow.edges": [
+     "AnthropicPromptCachingMiddleware.after_agent -> SkillsMiddleware.after_agent",
+     "AnthropicPromptCachingMiddleware.after_model -> SkillsMiddleware.after_model",
+     "AnthropicPromptCachingMiddleware.before_agent -> UnsupportedContentMiddleware.before_agent",
+     "AnthropicPromptCachingMiddleware.before_model -> UnsupportedContentMiddleware.before_model",
+     "FilesystemMiddleware.after_model -> FilesystemMiddleware.before_model",
+     "FilesystemMiddleware.after_model -> UnsupportedContentMiddleware.after_agent",
+     "FilesystemMiddleware.after_model -> tools",
+     "FilesystemMiddleware.before_agent -> SubAgentMiddleware.before_agent",
+     "FilesystemMiddleware.before_model -> SubAgentMiddleware.before_model",
+     "PatchToolCallsMiddleware.after_agent -> SummarizationMiddleware.after_agent",
+     "PatchToolCallsMiddleware.after_model -> SummarizationMiddleware.after_model",
+     "PatchToolCallsMiddleware.before_agent -> SkillsMiddleware.before_agent",
+     "PatchToolCallsMiddleware.before_model -> SkillsMiddleware.before_model",
+     "SkillsMiddleware.after_agent -> PatchToolCallsMiddleware.after_agent",
+     "SkillsMiddleware.after_model -> PatchToolCallsMiddleware.after_model",
+     "SkillsMiddleware.before_agent -> AnthropicPromptCachingMiddleware.before_agent",
+     "SkillsMiddleware.before_model -> AnthropicPromptCachingMiddleware.before_model",
+     "SubAgentMiddleware.after_agent -> FilesystemMiddleware.after_agent",
+     "SubAgentMiddleware.after_model -> FilesystemMiddleware.after_model",
+     "SubAgentMiddleware.before_agent -> _ParentNotifierMiddleware.before_agent",
+     "SubAgentMiddleware.before_model -> _ParentNotifierMiddleware.before_model",
+     "SummarizationMiddleware.after_agent -> _ParentNotifierMiddleware.after_agent",
+     "SummarizationMiddleware.after_model -> _ParentNotifierMiddleware.after_model",
+     "SummarizationMiddleware.before_agent -> PatchToolCallsMiddleware.before_agent",
+     "SummarizationMiddleware.before_model -> PatchToolCallsMiddleware.before_model",
+     "UnsupportedContentMiddleware.after_agent -> AnthropicPromptCachingMiddleware.after_agent",
+     "UnsupportedContentMiddleware.after_model -> AnthropicPromptCachingMiddleware.after_model",
+     "UnsupportedContentMiddleware.before_agent -> FilesystemMiddleware.before_model",
+     "UnsupportedContentMiddleware.before_model -> model",
+     "_ParentNotifierMiddleware.after_agent -> SubAgentMiddleware.after_agent",
+     "_ParentNotifierMiddleware.after_model -> SubAgentMiddleware.after_model",
+     "_ParentNotifierMiddleware.before_agent -> SummarizationMiddleware.before_agent",
+     "_ParentNotifierMiddleware.before_model -> SummarizationMiddleware.before_model",
+     "model -> UnsupportedContentMiddleware.after_model",
+     "tools -> FilesystemMiddleware.before_model"
+    ],
+    "session.id": "r17bf7-deepagents-session-0001"
+   },
+   "status": {
+    "code": "UNSET"
+   }
+  }
+ ]
+}

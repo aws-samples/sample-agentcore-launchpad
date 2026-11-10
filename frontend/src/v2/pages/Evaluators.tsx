@@ -14,12 +14,18 @@ import {
   type ScalePoint,
 } from "../../lib/api";
 import {
+  EVALUATOR_NAME_RE,
   evaluatorLabel,
   type EvaluatorLevel,
   JUDGE_MODEL_OPTIONS,
   LEVEL_PLACEHOLDERS,
 } from "../../lib/evaluators";
+import { useCodeEvaluatorsEnabled } from "../../lib/capabilities";
+import { adoptModelDefault, useModelDefaultsArrival } from "../../lib/model-defaults";
+import { isModelAvailable, modelUnavailableReason } from "../../lib/models";
+import { creatorLabel } from "../format";
 import { useLoad, usePaged, useV2Toast } from "../hooks";
+import { useMayMutate } from "../ownership";
 import {
   Alert,
   Button,
@@ -42,7 +48,6 @@ import {
 } from "../ui";
 
 const LEVELS: EvaluatorLevel[] = ["SESSION", "TRACE", "TOOL_CALL"];
-const NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,47}$/;
 const PLACEHOLDER_RE = /\{[a-zA-Z_][a-zA-Z0-9_]*\}/;
 const DEFAULT_SCALE: ScalePoint[] = [
   { value: 1, label: "pass", definition: "meets the instruction" },
@@ -65,6 +70,7 @@ function EvaluatorList() {
   const [level, setLevel] = useState("");
   const [q, setQ] = useState("");
   const [deleting, setDeleting] = useState<EvaluatorRow | null>(null);
+  const mayMutate = useMayMutate(); // creator-or-admin on edit / delete (server rule `evaluator.forbidden`, r13-g)
   const [busy, setBusy] = useState(false);
 
   const rows = useMemo(() => {
@@ -102,7 +108,10 @@ function EvaluatorList() {
           <LinkButton onClick={() => setParams({ view: "detail", id: row.id })}>
             {row.source === "custom" ? (row.name ?? row.id) : evaluatorLabel(t, row.id)}
           </LinkButton>
-          <span className="sub mono">{row.id}</span>
+          <span className="sub mono">
+            {row.id}
+            {row.source === "custom" && row.version != null ? ` · v${row.version}` : ""}
+          </span>
         </>
       ),
     },
@@ -124,6 +133,7 @@ function EvaluatorList() {
       render: (row) =>
         row.requires_ground_truth ? <Tag tone="orange">{t("v2.evaluators.needsGt")}</Tag> : <span className="v2-muted">{t("v2.common.no")}</span>,
     },
+    { key: "creator", title: t("v2.common.creator"), render: (row) => creatorLabel(row) },
     {
       key: "ops",
       title: t("v2.common.actions"),
@@ -131,7 +141,7 @@ function EvaluatorList() {
       render: (row) => (
         <div className="v2-actions">
           <LinkButton onClick={() => setParams({ view: "detail", id: row.id })}>{t("v2.common.view")}</LinkButton>
-          {row.source === "custom" && (
+          {row.source === "custom" && mayMutate(row) && (
             <>
               <LinkButton onClick={() => setParams({ view: "edit", id: row.id })}>{t("v2.common.edit")}</LinkButton>
               <LinkButton danger onClick={() => setDeleting(row)}>
@@ -205,14 +215,22 @@ function EvaluatorList() {
 function EvaluatorDetailView({ id }: { id: string }) {
   const { t } = useTranslation();
   const [, setParams] = useSearchParams();
+  const mayMutate = useMayMutate();
   const managed = id.startsWith("Builtin.") || id.startsWith("ThirdParty.");
   const list = useLoad(() => api.v2Evaluators(), "evaluators");
   const detail = useLoad<EvaluatorDetail | null>(
     () => (managed ? Promise.resolve(null) : api.v2Evaluator(id)),
     `evaluator:${id}`,
   );
+  // N17-obs434: a built-in's version is the library release — only the version is read
+  // from its detail (the managed page renders nothing else of it)
+  const builtinVersion = useLoad(
+    () => (id.startsWith("Builtin.") ? api.v2Evaluator(id).then((e) => e.version ?? null) : Promise.resolve(null)),
+    `evaluator-version:${id}`,
+  );
   const row = list.data?.evaluators.find((e) => e.id === id) ?? null;
   const d = detail.data;
+  const version = d?.version ?? builtinVersion.data ?? null;
   const name = managed ? evaluatorLabel(t, id) : (d?.name ?? row?.name ?? id);
 
   return (
@@ -221,13 +239,16 @@ function EvaluatorDetailView({ id }: { id: string }) {
         title={name}
         onBack={() => setParams({})}
         end={
-          row?.source === "custom" ? (
+          row?.source === "custom" && mayMutate(row) ? (
             <Button kind="primary" onClick={() => setParams({ view: "edit", id })}>
               {t("v2.common.edit")}
             </Button>
           ) : undefined
         }
       />
+      {row?.source === "custom" && !mayMutate(row) && (
+        <Alert data-testid="v2-evaluator-creator-only">{t("v2.common.creatorOnlyActions", { name: creatorLabel(row) })}</Alert>
+      )}
       {detail.loading || list.loading ? (
         <Spin />
       ) : detail.error ? (
@@ -239,6 +260,17 @@ function EvaluatorDetailView({ id }: { id: string }) {
               items={[
                 { label: t("v2.evaluators.colName"), value: name },
                 { label: "ID", value: <span className="mono">{id}</span> },
+                {
+                  label: t("v2.evaluators.version"),
+                  value:
+                    version == null ? (
+                      "—"
+                    ) : typeof version === "number" ? (
+                      <span data-testid="v2-evaluator-version">v{version}</span>
+                    ) : (
+                      <span data-testid="v2-evaluator-version">{t("v2.evaluators.versionLibrary", { release: version })}</span>
+                    ),
+                },
                 {
                   label: t("v2.evaluators.colSource"),
                   value: row ? <Tag tone={sourceTone(row.source)}>{t(`v2.evaluators.source.${row.source}`)}</Tag> : "—",
@@ -253,6 +285,7 @@ function EvaluatorDetailView({ id }: { id: string }) {
                 },
                 { label: t("v2.evaluators.model"), value: d?.model_id ? <span className="mono">{d.model_id}</span> : "—" },
                 { label: t("v2.evaluators.description"), value: d?.description || "—" },
+                { label: t("v2.common.creator"), value: creatorLabel({ created_by_name: d?.created_by_name ?? row?.created_by_name }) },
                 {
                   label: t("v2.evaluators.colGroundTruth"),
                   value: row?.requires_ground_truth ? t("v2.evaluators.needsGt") : t("v2.common.no"),
@@ -328,6 +361,19 @@ const EMPTY: Draft = {
   rating_scale: DEFAULT_SCALE,
 };
 
+/** N17-obs434: the save confirmation says whether the edit bumped the version (the reply's
+ *  version vs the one the form was opened on); a reply without one keeps the plain text. */
+function savedMessage(
+  t: (k: string, o?: Record<string, unknown>) => string,
+  before: EvaluatorDetail["version"],
+  after: EvaluatorDetail["version"],
+): string {
+  if (typeof before !== "number" || typeof after !== "number") return t("v2.evaluators.saved");
+  return after > before
+    ? t("v2.evaluators.savedBumped", { from: before, to: after })
+    : t("v2.evaluators.savedSameVersion", { version: after });
+}
+
 function draftFrom(d: EvaluatorDetail): Draft {
   return {
     definition: d.definition,
@@ -365,7 +411,7 @@ function bodyFrom(draft: Draft): EvaluatorUpdateBody {
 }
 
 function validate(draft: Draft, editing: boolean, t: (k: string) => string): string | null {
-  if (!editing && !NAME_RE.test(draft.name)) return t("v2.evaluators.errName");
+  if (!editing && !EVALUATOR_NAME_RE.test(draft.name)) return t("v2.evaluators.errName");
   if (draft.definition === "judge") {
     if (draft.instructions.trim().length < 10) return t("v2.evaluators.errRubric");
     if (!PLACEHOLDER_RE.test(draft.instructions)) return t("v2.evaluators.errPlaceholder");
@@ -391,9 +437,23 @@ function EvaluatorEditor({ id }: { id: string | null }) {
   const [draft, setDraft] = useState<Draft | null>(editing ? null : EMPTY);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // N12-obs41: the Lambda "Code" definition is a workspace opt-in
+  // (Settings.eval_code_evaluators_enabled) — offered only when the server says so;
+  // the backend refuses it otherwise (403 evaluation.code_evaluators_disabled)
+  const codeEnabled = useCodeEvaluatorsEnabled();
 
   // seed the edit form once the evaluator arrives
   if (editing && draft === null && detail.data) setDraft(draftFrom(detail.data));
+  // r15-e: a NEW evaluator seeds the static judge default and adopts the configured `judge`
+  // role when `GET /api/model-defaults` answers; a stored evaluator keeps its model
+  useModelDefaultsArrival((defaults) => {
+    if (editing) return;
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const next = adoptModelDefault(prev.model_id, EMPTY.model_id, defaults.judge);
+      return next === prev.model_id ? prev : { ...prev, model_id: next };
+    });
+  });
 
   const bases = (catalog.data?.evaluators ?? []).filter((e) => e.source !== "custom");
 
@@ -420,7 +480,9 @@ function EvaluatorEditor({ id }: { id: string | null }) {
         "success",
         reply.model_fallback
           ? t("v2.evaluators.modelFallback", { requested: reply.model_fallback.requested, used: reply.model_fallback.used })
-          : t(id ? "v2.evaluators.saved" : "v2.evaluators.created"),
+          : id
+            ? savedMessage(t, detail.data?.version, (reply as EvaluatorDetail).version)
+            : t("v2.evaluators.created"),
       );
       setParams({ view: "detail", id: id ?? (reply as { evaluator_id: string }).evaluator_id });
     } catch (err) {
@@ -475,17 +537,21 @@ function EvaluatorEditor({ id }: { id: string | null }) {
         <div className="v2-form cols-2">
           <Field label={t("v2.evaluators.definitionLabel")} full>
             <div className="v2-options">
-              {(["judge", "derived", "code"] as const).map((def) => (
-                <OptionCard
-                  key={def}
-                  title={t(`v2.evaluators.definition.${def}`)}
-                  desc={t(`v2.evaluators.definitionDesc.${def}`)}
-                  on={draft.definition === def}
-                  disabled={editing && draft.definition !== def}
-                  onClick={() => set({ definition: def })}
-                  testId={`v2-evaluator-def-${def}`}
-                />
-              ))}
+              {(["judge", "derived", "code"] as const).map((def) => {
+                const codeOff = def === "code" && !codeEnabled && draft.definition !== "code";
+                return (
+                  <OptionCard
+                    key={def}
+                    title={t(`v2.evaluators.definition.${def}`)}
+                    desc={t(`v2.evaluators.definitionDesc.${def}`)}
+                    on={draft.definition === def}
+                    disabled={(editing && draft.definition !== def) || codeOff}
+                    tip={codeOff ? t("v2.evaluators.codeDisabledTip") : undefined}
+                    onClick={() => set({ definition: def })}
+                    testId={`v2-evaluator-def-${def}`}
+                  />
+                );
+              })}
             </div>
           </Field>
           <Field label={t("v2.evaluators.colName")} required={!editing} hint={t("v2.evaluators.nameHint")}>
@@ -514,9 +580,24 @@ function EvaluatorEditor({ id }: { id: string | null }) {
             <Field label={t("v2.evaluators.model")} required hint={t("v2.evaluators.modelHint")}>
               <Select
                 value={draft.model_id}
-                options={(JUDGE_MODEL_OPTIONS.includes(draft.model_id) ? JUDGE_MODEL_OPTIONS : [draft.model_id, ...JUDGE_MODEL_OPTIONS]).map((m) => ({ value: m, label: m }))}
+                options={(JUDGE_MODEL_OPTIONS.includes(draft.model_id) ? JUDGE_MODEL_OPTIONS : [draft.model_id, ...JUDGE_MODEL_OPTIONS]).map((m) => {
+                  // N-R6-obs1: a judge model of an unconfigured provider is disabled, tooltip = SSM parameter
+                  const reason = modelUnavailableReason(m);
+                  return {
+                    value: m,
+                    label: isModelAvailable(m) ? m : `${m} · ${t("models.unavailableShort")}`,
+                    disabled: !isModelAvailable(m),
+                    title: reason ? t("models.unavailable", reason) : undefined,
+                  };
+                })}
                 onChange={(v) => set({ model_id: v })}
               />
+              {/* N17-obs252: a new evaluator's model comes from the `judge` model role */}
+              {!editing && (
+                <p className="v2-muted" style={{ marginTop: 4 }} data-testid="v2-evaluators-model-role-hint">
+                  {t("v2.evaluators.modelRoleHint")}
+                </p>
+              )}
             </Field>
           )}
           {draft.definition === "derived" && (
@@ -537,7 +618,7 @@ function EvaluatorEditor({ id }: { id: string | null }) {
                   className="v2-input mono"
                   value={draft.lambda_arn}
                   onChange={(e) => set({ lambda_arn: e.target.value })}
-                  placeholder="arn:aws:lambda:us-west-2:123456789012:function:my-evaluator"
+                  placeholder="arn:<partition>:lambda:<region>:<account>:function:<name>"
                 />
               </Field>
               <Field label={t("v2.evaluators.timeout")}>

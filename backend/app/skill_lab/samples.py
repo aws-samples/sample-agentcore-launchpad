@@ -122,6 +122,35 @@ def _with_frontmatter(skill_md: str, name: str, description: str) -> str:
     )
 
 
+@dataclass(frozen=True)
+class SampleSeedResult:
+    """What one seeding pass did (``*_created``) and what the workspace holds after
+    it (``tasksets_present``, read back from the ledger), against the vendored sample
+    count — so a caller can tell "nothing new this run" from "every task set failed"
+    (N11-r5-bug3: a cold hub seeded 3 skills and 0 task sets and the stage line looked
+    like a partial success)."""
+
+    skills_created: int = 0
+    tasksets_created: int = 0
+    tasksets_present: int = 0
+    skills_expected: int = len(SAMPLE_SKILLS)
+    tasksets_expected: int = len(SAMPLE_TASKSETS)
+    available: bool = True
+
+    @property
+    def tasksets_missing(self) -> int:
+        return max(self.tasksets_expected - self.tasksets_present, 0)
+
+    @property
+    def detail(self) -> str:
+        if not self.available:
+            return "samples unavailable"
+        return (
+            f"{self.skills_created} sample skills · "
+            f"{self.tasksets_created} sample task sets seeded"
+        )
+
+
 def _seed_skills(workspace: Any, log: Callable[[str], None]) -> int:
     import shutil
     from tempfile import TemporaryDirectory
@@ -214,13 +243,38 @@ def _seed_tasksets(db: Any, workspace_id: str, log: Callable[[str], None]) -> in
     return seeded
 
 
+def sample_tasksets_present(db: Any, workspace_id: str) -> int:
+    """How many of the vendored sample task sets this workspace holds right now."""
+    names = [sample.name for sample in SAMPLE_TASKSETS]
+    return len(
+        db.scalars(
+            select(SkillLabTaskset.id).where(
+                SkillLabTaskset.workspace_id == workspace_id,
+                SkillLabTaskset.name.in_(names),
+            )
+        ).all()
+    )
+
+
+def seed_skill_lab_samples(
+    db: Any, workspace_id: str, workspace: Any, log: Callable[[str], None] = lambda _m: None
+) -> SampleSeedResult:
+    """Seed the demo samples for one workspace and report what was created and what
+    the ledger holds afterwards (see ``SampleSeedResult``)."""
+    if not DEMO_ROOT.is_dir():
+        log("vendored demo samples missing — skipping sample seeding")
+        return SampleSeedResult(available=False)
+    skills = _seed_skills(workspace, log)
+    tasksets = _seed_tasksets(db, workspace_id, log)
+    return SampleSeedResult(
+        skills_created=skills,
+        tasksets_created=tasksets,
+        tasksets_present=sample_tasksets_present(db, workspace_id),
+    )
+
+
 def ensure_skill_lab_samples(
     db: Any, workspace_id: str, workspace: Any, log: Callable[[str], None] = lambda _m: None
 ) -> str:
     """Seed the demo samples for one workspace; returns a short stage detail."""
-    if not DEMO_ROOT.is_dir():
-        log("vendored demo samples missing — skipping sample seeding")
-        return "samples unavailable"
-    skills = _seed_skills(workspace, log)
-    tasksets = _seed_tasksets(db, workspace_id, log)
-    return f"{skills} sample skills · {tasksets} sample task sets seeded"
+    return seed_skill_lab_samples(db, workspace_id, workspace, log=log).detail

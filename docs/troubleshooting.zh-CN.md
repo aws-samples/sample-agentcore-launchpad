@@ -18,6 +18,38 @@ English: [troubleshooting.md](troubleshooting.md)
 - **`config/launchpad.yaml` 已 gitignore。** 它包含账号 id 与演示凭证,因此从不
   提交。若缺失(全新 clone,或你删了它),重新运行 `make bootstrap`——它是幂等的,
   会从既有资源重写该文件。
+- **登录返回 `429 auth.locked` / `auth.rate_limited`。** 控制台登录保护已触发（r12-g）：
+  `auth.locked` 表示所提交的账户名连续 5 次密码错误，被锁定 60 秒，之后每再失败一次翻倍，
+  上限 30 分钟——等待 `Retry-After` 到期，或由管理员在"用户管理"页点击"解锁"
+  （`PATCH /api/users/{id} {"unlock": true}`）。`auth.rate_limited` 表示该源 IP 在 5 分钟内
+  登录失败超过 20 次（或一小时内注册失败超过 10 次）且本次请求也失败了——正确密码、有效
+  密钥或有效注册从不会被该窗口拒绝。在 EIP 路径上源 IP 是真实客户端（nginx 转发）；在控制台
+  NLB 之后所有用户共用 NLB 的私有 IP，一个失控的客户端会让所有人的*失败*请求一段时间内都
+  返回 429——应调大
+  `LAUNCHPAD_AUTH_LOGIN_IP_LIMIT` / `LAUNCHPAD_AUTH_REGISTER_IP_LIMIT`（或设为 `0`），而不是
+  削弱按账户的锁定。该状态在进程内：重启后端会清空所有锁定，包括内置 admin 的。每次锁定都
+  会在 `journalctl -u launchpad-backend` 的 `launchpad.auth` 记录一行 `WARNING`。`/v1` 上
+  的同一 429 表示该 IP 在 5 分钟内发送了 20 次无效 `X-Api-Key`。
+- **部署后所有人被注销。** 自 r12-g 起会话 cookie 由 `data/session_secret`（或
+  `LAUNCHPAD_SESSION_SECRET`）中的随机密钥签名，不再使用 admin 密码。升级后首次启动会生成
+  该密钥并一次性注销所有既有会话（`launchpad.auth` 会有一行 `WARNING`）。修改或重置密码仍会
+  结束该账户的其他会话（cookie 中的会话纪元；admin 的纪元跟随 `LAUNCHPAD_AUTH_PASSWORD`）。
+  要注销*所有人*，请轮换密钥：删除 `data/session_secret`（或设置新的
+  `LAUNCHPAD_SESSION_SECRET`）后重启后端。
+- **admin 账户不会被锁定，而成员会。** 这是设计如此：内置 `LAUNCHPAD_AUTH_USERNAME` 是应急
+  凭证，不受按账户名锁定约束（它依靠强配置密码与按 IP 窗口）。请为它设置一个足够长的随机密码。
+- **注册时以前能用的密码现在报 `auth.weak_password`。** 策略现为 12 个字符以上、不能与
+  用户名/邮箱相同、不能是常见密码（见 `detail.reason`）；既有账户在下次改密前不受影响。
+  `LAUNCHPAD_AUTH_PASSWORD_MIN_LENGTH` 可调整长度（下限 6）。觉得过严？设置
+  `LAUNCHPAD_AUTH_PASSWORD_POLICY=relaxed` 即只保留长度规则；`GET /api/auth/status` 的
+  `password_policy` 显示当前生效的策略。
+- **注册"成功"但待审批队列里没有它。** 审批模式下，已占用的用户名或邮箱会返回与待审批注册
+  完全一致的响应（不泄露账户存在性）；冲突以 `INFO` 记录在 `launchpad.auth`。请让用户换一个
+  名字注册。`409 auth.registration_backlog` 表示已有 `LAUNCHPAD_AUTH_REGISTRATION_PENDING_MAX`
+  （50）个账户等待审核——请在用户管理中批准或拒绝一部分。
+- **用户管理页返回 `409 users.last_admin` / `users.self_delete`。** 你正在降级、禁用、设为
+  过期或删除最后一个有效的管理员*账户*（配置文件中的内置 admin 不计入），或在删除自己的
+  账户。请先将另一个账户提升为管理员，再重试。
 - **uv 管理的 venv 需要 `uv run`。** 后端/基础设施命令请通过 `uv run …` 运行
   (如 Makefile 所示)。zip package 阶段还需要 venv 内的 `pip`——uv venv 不自带,
   因此它被声明为显式依赖。
@@ -30,6 +62,33 @@ English: [troubleshooting.md](troubleshooting.md)
 - **容器镜像需要非 root 用户。** Claude CLI 的 `bypassPermissions` 模式拒绝以
   root 运行,因此方式A镜像以非 root 用户构建并运行——你自定义 Dockerfile 时请保留
   这一点。
+- **架构师助手的一轮对话以 `harness.incomplete_response`（"the agent run ended
+  without a complete text response"）失败。** 现在它只表示字面含义：Harness 流结束时
+  没有任何回复文本（为空，或在工具步骤后被截断），且没有错误帧。工具步骤之后
+  Harness 侧的失败（模型 `ReadTimeoutError`、`ModelThrottledException`、
+  `ContextWindowOverflowException`、`ValidationException`、bearer 过期）改为从
+  AgentCore SDK 的终止错误帧中呈现：该轮会在新会话中重放一次（先等待 15 秒，
+  `LAUNCHPAD_ASSISTANT_REPLAY_BACKOFF_SECONDS`，避免再次撞上同一个 5xx），`retry` 的
+  reason 带有原因；第二次失败时转录中显示 `runtime returned error: <error_type>: …`
+  （`assistant_turn_events` 日志中带 `detail.error_type`）。cn/r11-j 之前该帧被跳过，
+  所有此类失败都显示为响应不完整。
+- **评估运行在一次 `internalServerException` 之后以"完成但有错误"结束（评审记录上的
+  `EventStreamError`，或某个场景 `failed after 1/3 attempts: RuntimeError: runtime returned
+  error: An error occurred (internalServerException)…`）。** 自 cn/r12-f 起，评估 worker
+  对场景重放和评审调用都会在瞬时上游错误（与架构师重放相同的判定：5xx / 限流 / 读超时，
+  `runtime_invoke.is_upstream_transient`）上重试，最多 3 次尝试，之间等待
+  `LAUNCHPAD_EVAL_TRANSIENT_RETRY_BACKOFF_SECONDS`（默认 `5,15`）。仍然失败的记录会列出
+  每一次尝试：重放失败显示为 `failed after 3/3 attempts: … (retried after: #1 …, waited 5 s;
+  #2 …)`，评审失败显示为 `judge <id> errored on every one of 3 attempts (transient upstream;
+  waited 5 s, 15 s): EventStreamError: …`（记录的 `error_type` 为原因的类名）。等待列表在
+  安装 / 修复 `launchpad-eval-worker` 预置时写入 worker；进程内执行器和 SCORE NOW 实时读取。
+  若某条记录在此类错误上只尝试了一次就报错，说明 worker 早于 cn/r12-f——请执行修复。
+- **主机更新后控制台页面空白，或某个功能（Monaco 编辑器、浏览器实时画面、视频播放）失效，
+  DevTools 显示 `Refused to load … Content Security Policy`。** nginx 现在对每个响应都下发强制
+  CSP 及其他浏览器安全头（`infra/ec2/nginx-site.sh`，2026-10-17 安全扫描）。新增的第三方 CDN、
+  iframe 或非 `wss:` 的 WebSocket 需要把来源加进该文件的指令表（`infra/tests/test_nginx_site.py`
+  会钉住它），再运行 `scripts/host-update.sh`。逐条指令的理由与回滚见
+  `docs/cn/interfaces/deploy.md` §11。
 
 ## Registry
 
@@ -68,6 +127,18 @@ English: [troubleshooting.md](troubleshooting.md)
 - **Harness Agent 不参与 batch evaluation。** Managed-harness Agent 不暴露用于
   trace 范围限定的 span service name,因此 batch eval 面向 runtime 型 Agent
   (`zip_runtime` / `studio` / `container`)。UI 会说明这一限制。
+- **cn-northwest-1 中的 TypeScript(Node.js)Agent 通过平台的导出层获得 trace
+  (N17-obs459 / N17-obs465)。** ADOT Node(<= 0.13.0)无法在中国区为 trace 导出签名，因此对 Node
+  容器 Agent，部署会在你的镜像之上加上平台的中国区 trace 导出层(默认开启；向导中的开关 /
+  `byoc.cn_trace_exporter: false` 可关闭)。Agent 详情会显示你的镜像、实际部署的镜像以及 **Trace**
+  徽标。运行时日志在启动时打印一行，其状态为：`attached`(导出已为 `.amazonaws.com.cn` 端点签名)、
+  `native`(你的 ADOT 版本自身已支持签名——导出层不做任何事)、`skipped (no ADOT Node in the app)`
+  (请添加 `@aws/aws-distro-opentelemetry-node-autoinstrumentation` 并以 `--require …/register` 启动)、
+  `skipped (traces disabled by the app: OTEL_TRACES_EXPORTER=…)` / `skipped (… OTEL_SDK_DISABLED=true)`
+  (你自己的设置优先——去掉它才会有 trace)、`unavailable (no exporting span processor: …)`(ADOT 没有
+  安装任何会导出 span 的处理器)、`unavailable (<原因>)`(新的 ADOT 版本改变了导出层依赖的内部实现——Agent 照常运行，但没有 trace；
+  请反馈)。"trace 未到达" 表示导出层已挂上但最新会话没有留下 span——请检查执行角色的 X-Ray / Logs 权限。
+  仅限 trace:导出层会关闭 OTLP 日志导出器。见 evaluation-engine.md §33.7。
 
 ## 知识库
 
@@ -101,8 +172,8 @@ English: [troubleshooting.md](troubleshooting.md)
 - **Vite 自动切换前端端口。** 若 `5173` 被占用,平台前端会落到 `5174`(或下一个
   空闲端口)。设置 `PLATFORM_UI_PORT` 可固定它。后端保持在 `8000`。此行为适用于
   `make dev`;`start.py` 使用严格端口,任一配置端口被占用时会在启动前失败。
-- **根目录不再启动独立 Studio。** 根目录生命周期在 `/create/studio` 提供原生
-  双语画布;仅在明确需要时,才从 `apps/studio/` 单独运行 vendored 应用。
+- **Studio 即原生画布。** 根目录生命周期在 `/create/studio` 提供原生双语画布;
+  不存在需要单独运行的独立 Studio 应用。
 
 ## 治理
 

@@ -22,19 +22,30 @@ RESOURCES_ALLOWED = {
     "core/db.py",
     # `resources` is declared here
     "core/config.py",
+    # the self-hosted Memory/KB substrate is one shared OpenSearch domain owned by
+    # the hub stack (N6 ruling R2) — reading the hub's own resource map to decide
+    # whether this workspace is hub-colocated is a "hub-global config" read, not a
+    # per-workspace lookup.
+    "services/workspace_bootstrap.py",
 }
 
 # Files allowed to build the default context, with the reason:
 DEFAULT_CONTEXT_ALLOWED = {
     # defines it
     "services/workspace.py",
-    # model prices are hub-global config and so is their discovery (parent design
-    # D10 defers multi-region price discovery)
-    "services/model_prices.py",
     # `GET /api/workspaces/hub-identity` reports the HUB's own principal — the one
     # a spoke's trust policy must name. The default context is the subject here,
     # not a fallback for a missing one.
     "routers/workspaces.py",
+    # D21 (M1-b): the model registry is hub-global (plan §2.4) and so is the hub's own
+    # copy of a provider's API key — `provider_api_key` reads the `launchpad-*-api-key`
+    # SSM parameter of the HUB account (a "hub-global config" exception), never a
+    # workspace's; runtimes get theirs from Identity.
+    "services/aws_clients.py",
+    # stream A1 (per-user principal): the principal-token signing key is the HUB's — only the
+    # hub role may KMS Sign, every workspace's interceptor verifies against its public key —
+    # so `hub_signer` builds the KMS client in the hub's own account, never a workspace's.
+    "services/principal_token.py",
 }
 
 
@@ -78,3 +89,22 @@ def test_allowlists_are_not_stale():
         assert DEFAULT_CONTEXT_RE.search(text), (
             f"{rel} no longer builds the default context — drop it"
         )
+
+
+def test_the_principal_token_module_builds_the_default_context_only_in_hub_signer():
+    """Stream A1: the allowlist entry covers ONE function — the hub-global signing key. A
+    second use in the module (a workspace-scoped read defaulting to the hub) must not hide
+    behind it."""
+    import ast
+
+    path = APP_DIR / "services/principal_token.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    users = sorted({
+        fn.name for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "default_workspace_context"
+    })
+    calls = sum(1 for node in ast.walk(tree) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name) and node.func.id == "default_workspace_context")
+    assert users == ["hub_signer"] and calls == 1

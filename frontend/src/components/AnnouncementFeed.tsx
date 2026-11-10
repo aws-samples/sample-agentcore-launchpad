@@ -9,6 +9,7 @@ import { AnnouncementPager } from "./AnnouncementPager";
 import { LoadError } from "./LoadError";
 import { Panel } from "./Panel";
 import "./announcements.css";
+import { formatApiTime } from "../lib/timestamps";
 
 const PAGE_SIZE = 3;
 
@@ -55,9 +56,9 @@ export function AnnouncementFeed() {
       {current?.announcements.map((row) => (
         <article className="announcement-notice" key={row.id} data-testid={`announcement-${row.id}`}>
           <time dateTime={row.published_at} className="announcement-date">
-            {new Date(row.published_at).toLocaleDateString(i18n.language, {
+            {formatApiTime(row.published_at, i18n.language, {
               year: "numeric", month: "short", day: "numeric",
-            })}
+            }) ?? row.published_at}
           </time>
           <AnnouncementContentView content={row} />
         </article>

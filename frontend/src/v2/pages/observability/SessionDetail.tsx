@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Markdown } from "../../../components/Markdown";
+import { TruncatedNotice } from "../../../components/chat/TruncatedNotice";
 import {
   api,
   ApiError,
@@ -19,6 +20,8 @@ import {
 } from "../../../lib/api";
 import { evaluatorLabel } from "../../../lib/evaluators";
 import { EvaluatorPicker } from "../../EvaluatorPicker";
+import { ExtractionCheckTag } from "../../ExtractionCheck";
+import { ScaleLabel } from "../../ScaleLabel";
 import { fmtDuration, fmtNumber, fmtScore, fmtTime, normalizedScore, scoreTone } from "../../format";
 import { useLoad } from "../../hooks";
 import {
@@ -35,9 +38,12 @@ import {
   Tag,
   type TagTone,
 } from "../../ui";
-import { approxCost, MAX_SCORE_EVALUATORS, SESSION_ID_RE, shortId } from "./common";
+import { MAX_SCORE_EVALUATORS, SESSION_ID_RE, shortId } from "./common";
 import { CopyId } from "./SessionList";
 import { TraceStatusTag } from "./TraceList";
+import { cacheHint, judgeTokens, tokenSplit } from "../../judgeTokens";
+import { useEvaluatorNames } from "../../useEvaluatorNames";
+import { formatInZone, parseTimestamp } from "../../../lib/timestamps";
 
 const OWNER_TONE: Record<OnlineSessionScoreConfig["owner"], TagTone> = {
   agent: "blue",
@@ -45,17 +51,17 @@ const OWNER_TONE: Record<OnlineSessionScoreConfig["owner"], TagTone> = {
   external: "orange",
 };
 
-/** Event timestamps are UTC ISO — render in the browser tz; fall back to a raw HH:MM:SS extract. */
+/** Event timestamps render in the display zone (N17-obs463); fall back to a raw HH:MM:SS extract. */
 function turnClock(at: string): string {
-  const d = new Date(at);
-  if (!Number.isNaN(d.getTime())) return d.toLocaleTimeString("en-GB", { hour12: false });
+  const d = parseTimestamp(at); // N17-obs461
+  if (d) return formatInZone(d, "en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
   const match = at.match(/\d{2}:\d{2}:\d{2}/);
   return match ? match[0] : "";
 }
 
 function Score({ value, evaluatorId }: { value: number | null; evaluatorId: string }) {
   if (value == null) return <span className="v2-muted">—</span>;
-  return <span className={`v2-score ${scoreTone(normalizedScore(value, evaluatorId))}`}>{fmtScore(value)}</span>;
+  return <span className={`v2-score ${scoreTone(normalizedScore(value, evaluatorId), evaluatorId)}`}>{fmtScore(value)}</span>;
 }
 
 /** Click-to-expand explanation cell (clamped to two lines until opened). */
@@ -71,6 +77,7 @@ function Explanation({ text }: { text: string | null }) {
 
 function OnlineScores({ scores }: { scores: OnlineSessionScores }) {
   const { t } = useTranslation();
+  useEvaluatorNames(); // N17-obs429: custom evaluators by name
   const navigate = useNavigate();
   const columns: Column<OnlineSessionScoreRecord & { i: number }>[] = [
     {
@@ -84,7 +91,7 @@ function OnlineScores({ scores }: { scores: OnlineSessionScores }) {
       ),
     },
     { key: "score", title: t("evalPage.online.results.col.score"), className: "num", render: (r) => <Score value={r.score} evaluatorId={r.evaluator_id} /> },
-    { key: "label", title: t("evalPage.online.results.col.label"), render: (r) => r.label ?? "—" },
+    { key: "label", title: t("evalPage.online.results.col.label"), render: (r) => (r.label ? <ScaleLabel evaluatorId={r.evaluator_id} label={r.label} /> : "—") },
     { key: "expl", title: t("evalPage.online.results.col.explanation"), render: (r) => <Explanation text={r.explanation} /> },
     { key: "time", title: t("v2.observability.col.time"), className: "nowrap", render: (r) => fmtTime(r.time) },
   ];
@@ -134,9 +141,26 @@ function OnlineScores({ scores }: { scores: OnlineSessionScores }) {
   );
 }
 
-/** 立即评分 — synchronous data-plane Evaluate over this session's spans; nothing is persisted. */
-function ScoreNow({ sessionId, range }: { sessionId: string; range: V2Range }) {
+/** N17-obs436: a judge call's tokens as "input / output" — input is the whole prompt
+ *  (`judgeTokens`), the cached share as tooltip. */
+function JudgeTokens({ usage }: { usage: ObsSessionScoreResult["token_usage"] }) {
   const { t } = useTranslation();
+  if (!usage) return <>—</>;
+  const { prompt, uncached, cached, output } = judgeTokens(usage.input, usage.output, usage.total);
+  return (
+    <span
+      data-testid="v2-score-tokens"
+      title={cached > 0 ? t("v2.observability.score.tokensCached", { prompt: fmtNumber(prompt), cached: fmtNumber(cached), uncached: fmtNumber(uncached) }) : undefined}
+    >
+      {`${fmtNumber(prompt)} / ${fmtNumber(output)}`}
+    </span>
+  );
+}
+
+/** 立即评分 — synchronous data-plane Evaluate over this session's spans; nothing is persisted. */
+export function ScoreNow({ sessionId, range }: { sessionId: string; range: V2Range }) {
+  const { t } = useTranslation();
+  useEvaluatorNames(); // N17-obs429: custom evaluators by name
   const evaluators = useLoad(() => api.v2Evaluators(), "obs-score-evaluators");
   const [chosen, setChosen] = useState<string[]>([]);
   const [confirming, setConfirming] = useState(false);
@@ -149,11 +173,6 @@ function ScoreNow({ sessionId, range }: { sessionId: string; range: V2Range }) {
   useEffect(() => {
     if (result || error) outcomeRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [result, error]);
-
-  const nameOf = (id: string): string => {
-    const row = list.find((e) => e.id === id);
-    return row?.source === "custom" ? (row.name ?? id) : evaluatorLabel(t, id);
-  };
 
   const run = async () => {
     setConfirming(false);
@@ -175,25 +194,38 @@ function ScoreNow({ sessionId, range }: { sessionId: string; range: V2Range }) {
   };
 
   const spansMissing = error?.code === "observability.session_spans_missing";
+  const sourceIds = result?.source_session_ids ?? [];
+  const hasMappedSources = sourceIds.length > 0;
+  const extractionMismatch = hasMappedSources
+    ? sourceIds.some((id) => result?.extraction_checks?.[id]?.status === "mismatch")
+    : result?.extraction_check?.status === "mismatch";
   const columns: Column<ObsSessionScoreResult & { i: number }>[] = [
     {
       key: "evaluator",
       title: t("evalPage.online.results.col.evaluator"),
       render: (r) => (
-        <span title={r.evaluator_arn ?? r.evaluator_id}>
-          {r.evaluator_name ?? nameOf(r.evaluator_id)}
+        // N17-obs436: the catalogue / localized name (the server's evaluator_name is the bare
+        // id), as the online-scores card above names it; the id stays as tooltip and sub-line
+        <span title={r.evaluator_id}>
+          {evaluatorLabel(t, r.evaluator_id)}
           <span className="sub mono">{r.evaluator_id}</span>
+          {r.span_context?.sessionId && sourceIds.includes(r.span_context.sessionId) && (
+            <span className="sub v2-score-source" data-testid="v2-score-result-source">
+              {t("v2.observability.score.sourceSession")}
+              <span className="mono">{r.span_context.sessionId}</span>
+            </span>
+          )}
         </span>
       ),
     },
     { key: "value", title: t("evalPage.online.results.col.score"), className: "num", render: (r) => <Score value={r.value} evaluatorId={r.evaluator_id} /> },
-    { key: "label", title: t("evalPage.online.results.col.label"), render: (r) => r.label ?? "—" },
+    { key: "label", title: t("evalPage.online.results.col.label"), render: (r) => (r.label ? <ScaleLabel evaluatorId={r.evaluator_id} label={r.label} /> : "—") },
     { key: "expl", title: t("evalPage.online.results.col.explanation"), render: (r) => <Explanation text={r.explanation} /> },
     {
       key: "tokens",
       title: t("v2.observability.score.tokens"),
       className: "num nowrap",
-      render: (r) => (r.token_usage ? `${fmtNumber(r.token_usage.input ?? 0)} / ${fmtNumber(r.token_usage.output ?? 0)}` : "—"),
+      render: (r) => <JudgeTokens usage={r.token_usage} />,
     },
     {
       key: "status",
@@ -254,8 +286,32 @@ function ScoreNow({ sessionId, range }: { sessionId: string; range: V2Range }) {
       {result && (
         <>
           <div className="v2-sub-title">
-            {t("v2.observability.score.resultSub", { spans: result.span_count, results: result.results.length })}
+            {t("v2.observability.score.resultSub", { spans: result.span_count, results: result.results.length })}{" "}
+            {!hasMappedSources && <ExtractionCheckTag check={result.extraction_check} />}
           </div>
+          {hasMappedSources && (
+            <div className="v2-score-sources" data-testid="v2-score-sources">
+              {sourceIds.length > 1 && <p>{t("v2.observability.score.separateSources")}</p>}
+              <ul>
+                {sourceIds.map((id) => (
+                  <li key={id} data-testid="v2-score-source-check">
+                    <span className="v2-score-source">
+                      {t("v2.observability.score.sourceSession")}
+                      <span className="mono">{id}</span>
+                    </span>
+                    {result.extraction_checks?.[id]
+                      ? <ExtractionCheckTag check={result.extraction_checks[id]} />
+                      : <Tag tone="gray">{t("v2.observability.score.checkUnavailable")}</Tag>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {extractionMismatch && (
+            <Alert tone="error" testId="v2-obs-score-extraction-mismatch">
+              {t("v2.extraction.scoreNowMismatch")}
+            </Alert>
+          )}
           <Table
             columns={columns}
             rows={result.results.map((r, i) => ({ ...r, i }))}
@@ -391,13 +447,17 @@ export function SessionDetail({ sessionId, range }: { sessionId: string; range: 
                 { label: t("v2.observability.col.llmCalls"), value: detail.summary.llm_calls },
                 {
                   label: "Tokens",
-                  value: t("v2.observability.tokensDetail", {
-                    total: fmtNumber(detail.summary.tokens.total),
-                    input: fmtNumber(detail.summary.tokens.input),
-                    output: fmtNumber(detail.summary.tokens.output),
-                  }),
+                  // N17-obs439: input = the whole prompt (cache reads / writes included)
+                  value: (
+                    <span title={cacheHint(t, tokenSplit(detail.summary.tokens), fmtNumber)} data-testid="v2-obs-tokens-detail">
+                      {t("v2.observability.tokensDetail", {
+                        total: fmtNumber(detail.summary.tokens.total),
+                        input: fmtNumber(tokenSplit(detail.summary.tokens).prompt),
+                        output: fmtNumber(detail.summary.tokens.output),
+                      })}
+                    </span>
+                  ),
                 },
-                { label: t("v2.observability.span.cost"), value: approxCost(detail.summary.est_cost_usd) },
                 { label: t("v2.observability.firstSeen"), value: fmtTime(detail.summary.first) },
                 { label: t("v2.observability.lastSeen"), value: fmtTime(detail.summary.last) },
               ]}
@@ -418,6 +478,7 @@ export function SessionDetail({ sessionId, range }: { sessionId: string; range: 
                         <span className="who">
                           {isUser ? t("v2.observability.user") : agentName}
                           <span className="v2-observability-clock">{turnClock(turn.at)}</span>
+                          <TruncatedNotice truncated={turn.truncated} variant="badge" className="v2-tag orange" />
                         </span>
                         <div className="msg v2-observability-md">
                           <Markdown text={turn.text} />
@@ -459,7 +520,6 @@ export function SessionDetail({ sessionId, range }: { sessionId: string; range: 
                             spans: tr.span_count,
                             llm: tr.llm_count,
                             tokens: fmtNumber(tr.tokens.total),
-                            cost: approxCost(tr.est_cost_usd),
                           })}
                         </span>
                       </button>

@@ -1,0 +1,67 @@
+{
+  "schema": "launchpad.policy.gateway/3",
+  "gateway_id": "launchpad-gw-exampleid0",
+  "gateway_arn": "arn:aws-cn:bedrock-agentcore:cn-northwest-1:123456789012:gateway/launchpad-gw-exampleid0",
+  "version": 7,
+  "issued_at": "2026-10-26T14:00:00+00:00",
+  "env": "",
+  "empty_set_decision": "deny",
+  "hub_role": "launchpad-ec2-role-example",
+  "pubkeys": {
+    "kid-test-0001": "__TEST_PUBKEY__"
+  },
+  "role_map": {
+    "launchpad-agent-hr-helpdesk-ab12cd34": {
+      "agent_id": "ag_hrhelp01",
+      "ws": "default",
+      "method": "zip_runtime",
+      "system": false,
+      "byoc": false,
+      "exempt": false
+    },
+    "launchpad-agent-expense-bot-ef56ab78": {
+      "agent_id": "ag_byoc0001",
+      "ws": "default",
+      "method": "byoc",
+      "system": false,
+      "byoc": true,
+      "exempt": false
+    },
+    "launchpad-agent-eval-worker-0a1b2c3d": {
+      "agent_id": "ag_evalwk01",
+      "ws": "default",
+      "method": "zip_runtime",
+      "system": true,
+      "byoc": false,
+      "exempt": true
+    }
+  },
+  "attachment": {
+    "engine_id": "pe_0123456789ab",
+    "mode": "ENFORCE",
+    "active_count": 4,
+    "temporal_count": 2,
+    "policy_set_version": "ps-17",
+    "temporal_set_version": 3,
+    "governed_actions": [
+      "AgentCore::Action::\"hr-database___get_employee\"",
+      "AgentCore::Action::\"hr-database___create_payout\"",
+      "AgentCore::Action::\"hr-approvals___verify_identity\"",
+      "AgentCore::Action::\"hr-approvals___approve_payout\""
+    ],
+    "temporal_referenced_actions": [
+      "AgentCore::Action::\"hr-database___get_employee\"",
+      "AgentCore::Action::\"hr-database___create_payout\"",
+      "AgentCore::Action::\"hr-approvals___verify_identity\"",
+      "AgentCore::Action::\"hr-approvals___approve_payout\""
+    ]
+  },
+  "engine": {
+    "endpoints": [
+      "10.0.1.10:7443",
+      "10.0.1.10:7444"
+    ],
+    "shards": 2,
+    "key_s3_key": "policy/gateway/launchpad-gw-exampleid0/engine-key"
+  }
+}

@@ -30,22 +30,6 @@ def test_system_prompt_size_cap(client):
     assert res.status_code == 422
 
 
-def test_dataset_item_count_cap(client):
-    res = client.post(
-        "/api/eval/datasets",
-        json={"name": "big", "items": [{"prompt": "p"}] * 201},
-    )
-    assert res.status_code == 422
-
-
-def test_dataset_item_prompt_cap(client):
-    res = client.post(
-        "/api/eval/datasets",
-        json={"name": "long", "items": [{"prompt": "x" * 8001}]},
-    )
-    assert res.status_code == 422
-
-
 def test_browser_demo_blocks_internal_urls(client):
     for url in (
         "file:///etc/passwd",

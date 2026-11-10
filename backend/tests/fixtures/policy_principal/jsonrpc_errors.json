@@ -1,0 +1,67 @@
+{
+ "deny": {
+  "jsonrpc": "2.0",
+  "id": "665dd09b",
+  "error": {
+   "code": -32002,
+   "message": "Tool Execution Denied: Tool call not allowed due to policy enforcement [Policy evaluation denied due to pol_payoutadm]",
+   "data": {
+    "decision_id": "3f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    "policy_id": "pol_payoutadm",
+    "stage": "final",
+    "reason_code": "policy"
+   }
+  }
+ },
+ "default_deny": {
+  "jsonrpc": "2.0",
+  "id": 7,
+  "error": {
+   "code": -32002,
+   "message": "Tool Execution Denied: Tool call not allowed due to policy enforcement [No policy applies to the request (denied by default).]"
+  }
+ },
+ "principal_missing": {
+  "jsonrpc": "2.0",
+  "id": 8,
+  "error": {
+   "code": -32002,
+   "message": "Tool Execution Denied: Tool call not allowed due to policy enforcement [principal_missing]",
+   "data": {
+    "stage": "bt",
+    "reason_code": "principal_missing"
+   }
+  }
+ },
+ "session_required": {
+  "jsonrpc": "2.0",
+  "id": 9,
+  "error": {
+   "code": -32602,
+   "message": "policy_session_required"
+  }
+ },
+ "conflict": {
+  "jsonrpc": "2.0",
+  "id": 10,
+  "error": {
+   "code": -32002,
+   "message": "ConflictException: the policy session was invalidated by a policy change; start a new session",
+   "data": {
+    "reason_code": "session_invalidated"
+   }
+  }
+ },
+ "unknown_caller": {
+  "jsonrpc": "2.0",
+  "id": 11,
+  "error": {
+   "code": -32002,
+   "message": "Tool Execution Denied: Tool call not allowed due to policy enforcement [unknown_caller]",
+   "data": {
+    "stage": "a",
+    "reason_code": "unknown_caller"
+   }
+  }
+ }
+}

@@ -1,0 +1,12 @@
+bash scripts/verify.sh
+
+════ backend · pytest ════
+3 failed, 5815 passed, 187 warnings, 1 error in 1876.60s (0:31:16)
+── pytest: FAIL (exit 1)
+
+════ infra · pytest ════
+12 passed in 0.02s
+── infra pytest: OK
+
+════ verify: FAIL ════
+verify_rc=1

@@ -1,6 +1,8 @@
-"""Inbound JWT UX: issuer derivation, the display-only `source_connection`, the
-workspace pool issuer on the default API, and the Connection → OIDC discovery
-picker (`GET /api/identity/connections/oidc-sources`)."""
+"""OIDC issuer derivation and the Connection → discovery picker
+(`GET /api/identity/connections/oidc-sources`) — outbound Connection UX, used by
+the OBO Connection check and the gateway target's issuer match (R6); unrelated
+to inbound Runtime auth, which is AWS_IAM-only in this build (see
+test_inbound_auth.py)."""
 
 from unittest.mock import MagicMock
 
@@ -9,16 +11,11 @@ from botocore.exceptions import ClientError
 
 import app.routers.identity as identity_router
 from app.schemas.inbound_auth import (
-    InboundAuth,
-    JwtInboundConfig,
-    authorizer_configuration,
     discovery_url_for_issuer,
     issuer_from_discovery_url,
     normalize_issuer,
 )
 from app.services import identity_providers as ip
-from app.services import inbound_auth as svc
-from tests.conftest import set_default_resources, ws_ctx
 
 POOL_ISSUER = "https://cognito-idp.us-west-2.amazonaws.com/us-west-2_ABC123"
 POOL_DISCOVERY = f"{POOL_ISSUER}/.well-known/openid-configuration"
@@ -54,51 +51,6 @@ def test_normalize_issuer_refuses_non_urls_and_templates():
         "https://idp.example/.well-known/openid-configuration"
     )
     assert discovery_url_for_issuer("") is None
-
-
-def test_source_connection_is_display_only():
-    auth = InboundAuth(mode="jwt", jwt=JwtInboundConfig(
-        discovery_url=OKTA_DISCOVERY, allowed_audience=["api://agent"],
-        source_connection="corp-okta",
-    ))
-    assert auth.model_dump()["jwt"]["source_connection"] == "corp-okta"
-    # the authorizer build never sees it
-    assert authorizer_configuration(auth) == {"customJWTAuthorizer": {
-        "discoveryUrl": OKTA_DISCOVERY, "allowedAudience": ["api://agent"],
-    }}
-    # additive: a config without it still parses (every stored blob)
-    assert JwtInboundConfig(discovery_url=OKTA_DISCOVERY, allowed_clients=["c"]
-                            ).source_connection is None
-    with pytest.raises(ValueError):
-        JwtInboundConfig(discovery_url=OKTA_DISCOVERY, allowed_clients=["c"],
-                         source_connection="bad name")
-
-
-def test_workspace_cognito_issuer_and_mismatch():
-    ws = ws_ctx({"user_pool_id": "us-west-2_ABC123"})
-    assert svc.workspace_cognito_issuer(ws) == POOL_ISSUER
-    assert svc.workspace_cognito_issuer(ws_ctx()) is None
-
-    def jwt(url):
-        return InboundAuth(mode="jwt", jwt=JwtInboundConfig(
-            discovery_url=url, allowed_clients=["c"]))
-
-    assert svc.issuer_mismatch(jwt(POOL_DISCOVERY), ws) is None
-    assert svc.issuer_mismatch(jwt(OKTA_DISCOVERY), ws) == {
-        "agent_issuer": "https://acme.okta.com/oauth2/default",
-        "workspace_issuer": POOL_ISSUER,
-    }
-    assert svc.issuer_mismatch(InboundAuth(mode="iam"), ws) is None
-    # no pool: nothing to compare against (the M2M path names its own error)
-    assert svc.issuer_mismatch(jwt(OKTA_DISCOVERY), ws_ctx()) is None
-
-
-def test_default_api_reports_the_pool_issuer(client):
-    assert client.get("/api/identity/inbound-auth/default").json()["cognito_issuer"] is None
-    set_default_resources({"user_pool_id": "us-west-2_ABC123", "user_pool_client_id": "web"})
-    body = client.get("/api/identity/inbound-auth/default").json()
-    assert body["cognito_issuer"] == POOL_ISSUER
-    assert body["cognito"]["discovery_url"] == POOL_DISCOVERY
 
 
 # ── Connection → discovery derivation ────────────────────────────────────────
@@ -146,20 +98,7 @@ def test_oidc_discovery_uses_a_builtin_vendor_only_when_its_config_names_one():
     templated = _provider("entra2", "MicrosoftOauth2", {"authorizationServerMetadata": {
         "issuer": "https://login.microsoftonline.com/{tenantid}/v2.0"}})
     assert ip.oidc_discovery(templated) is None
-    assert ip.oidc_discovery(_provider("g", "GoogleOauth2", {})) is None
-    assert ip.oidc_discovery({"credentialProviderVendor": "GoogleOauth2"}) is None
     assert ip.oidc_discovery(None) is None
-
-
-def test_github_reported_issuer_is_not_offered():
-    # the live GetOauth2CredentialProvider shape (2026-09-29): GitHub reports the
-    # Actions OIDC issuer, which does not sign OAuth-app user tokens
-    gh = _provider("gh", "GithubOauth2", {"authorizationServerMetadata": {
-        "issuer": "https://token.actions.githubusercontent.com",
-        "authorizationEndpoint": "https://github.com/login/oauth/authorize",
-        "tokenEndpoint": "https://github.com/login/oauth/access_token",
-    }})
-    assert ip.oidc_discovery(gh) is None
 
 
 def _control(providers):
@@ -182,8 +121,6 @@ def test_list_oidc_sources_filters_and_skips_unreadable():
     providers = [
         _provider("zeta-okta", "CustomOauth2", {"discoveryUrl": OKTA_DISCOVERY}),
         _provider("launchpad-gw-m2m", "CustomOauth2", {"discoveryUrl": POOL_DISCOVERY}),
-        _provider("gh", "GithubOauth2", {"authorizationServerMetadata": {
-            "issuer": "https://token.actions.githubusercontent.com"}}),
         _provider("alpha-kc", "CustomOauth2", {"authorizationServerMetadata": {
             "issuer": "https://kc.example/realms/corp"}}),
     ]

@@ -1,0 +1,31 @@
+diff --git a/frontend/src/v2/pages/tasks/RunRecommendations.tsx b/frontend/src/v2/pages/tasks/RunRecommendations.tsx
+index 6234d4dd..b7cdc6d0 100644
+--- a/frontend/src/v2/pages/tasks/RunRecommendations.tsx
++++ b/frontend/src/v2/pages/tasks/RunRecommendations.tsx
+@@ -110,7 +110,7 @@ export function RunRecommendations({
+     "rec-providers",
+   );
+   const providers = providersLoad.data?.providers ?? [];
+-  const [providerId, setProviderId] = useState("agentcore");
++  const [providerId, setProviderId] = useState("gepa_lite");
+   const [modelChoice, setModelChoice] = useState("");
+   const [modelCustom, setModelCustom] = useState("");
+   const list = useLoad(() => api.runRecommendations(run.id), `rec-list:${run.id}:${tick}`);
+@@ -267,7 +267,7 @@ export function RunRecommendations({
+           {providers.length > 1 && (
+             <Field label={t("expPage.providerLabel")}>
+               <Select
+-                value={provider?.id ?? "agentcore"}
++                value={provider?.id ?? "gepa_lite"}
+                 onChange={(v) => { setProviderId(v); setModelChoice(""); setModelCustom(""); }}
+                 testId="v2-rec-provider"
+                 options={providers.map((p) => ({ value: p.id, label: p.label }))}
+@@ -294,7 +294,7 @@ export function RunRecommendations({
+                     <input
+                       className="v2-input mono"
+                       style={{ marginTop: 8 }}
+-                      placeholder="global.anthropic.claude-sonnet-5"
++                      placeholder="global.zai.glm-5.3"
+                       value={modelCustom}
+                       onChange={(e) => setModelCustom(e.target.value)}
+                       data-testid="v2-rec-model-custom"

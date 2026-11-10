@@ -1,0 +1,1196 @@
+{
+ "fingerprint": "1c53feb20d51d957",
+ "meta": {
+  "generated_at": "2026-10-26T19:13:20+00:00",
+  "sha": "0f9bcb7ddde6 +dirty",
+  "fingerprint": "1c53feb20d51d957",
+  "mini": false,
+  "tier": "hard",
+  "pairs": 54,
+  "pair_set": 54,
+  "reps": 3,
+  "models": [
+   "global.zai.glm-5.3",
+   "global.moonshotai.kimi-k3"
+  ],
+  "evaluators": null,
+  "langs": {
+   "zh": 25,
+   "en": 29
+  }
+ },
+ "summary": {
+  "per_evaluator": [
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 4,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.75
+    },
+    "anchor": null,
+    "kappa_at": {
+     "1.0": 0.8136,
+     "0.75": 1.0,
+     "0.5": 1.0,
+     "0.25": 0.0
+    },
+    "evaluator": "Builtin.Coherence",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 11,
+    "bar": 1.0,
+    "lenient": {
+     "bar": 0.7,
+     "kappa": 1.0,
+     "false_pass_rate": 0.0,
+     "false_fail_rate": 0.0
+    },
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.1429,
+    "kappa": 0.8136,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0909,
+    "rerun_score_std": 0.0107,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 0,
+     "agree_rate": null,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 0.875
+     }
+    },
+    "by_defect": {
+     "control": {
+      "items": 3,
+      "false_pass": 0,
+      "false_fail": 1
+     },
+     "distant_coherence": {
+      "items": 8,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 4,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.625
+    },
+    "anchor": null,
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.75": 0.7925,
+     "0.5": 0.7925,
+     "0.25": 0.0
+    },
+    "evaluator": "Builtin.Coherence",
+    "model": "global.zai.glm-5.3",
+    "items": 11,
+    "bar": 1.0,
+    "lenient": {
+     "bar": 0.7,
+     "kappa": 0.7925,
+     "false_pass_rate": 0.25,
+     "false_fail_rate": 0.0
+    },
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0214,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 0,
+     "agree_rate": null,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "control": {
+      "items": 3,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "distant_coherence": {
+      "items": 8,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 3,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 1.0
+    },
+    "anchor": null,
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.5": 1.0
+    },
+    "evaluator": "Builtin.Conciseness",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 6,
+    "bar": 0.7,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 0,
+     "agree_rate": null,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "subtle_quality": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 3,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 1.0
+    },
+    "anchor": null,
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.5": 1.0
+    },
+    "evaluator": "Builtin.Conciseness",
+    "model": "global.zai.glm-5.3",
+    "items": 6,
+    "bar": 0.7,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 0,
+     "agree_rate": null,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "subtle_quality": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 26,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.5769
+    },
+    "anchor": null,
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.5": 0.1671
+    },
+    "evaluator": "Builtin.Correctness",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 58,
+    "bar": 1.0,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0122,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 0,
+     "agree_rate": null,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "combine_tools": {
+      "items": 12,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "control": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "long_multi_fact": {
+      "items": 16,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "unit_rounding": {
+      "items": 12,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "wrong_row_or_stale": {
+      "items": 12,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 26,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.5769
+    },
+    "anchor": null,
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.5": 0.1671
+    },
+    "evaluator": "Builtin.Correctness",
+    "model": "global.zai.glm-5.3",
+    "items": 58,
+    "bar": 1.0,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 0,
+     "agree_rate": null,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "combine_tools": {
+      "items": 12,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "control": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "long_multi_fact": {
+      "items": 16,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "unit_rounding": {
+      "items": 12,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "wrong_row_or_stale": {
+      "items": 12,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 32,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.4453
+    },
+    "anchor": null,
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.75": 0.4893,
+     "0.5": 0.2982,
+     "0.25": 0.0338
+    },
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 70,
+    "bar": 1.0,
+    "lenient": {
+     "bar": 0.75,
+     "kappa": 0.4893,
+     "false_pass_rate": 0.5312,
+     "false_fail_rate": 0.0
+    },
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0147,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 0,
+     "agree_rate": null,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "combine_tools": {
+      "items": 12,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "control": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "long_multi_fact": {
+      "items": 16,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "partial_support": {
+      "items": 12,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "unit_rounding": {
+      "items": 12,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "wrong_row_or_stale": {
+      "items": 12,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 32,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.3906
+    },
+    "anchor": null,
+    "kappa_at": {
+     "1.0": 1.0,
+     "0.75": 0.4262,
+     "0.5": 0.1343,
+     "0.25": 0.0338
+    },
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.zai.glm-5.3",
+    "items": 70,
+    "bar": 1.0,
+    "lenient": {
+     "bar": 0.75,
+     "kappa": 0.4262,
+     "false_pass_rate": 0.5938,
+     "false_fail_rate": 0.0
+    },
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0101,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 0,
+     "agree_rate": null,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "combine_tools": {
+      "items": 12,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "control": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "long_multi_fact": {
+      "items": 16,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "partial_support": {
+      "items": 12,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "unit_rounding": {
+      "items": 12,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "wrong_row_or_stale": {
+      "items": 12,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": false,
+    "discrimination": null,
+    "anchor": null,
+    "kappa_at": null,
+    "evaluator": "Builtin.GoalSuccessRate",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 8,
+    "bar": 1.0,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 0,
+     "agree_rate": null,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "near_miss_refusal": {
+      "items": 8,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": false,
+    "discrimination": null,
+    "anchor": null,
+    "kappa_at": null,
+    "evaluator": "Builtin.GoalSuccessRate",
+    "model": "global.zai.glm-5.3",
+    "items": 8,
+    "bar": 1.0,
+    "lenient": null,
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 0,
+     "agree_rate": null,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "near_miss_refusal": {
+      "items": 8,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 5,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.3664
+    },
+    "anchor": null,
+    "kappa_at": {
+     "1.0": 0.0,
+     "0.833": 1.0,
+     "0.667": 0.8,
+     "0.5": 0.4
+    },
+    "evaluator": "Builtin.Helpfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "items": 10,
+    "bar": 0.7,
+    "lenient": {
+     "bar": 0.667,
+     "kappa": 0.8,
+     "false_pass_rate": 0.2,
+     "false_fail_rate": 0.0
+    },
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0315,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 0,
+     "agree_rate": null,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "near_miss_refusal": {
+      "items": 4,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "subtle_quality": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   },
+   {
+    "graded": true,
+    "discrimination": {
+     "pairs": 5,
+     "rate": 1.0,
+     "tie_rate": 0.0,
+     "inverted_rate": 0.0,
+     "gap": 0.3664
+    },
+    "anchor": null,
+    "kappa_at": {
+     "1.0": 0.0,
+     "0.833": 1.0,
+     "0.667": 1.0,
+     "0.5": 0.2
+    },
+    "evaluator": "Builtin.Helpfulness",
+    "model": "global.zai.glm-5.3",
+    "items": 10,
+    "bar": 0.7,
+    "lenient": {
+     "bar": 0.667,
+     "kappa": 1.0,
+     "false_pass_rate": 0.0,
+     "false_fail_rate": 0.0
+    },
+    "errors": 0,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "kappa": 1.0,
+    "meets_bar": true,
+    "rerun_flip_rate": 0.0,
+    "rerun_score_std": 0.0157,
+    "verbosity": null,
+    "position": null,
+    "language": {
+     "twins": 0,
+     "agree_rate": null,
+     "accuracy": {
+      "zh": 1.0,
+      "en": 1.0
+     }
+    },
+    "by_defect": {
+     "near_miss_refusal": {
+      "items": 4,
+      "false_pass": 0,
+      "false_fail": 0
+     },
+     "subtle_quality": {
+      "items": 6,
+      "false_pass": 0,
+      "false_fail": 0
+     }
+    }
+   }
+  ],
+  "cross_judge": [
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.Coherence",
+    "items": 11,
+    "agree_rate": 0.9091,
+    "kappa": 0.8136,
+    "disagreements": [
+     {
+      "pair": "control-sh3-en",
+      "side": "good",
+      "global.moonshotai.kimi-k3": "Generally Yes",
+      "global.zai.glm-5.3": "Completely Yes"
+     }
+    ]
+   },
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.Conciseness",
+    "items": 6,
+    "agree_rate": 1.0,
+    "kappa": 1.0,
+    "disagreements": []
+   },
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.Correctness",
+    "items": 58,
+    "agree_rate": 1.0,
+    "kappa": 1.0,
+    "disagreements": []
+   },
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.Faithfulness",
+    "items": 70,
+    "agree_rate": 1.0,
+    "kappa": 1.0,
+    "disagreements": []
+   },
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.GoalSuccessRate",
+    "items": 8,
+    "agree_rate": 1.0,
+    "kappa": 1.0,
+    "disagreements": []
+   },
+   {
+    "a": "global.moonshotai.kimi-k3",
+    "b": "global.zai.glm-5.3",
+    "evaluator": "Builtin.Helpfulness",
+    "items": 10,
+    "agree_rate": 1.0,
+    "kappa": 1.0,
+    "disagreements": []
+   }
+  ],
+  "kappa_bar": 0.7,
+  "by_type": [
+   {
+    "defect": "combine_tools",
+    "evaluator": "Builtin.Correctness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 18,
+    "bad": 18,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.6111
+   },
+   {
+    "defect": "combine_tools",
+    "evaluator": "Builtin.Correctness",
+    "model": "global.zai.glm-5.3",
+    "good": 18,
+    "bad": 18,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.5833
+   },
+   {
+    "defect": "combine_tools",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 18,
+    "bad": 18,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.1667,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.5278
+   },
+   {
+    "defect": "combine_tools",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.zai.glm-5.3",
+    "good": 18,
+    "bad": 18,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.1667,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.5
+   },
+   {
+    "defect": "control",
+    "evaluator": "Builtin.Coherence",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 9,
+    "bad": 0,
+    "false_pass_rate": null,
+    "false_fail_rate": 0.2222,
+    "lenient_false_pass_rate": null,
+    "kappa": null,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "control",
+    "evaluator": "Builtin.Coherence",
+    "model": "global.zai.glm-5.3",
+    "good": 9,
+    "bad": 0,
+    "false_pass_rate": null,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": null,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "control",
+    "evaluator": "Builtin.Correctness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 18,
+    "bad": 0,
+    "false_pass_rate": null,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": null,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "control",
+    "evaluator": "Builtin.Correctness",
+    "model": "global.zai.glm-5.3",
+    "good": 18,
+    "bad": 0,
+    "false_pass_rate": null,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": null,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "control",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 18,
+    "bad": 0,
+    "false_pass_rate": null,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": null,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "control",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.zai.glm-5.3",
+    "good": 18,
+    "bad": 0,
+    "false_pass_rate": null,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": null,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "distant_coherence",
+    "evaluator": "Builtin.Coherence",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 12,
+    "bad": 12,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.0,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.75
+   },
+   {
+    "defect": "distant_coherence",
+    "evaluator": "Builtin.Coherence",
+    "model": "global.zai.glm-5.3",
+    "good": 12,
+    "bad": 12,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.0833,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.7083
+   },
+   {
+    "defect": "long_multi_fact",
+    "evaluator": "Builtin.Correctness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 24,
+    "bad": 24,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.5
+   },
+   {
+    "defect": "long_multi_fact",
+    "evaluator": "Builtin.Correctness",
+    "model": "global.zai.glm-5.3",
+    "good": 24,
+    "bad": 24,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.5
+   },
+   {
+    "defect": "long_multi_fact",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 24,
+    "bad": 24,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.4583,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.4896
+   },
+   {
+    "defect": "long_multi_fact",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.zai.glm-5.3",
+    "good": 24,
+    "bad": 24,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.7083,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.3229
+   },
+   {
+    "defect": "near_miss_refusal",
+    "evaluator": "Builtin.GoalSuccessRate",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 12,
+    "bad": 12,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "near_miss_refusal",
+    "evaluator": "Builtin.GoalSuccessRate",
+    "model": "global.zai.glm-5.3",
+    "good": 12,
+    "bad": 12,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": null,
+    "gap": null
+   },
+   {
+    "defect": "near_miss_refusal",
+    "evaluator": "Builtin.Helpfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 6,
+    "bad": 6,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.3333,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.2773
+   },
+   {
+    "defect": "near_miss_refusal",
+    "evaluator": "Builtin.Helpfulness",
+    "model": "global.zai.glm-5.3",
+    "good": 6,
+    "bad": 6,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.0,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.333
+   },
+   {
+    "defect": "partial_support",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 18,
+    "bad": 18,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 1.0,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.25
+   },
+   {
+    "defect": "partial_support",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.zai.glm-5.3",
+    "good": 18,
+    "bad": 18,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 1.0,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.25
+   },
+   {
+    "defect": "subtle_quality",
+    "evaluator": "Builtin.Conciseness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 9,
+    "bad": 9,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 1.0
+   },
+   {
+    "defect": "subtle_quality",
+    "evaluator": "Builtin.Conciseness",
+    "model": "global.zai.glm-5.3",
+    "good": 9,
+    "bad": 9,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 1.0
+   },
+   {
+    "defect": "subtle_quality",
+    "evaluator": "Builtin.Helpfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 9,
+    "bad": 9,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.1111,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.4629
+   },
+   {
+    "defect": "subtle_quality",
+    "evaluator": "Builtin.Helpfulness",
+    "model": "global.zai.glm-5.3",
+    "good": 9,
+    "bad": 9,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.2222,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.3516
+   },
+   {
+    "defect": "unit_rounding",
+    "evaluator": "Builtin.Correctness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 18,
+    "bad": 18,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.5
+   },
+   {
+    "defect": "unit_rounding",
+    "evaluator": "Builtin.Correctness",
+    "model": "global.zai.glm-5.3",
+    "good": 18,
+    "bad": 18,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.5
+   },
+   {
+    "defect": "unit_rounding",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 18,
+    "bad": 18,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.6111,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.3472
+   },
+   {
+    "defect": "unit_rounding",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.zai.glm-5.3",
+    "good": 18,
+    "bad": 18,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.7222,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.3194
+   },
+   {
+    "defect": "wrong_row_or_stale",
+    "evaluator": "Builtin.Correctness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 18,
+    "bad": 18,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.75
+   },
+   {
+    "defect": "wrong_row_or_stale",
+    "evaluator": "Builtin.Correctness",
+    "model": "global.zai.glm-5.3",
+    "good": 18,
+    "bad": 18,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": null,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.75
+   },
+   {
+    "defect": "wrong_row_or_stale",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.moonshotai.kimi-k3",
+    "good": 18,
+    "bad": 18,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.2222,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.625
+   },
+   {
+    "defect": "wrong_row_or_stale",
+    "evaluator": "Builtin.Faithfulness",
+    "model": "global.zai.glm-5.3",
+    "good": 18,
+    "bad": 18,
+    "false_pass_rate": 0.0,
+    "false_fail_rate": 0.0,
+    "lenient_false_pass_rate": 0.3333,
+    "kappa": 1.0,
+    "p_bad_lt_good": 1.0,
+    "gap": 0.5833
+   }
+  ]
+ }
+}

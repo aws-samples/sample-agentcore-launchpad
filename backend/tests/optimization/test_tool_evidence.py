@@ -1,17 +1,17 @@
-"""P1b — tool-description evidence and the two-component gepa_lite reflection:
-content-log tool turns, span fallback, mentions, validation, per-type key
-ownership and the router's widened source rule."""
+"""Tool-description evidence and the two-component gepa_lite reflection (N12 E2-4):
+content-log tool turns, span fallback, mentions, validation, per-type key ownership and
+the worker handler. Evidence records are ``eval_results`` rows (the experiment seams
+left with the configuration experiment, N13-obs2)."""
 
 import json
 from typing import Any
 
-import pytest
 from botocore.exceptions import ClientError
 
-import app.optimization.service as svc
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
-from app.evaluation.models import EvalRun
-from app.optimization.models import Experiment
+from app.evaluation import jobs
+from app.evaluation.models import EvalResult, EvalRun
+from app.models.ledger import Agent
 from app.optimization.providers import evidence as ev
 from app.optimization.providers import gepa_lite
 from app.optimization.providers.base import (
@@ -21,11 +21,15 @@ from app.optimization.providers.base import (
     SessionEvidence,
 )
 from app.services import observability as ob
+from app.services.strands_eval import jobs_recommend
 from tests.conftest import ws_ctx
+from tests.evaluation.fakes import FakeExecutor
 
 WS = ws_ctx()
 
 
+def _noop(_msg: str) -> None:
+    """A progress sink."""
 # ─── helpers ─────────────────────────────────────────────────────────────────
 def _content_record(ts: int, trace: str, msgs: list[tuple[str, str, list[dict]]]) -> dict:
     """A content-log record: msgs = [(kind, role, parts)]."""
@@ -52,21 +56,10 @@ def _res(tid, text, status="success"):
     return {"toolResult": {"toolUseId": tid, "status": status, "content": [{"text": text}]}}
 
 
-def _record(sid, evaluator, score, explanation="why", level="Session"):
-    attrs = {"gen_ai.evaluation.name": evaluator, "session.id": sid,
-             "aws.bedrock_agentcore.evaluation_level": level,
-             "gen_ai.evaluation.score.value": score, "gen_ai.evaluation.explanation": explanation}
-    return {"message": json.dumps({"name": "gen_ai.evaluation.result", "attributes": attrs})}
-
-
-class FakeLogs:
-    def __init__(self, events):
-        self.events = events
-
-    def get_log_events(self, **kw):
-        if kw.get("nextToken"):
-            return {"events": [], "nextForwardToken": kw["nextToken"]}
-        return {"events": self.events, "nextForwardToken": "end"}
+def _record(sid, evaluator, score, explanation="why", level="SESSION"):
+    """One eval_results row as the evidence reads it."""
+    return {"session_id": sid, "evaluator_id": evaluator, "score": score,
+            "explanation": explanation, "label": None, "level": level, "error_message": None}
 
 
 def _req(evidence, stats=None, components=("system_prompt", "tool_descriptions"),
@@ -81,8 +74,8 @@ def _req(evidence, stats=None, components=("system_prompt", "tool_descriptions")
     )
     return OptimizeRequest(
         current_prompt="You are an HR helper.", agent={"id": "a1"}, trace_source={},
-        evidence=evidence, stats=stats, model_id="m", workspace=WS, max_chars=max_chars,
-        components=components,
+        evidence=evidence, stats=stats, model_id="global.zai.glm-5.3", workspace=WS,
+        max_chars=max_chars, components=components,
         tools=tools if tools is not None else {"get_pto_balance": "PTO balance lookup",
                                                 "lookup_hr_policy": "Policy lookup"},
     )
@@ -100,7 +93,7 @@ def _session(sid="s1", score=0.2, calls=(("t1", "get_pto_balance", {"employee_id
         session_id=sid, turns=turns, mean_score=score,
         records=[EvaluatorRecord("Builtin.ToolSelectionAccuracy", score, "No",
                                  "The agent called `get_pto_balance` although the user "
-                                 "asked about policy.", level="Span")],
+                                 "asked about policy.", level="TOOL_CALL")],
     )
 
 
@@ -116,9 +109,9 @@ def _converse(replies: list[str]):
     return fn
 
 
-# ─── content-log tool turns ──────────────────────────────────────────────────
+# ─── content-log tool turns (restored observability helpers) ─────────────────
 def test_tool_turns_dedupe_order_and_result_join():
-    recs = [
+    recs_ = [
         _content_record(1, "tr1", [("output", "assistant",
                                     [_use("a", "get_pto_balance", {"e": 1})])]),
         # history repeats the call; the tool result arrives as input/tool AND echoed on output
@@ -131,7 +124,7 @@ def test_tool_turns_dedupe_order_and_result_join():
         ]),
         _content_record(3, "tr1", [("input", "tool", [_res("b", "policy text", status="error")])]),
     ]
-    turns = ob.eval_tool_turns_from_content_logs("/g", "s1", None, WS, logs=FakeFilterLogs(recs))
+    turns = ob.eval_tool_turns_from_content_logs("/g", "s1", None, WS, logs=FakeFilterLogs(recs_))
     roles = [(t["role"], t["id"]) for t in turns]
     assert roles == [("TOOL_CALL", "a"), ("TOOL_RESULT", "a"),
                      ("TOOL_CALL", "b"), ("TOOL_RESULT", "b")]
@@ -142,27 +135,26 @@ def test_tool_turns_dedupe_order_and_result_join():
 
 
 def test_tool_turns_ignore_plain_string_content_and_bad_json():
-    recs = [{"timeUnixNano": 1, "traceId": "t", "attributes": {"session.id": "s1"},
-             "body": {"input": {"messages": [{"role": "tool", "content": "plain"}]},
-                      "output": {"messages": [{"role": "assistant", "content": "[not json"}]}}}]
-    turns = ob.eval_tool_turns_from_content_logs("/g", "s1", None, WS, logs=FakeFilterLogs(recs))
+    recs_ = [{"timeUnixNano": 1, "traceId": "t", "attributes": {"session.id": "s1"},
+              "body": {"input": {"messages": [{"role": "tool", "content": "plain"}]},
+                       "output": {"messages": [{"role": "assistant", "content": "[not json"}]}}}]
+    turns = ob.eval_tool_turns_from_content_logs("/g", "s1", None, WS, logs=FakeFilterLogs(recs_))
     assert turns == []
 
 
 def test_text_turns_unchanged_by_refactor():
-    recs = [_content_record(1, "tr1", [("input", "user", [{"text": "q"}]),
-                                        ("output", "assistant", [_use("a", "x", {})])]),
-            {"timeUnixNano": 2, "traceId": "tr1", "attributes": {"session.id": "s1"},
-             "body": {"output": {"messages": [{"role": "assistant",
-                                              "content": {"message": "final",
-                                                          "finish_reason": "end_turn"}}]}}}]
-    turns = ob.eval_turns_from_content_logs("/g", "s1", None, WS, logs=FakeFilterLogs(recs))
+    recs_ = [_content_record(1, "tr1", [("input", "user", [{"text": "q"}]),
+                                         ("output", "assistant", [_use("a", "x", {})])]),
+             {"timeUnixNano": 2, "traceId": "tr1", "attributes": {"session.id": "s1"},
+              "body": {"output": {"messages": [{"role": "assistant",
+                                               "content": {"message": "final",
+                                                           "finish_reason": "end_turn"}}]}}}]
+    turns = ob.eval_turns_from_content_logs("/g", "s1", None, WS, logs=FakeFilterLogs(recs_))
     assert [(t["role"], t["text"]) for t in turns] == [("USER", "q"), ("ASSISTANT", "final")]
 
 
 # ─── evidence merge / cap / spans / mentions ─────────────────────────────────
 def test_collect_evidence_merges_tool_turns_by_time_and_caps():
-    logs = FakeLogs([_record("s1", "Builtin.Helpfulness", 0.5)])
     text = lambda sid: [{"role": "USER", "text": "q", "at": "2026-01-01T00:00:00"},  # noqa: E731
                         {"role": "ASSISTANT", "text": "a", "at": "2026-01-01T00:00:09"}]
     raw = []
@@ -172,8 +164,8 @@ def test_collect_evidence_merges_tool_turns_by_time_and_caps():
         raw.append({"role": "TOOL_RESULT", "id": f"c{i}", "name": "get_pto_balance",
                     "status": "success", "text": "ok", "at": f"2026-01-01T00:00:0{min(i, 8)}"})
     evidence, stats = ev.collect_evidence(
-        workspace=WS, log_group="/g", log_stream="run-x", transcript=text, max_sessions=30,
-        logs=logs, tool_turns=lambda sid: raw, tool_spans=lambda sids: {},
+        records=[_record("s1", "Builtin.Helpfulness", 0.5)], transcript=text, max_sessions=30,
+        tool_turns=lambda sid: raw, tool_spans=lambda sids: {},
     )
     turns = evidence[0].turns
     assert turns[0]["role"] == "user"
@@ -188,7 +180,6 @@ def test_collect_evidence_merges_tool_turns_by_time_and_caps():
 
 
 def test_collect_evidence_span_fallback_and_observed_tools():
-    logs = FakeLogs([_record("s1", "e", 0.1), _record("s2", "e", 0.9)])
     asked: list[list[str]] = []
 
     def spans(sids):
@@ -200,8 +191,8 @@ def test_collect_evidence_span_fallback_and_observed_tools():
                         "description": "Skills"}]}
 
     evidence, stats = ev.collect_evidence(
-        workspace=WS, log_group="/g", log_stream="run-x", transcript=lambda sid: [],
-        max_sessions=30, logs=logs,
+        records=[_record("s1", "e", 0.1), _record("s2", "e", 0.9)],
+        transcript=lambda sid: [], max_sessions=30,
         tool_turns=lambda sid: [] if sid == "s1" else [
             {"role": "TOOL_CALL", "id": "c3", "name": "skills", "input": {}}],
         tool_spans=spans,
@@ -219,14 +210,12 @@ def test_collect_evidence_span_fallback_and_observed_tools():
 
 
 def test_collect_evidence_tool_helpers_fail_soft():
-    logs = FakeLogs([_record("s1", "e", 0.1)])
-
     def boom(*_a):
         raise RuntimeError("cw down")
 
     evidence, stats = ev.collect_evidence(
-        workspace=WS, log_group="/g", log_stream="run-x", transcript=lambda sid: [],
-        max_sessions=30, logs=logs, tool_turns=boom, tool_spans=boom,
+        records=[_record("s1", "e", 0.1)], transcript=lambda sid: [], max_sessions=30,
+        tool_turns=boom, tool_spans=boom,
     )
     assert evidence[0].turns == [] and stats.tool_calls_seen == 0
 
@@ -298,7 +287,7 @@ def test_both_components_one_call():
                               "unknown_tool": "x", "lookup_hr_policy": "Policy lookup"},
         "tool_changes": ["clarify when to call get_pto_balance"],
     })])
-    res = prov.optimize(_req([_session()]), svc._noop, converse=converse)
+    res = prov.optimize(_req([_session()]), _noop, converse=converse)
     assert len(converse.calls) == 1
     assert res.status == "COMPLETED" and res.recommended_prompt == "P2"
     assert res.tool_status == "COMPLETED"
@@ -317,7 +306,7 @@ def test_tools_only_freezes_the_prompt():
     converse = _converse([json.dumps({"revised_prompt": "ignored",
                                       "tool_descriptions": {"get_pto_balance": "new"}})])
     res = prov.optimize(_req([_session()], components=("tool_descriptions",)),
-                        svc._noop, converse=converse)
+                        _noop, converse=converse)
     assert res.recommended_prompt is None and res.status == "FAILED"
     assert "frozen" in (res.error or "")
     assert res.tool_status == "COMPLETED" and res.tool_descriptions == {"get_pto_balance": "new"}
@@ -327,7 +316,7 @@ def test_tools_only_freezes_the_prompt():
 def test_tools_empty_result_is_completed_not_failed():
     prov = gepa_lite.GepaLiteProvider()
     converse = _converse([json.dumps({"revised_prompt": "P2", "tool_descriptions": {}})])
-    res = prov.optimize(_req([_session()]), svc._noop, converse=converse)
+    res = prov.optimize(_req([_session()]), _noop, converse=converse)
     assert res.tool_status == "COMPLETED" and res.tool_descriptions == {}
 
 
@@ -335,7 +324,7 @@ def test_no_tool_calls_settles_tool_side_and_prompt_proceeds():
     prov = gepa_lite.GepaLiteProvider()
     sess = _session(calls=())
     converse = _converse([json.dumps({"revised_prompt": "P2"})])
-    res = prov.optimize(_req([sess]), svc._noop, converse=converse)
+    res = prov.optimize(_req([sess]), _noop, converse=converse)
     assert res.status == "COMPLETED" and res.recommended_prompt == "P2"
     assert res.tool_status == "no-tool-calls" and "no tool calls" in res.tool_error
     assert res.tool_descriptions == {}
@@ -343,7 +332,7 @@ def test_no_tool_calls_settles_tool_side_and_prompt_proceeds():
     assert "INSTRUCTION ONLY" in converse.calls[0]["system"]
     # tools-only with no calls → no model call at all
     converse = _converse([])
-    res = prov.optimize(_req([sess], components=("tool_descriptions",)), svc._noop,
+    res = prov.optimize(_req([sess], components=("tool_descriptions",)), _noop,
                         converse=converse)
     assert res.status == "FAILED" and res.tool_status == "no-tool-calls"
     assert converse.calls == []
@@ -352,7 +341,7 @@ def test_no_tool_calls_settles_tool_side_and_prompt_proceeds():
 def test_no_discovered_tools_is_no_tools():
     prov = gepa_lite.GepaLiteProvider()
     converse = _converse([json.dumps({"revised_prompt": "P2"})])
-    res = prov.optimize(_req([_session()], tools={}), svc._noop, converse=converse)
+    res = prov.optimize(_req([_session()], tools={}), _noop, converse=converse)
     assert res.tool_status == "no-tools" and res.recommended_prompt == "P2"
 
 
@@ -363,17 +352,21 @@ def test_client_error_fails_both_components():
         raise ClientError({"Error": {"Code": "AccessDeniedException", "Message": "nope"}},
                           "Converse")
 
-    res = prov.optimize(_req([_session()]), svc._noop, converse=converse)
+    res = prov.optimize(_req([_session()]), _noop, converse=converse)
     assert res.status == "FAILED" and res.error == "AccessDeniedException: nope"
     assert res.tool_status == "error" and res.tool_error == res.error
     assert res.recommended_prompt is None and res.tool_descriptions == {}
 
 
-# ─── service seam ────────────────────────────────────────────────────────────
+# ─── the run-scoped seam (recommendations.provider_recommendation) ───────────
 def _mk_run(**kw) -> str:
     db = SessionLocal()
-    run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id="a1", agent_name="agent",
-                  status="completed", batch_eval_id="be-1", **kw)
+    agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="tool-agent", method="zip_runtime",
+                  status="active", resource_id="rt-1", spec={})
+    db.add(agent)
+    db.flush()
+    run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent.id, agent_name="agent",
+                  status="completed", session_ids=["s1"], **kw)
     db.add(run)
     db.commit()
     rid = run.id
@@ -381,170 +374,37 @@ def _mk_run(**kw) -> str:
     return rid
 
 
-def test_service_writes_both_components_with_attribution():
-    rid = _mk_run()
-    logs = FakeLogs([_record("s1", "Builtin.ToolSelectionAccuracy", 0.0, level="Span"),
-                     _record("s1", "Builtin.Helpfulness", 0.5, level="Trace")])
-    converse = _converse([json.dumps({
-        "diagnosis": "d", "revised_prompt": "P2",
-        "tool_descriptions": {"get_pto_balance": "better"}, "tool_changes": ["x"]})])
-    out = svc._third_party_prompt_recommendation(
-        "e1", {"id": "a1", "system_prompt": "cur"}, WS, svc._noop,
-        provider_id="gepa_lite", model_id="m",
-        source={"run_id": rid, "results_log_group": "/g", "results_log_stream": "run-x"},
-        transcript=lambda sid: [{"role": "user", "text": "q"}], logs=logs, converse=converse,
-        components=("system_prompt", "tool_descriptions"),
-        tools={"get_pto_balance": "old"},
-        tool_turns=lambda sid: [{"role": "TOOL_CALL", "id": "c", "name": "get_pto_balance",
-                                 "input": {"e": 1}}],
-        tool_spans=lambda sids: {},
-    )
-    assert out["system_prompt_status"] == "COMPLETED" and out["recommended_prompt"] == "P2"
-    assert out["provider"] == "gepa_lite" and out["tool_provider"] == "gepa_lite"
-    assert out["tool_provider_model_id"] == "m"
-    assert out["tool_status"] == "COMPLETED"
-    assert out["tool_descriptions"] == {"get_pto_balance": "better"}
-    assert out["analyzed_tools"] == {"get_pto_balance": "old"}
-    assert out["tool_explanation"] == "- x"
-    assert out["tool_provider_meta"]["tool_calls_seen"] == 1
-    assert "changes" not in out["tool_provider_meta"]  # prompt meta stays with the prompt
-
-
-def test_service_tools_only_leaves_prompt_keys_alone():
-    rid = _mk_run()
-    logs = FakeLogs([_record("s1", "e", 0.0, level="Span")])
-    converse = _converse([json.dumps({"tool_descriptions": {"t": "new"}})])
-    out = svc._third_party_prompt_recommendation(
-        "e1", {"id": "a1", "system_prompt": "cur"}, WS, svc._noop,
-        provider_id="gepa_lite", model_id="m",
-        source={"run_id": rid, "results_log_group": "/g", "results_log_stream": "run-x"},
-        transcript=lambda sid: [], logs=logs, converse=converse,
-        components=("tool_descriptions",), tools={"t": "old"},
-        tool_turns=lambda sid: [{"role": "TOOL_CALL", "id": "c", "name": "t", "input": {}}],
-        tool_spans=lambda sids: {},
-    )
-    for key in ("provider", "provider_model_id", "provider_meta", "system_prompt_status",
-                "recommended_prompt"):
-        assert key not in out
-    assert out["tool_status"] == "COMPLETED" and out["tool_descriptions"] == {"t": "new"}
-
-
-def test_service_no_results_stream_fails_requested_components_only():
-    out = svc._third_party_prompt_recommendation(
-        "e1", {"id": "a1", "system_prompt": "cur"}, WS, svc._noop,
-        provider_id="gepa_lite", model_id="m", source={"run_id": "r"},
-        components=("tool_descriptions",), tools={"t": "old"},
-    )
-    assert out["tool_status"] == "error" and "results log stream" in out["tool_error"]
-    assert "system_prompt_status" not in out
-
-
-def test_stage_recommend_routes_supported_types_to_provider(monkeypatch):
-    captured: dict = {}
-
-    def fake_provider_path(*a, **k):
-        captured.update(k)
-        return {"provider": "gepa_lite", "system_prompt_status": "COMPLETED",
-                "recommended_prompt": "p", "tool_provider": "gepa_lite",
-                "tool_status": "COMPLETED", "tool_descriptions": {}}
-
-    def boom(*a, **k):
-        raise AssertionError("AgentCore generators must not run")
-
-    monkeypatch.setattr(svc, "_third_party_prompt_recommendation", fake_provider_path)
-    monkeypatch.setattr(svc.ac, "start_system_prompt_recommendation", boom)
-    monkeypatch.setattr(svc.ac, "start_tool_description_recommendation", boom)
-    monkeypatch.setattr(svc, "_run_tool_recommendation", boom)
-    monkeypatch.setattr(svc, "data_client", lambda ws: object())
-    agent = {"resource_id": "rid", "runtime_name": "rt", "system_prompt": "cur",
-             "tools": {"t": "d"}}
-    out = svc.stage_recommend("e1", agent, WS, provider="gepa_lite", source={"run_id": "r"})
-    assert captured["components"] == ("system_prompt", "tool_descriptions")
-    assert captured["tools"] == {"t": "d"}
-    assert out["tool_provider"] == "gepa_lite"
-
-
-def test_stage_recommend_default_provider_runs_both_agentcore_generators(monkeypatch):
-    called: list[str] = []
-    monkeypatch.setattr(svc, "_third_party_prompt_recommendation",
-                        lambda *a, **k: called.append("provider"))
-    monkeypatch.setattr(svc, "data_client", lambda ws: object())
-    monkeypatch.setattr(svc.ac, "start_system_prompt_recommendation",
-                        lambda *a, **k: called.append("sp") or {"recommendationId": "r"})
-    monkeypatch.setattr(svc.ac, "poll_recommendation", lambda *a, **k: {
-        "status": "COMPLETED", "recommendationResult": {
-            "systemPromptRecommendationResult": {"recommendedSystemPrompt": "x"}}})
-    monkeypatch.setattr(svc, "_run_tool_recommendation",
-                        lambda *a, **k: (called.append("td") or ({"t": "d2"}, "COMPLETED", "")))
-    agent = {"resource_id": "rid", "runtime_name": "rt", "system_prompt": "cur",
-             "tools": {"t": "d"}}
-    out = svc.stage_recommend("e1", agent, WS)
-    assert called == ["sp", "td"]
-    assert "provider" not in out and "tool_provider" not in out
-
-
-def _mk_exp(**kw):
+def _results(run_id: str, records: list[dict[str, Any]]) -> None:
     db = SessionLocal()
-    exp = Experiment(workspace_id=DEFAULT_WORKSPACE_ID, name="EXP", agent_id="a1",
-                     agent_name="agent", **kw)
-    db.add(exp)
+    for i, rec in enumerate(records):
+        db.add(EvalResult(
+            id=jobs.record_id(run_id, rec["session_id"], rec["evaluator_id"], i),
+            workspace_id=DEFAULT_WORKSPACE_ID, source="run", run_id=run_id,
+            session_id=rec["session_id"], evaluator_id=rec["evaluator_id"], level=rec["level"],
+            score=rec["score"], explanation=rec["explanation"],
+        ))
     db.commit()
-    db.refresh(exp)
     db.close()
-    return exp
 
 
-def _reload(exp_id):
-    db = SessionLocal()
-    try:
-        return db.get(Experiment, exp_id)
-    finally:
-        db.close()
+def _run_to_completion(executor: FakeExecutor, converse):
+    """``sleep`` double: run the submitted job's reflection with the scripted converse."""
+
+    def sleep(_s):
+        job = executor.submitted[-1]
+        spec = job.spec
+        result = jobs_recommend.reflect(
+            converse=converse, model_id=spec["model_id"], current_prompt=spec["current_prompt"],
+            evidence=spec["evidence"], stats=spec["stats"], tools=spec["tools"],
+            components=tuple(spec["components"]), extra_feedback=spec["extra_feedback"],
+            max_chars=spec["max_chars"], max_tokens=spec["max_tokens"],
+        )
+        executor.complete(job.job_id, [], summary={"recommendation": result})
+
+    return sleep
 
 
-def test_regenerating_one_type_keeps_the_other_types_attribution(monkeypatch):
-    monkeypatch.setattr(svc, "_spawn", lambda target: target())
-    monkeypatch.setattr(svc, "_agent_meta", lambda exp, ws: {"system_prompt": "cur", "tools": {}})
-    monkeypatch.setattr(svc, "stage_recommend", lambda *a, **k: {
-        "system_prompt_status": "COMPLETED", "recommended_prompt": "aws", "explanation": ""})
-    exp = _mk_exp(artifacts={"agent_meta": {}, "recommend": {
-        "provider": "gepa_lite", "provider_model_id": "m", "provider_meta": {},
-        "recommended_prompt": "gepa", "system_prompt_status": "COMPLETED",
-        "tool_provider": "gepa_lite", "tool_provider_model_id": "m", "tool_provider_meta": {},
-        "tool_status": "COMPLETED", "tool_descriptions": {"t": "new"},
-        "analyzed_tools": {"t": "old"}}})
-    svc.act_recommend(exp.id, svc._noop, types=["system_prompt"])
-    rec = _reload(exp.id).artifacts["recommend"]
-    assert "provider" not in rec and rec["recommended_prompt"] == "aws"
-    assert rec["tool_provider"] == "gepa_lite" and rec["tool_descriptions"] == {"t": "new"}
-    # and the other way round
-    monkeypatch.setattr(svc, "stage_recommend", lambda *a, **k: {
-        "tool_status": "COMPLETED", "tool_descriptions": {}, "analyzed_tools": {"t": "old"}})
-    svc.act_recommend(exp.id, svc._noop, types=["tool_descriptions"])
-    rec = _reload(exp.id).artifacts["recommend"]
-    assert "tool_provider" not in rec and rec["recommended_prompt"] == "aws"
-
-
-def test_attribution_from_either_component():
-    assert svc.recommendation_attribution({"tool_provider": "gepa_lite",
-                                           "tool_provider_model_id": "m"}) == "gepa_lite · m"
-    assert svc.recommendation_attribution({"provider": "gepa_lite", "provider_model_id": "a",
-                                           "tool_provider": "gepa_lite",
-                                           "tool_provider_model_id": "b"}) == "gepa_lite · a"
-
-
-@pytest.mark.parametrize("types", [["tool_descriptions"], None])
-def test_router_source_rule_covers_tool_descriptions_for_gepa_lite(client, monkeypatch, types):
-    monkeypatch.setattr(svc, "run_action", lambda *a, **k: pytest.fail("dispatched"))
-    exp = _mk_exp(artifacts={"agent_meta": {"system_prompt": "cur"}})
-    body: dict[str, Any] = {"action": "recommend", "recommend_provider": "gepa_lite"}
-    if types:
-        body["recommend_types"] = types
-    res = client.post(f"/api/experiments/{exp.id}/action", json=body)
-    assert res.status_code == 422
-    assert res.json()["code"] == "experiment.provider_requires_source"
-
-
+# ─── experiment artefact key ownership (W-E3's act_recommend, stage mocked) ──
 # ─── check-agent additions ───────────────────────────────────────────────────
 def test_precheck_settled_tool_side_survives_a_model_failure():
     """The pre-check made no model call for the tool side, so a later model
@@ -555,7 +415,7 @@ def test_precheck_settled_tool_side_survives_a_model_failure():
         raise ClientError({"Error": {"Code": "ThrottlingException", "Message": "slow"}},
                           "Converse")
 
-    res = prov.optimize(_req([_session(calls=())]), svc._noop, converse=converse)
+    res = prov.optimize(_req([_session(calls=())]), _noop, converse=converse)
     assert res.status == "FAILED" and res.error == "ThrottlingException: slow"
     assert res.tool_status == "no-tool-calls" and "no tool calls" in res.tool_error
     assert res.tool_descriptions == {}
@@ -564,46 +424,18 @@ def test_precheck_settled_tool_side_survives_a_model_failure():
 def test_unparseable_json_twice_fails_both_components():
     prov = gepa_lite.GepaLiteProvider()
     converse = _converse(["not json", "still not json"])
-    res = prov.optimize(_req([_session()]), svc._noop, converse=converse)
+    res = prov.optimize(_req([_session()]), _noop, converse=converse)
     assert len(converse.calls) == 2
     assert res.status == "FAILED" and "no parseable JSON" in (res.error or "")
     assert res.tool_status == "error" and res.tool_error == res.error
     assert res.recommended_prompt is None and res.tool_descriptions == {}
 
 
-def test_stage_recommend_provider_component_ignores_recommend_tools(monkeypatch):
-    """R5: the discovered set is authoritative for a provider; `recommend_tools`
-    keeps its meaning only on the AgentCore branch."""
-    captured: dict = {}
-    monkeypatch.setattr(svc, "_third_party_prompt_recommendation",
-                        lambda *a, **k: captured.update(k) or {})
-    monkeypatch.setattr(svc, "data_client", lambda ws: object())
-    agent = {"resource_id": "rid", "runtime_name": "rt", "system_prompt": "cur",
-             "tools": {"own": "d"}}
-    svc.stage_recommend("e1", agent, WS, provider="gepa_lite", source={"run_id": "r"},
-                        tools={"caller_supplied": "x"})
-    assert captured["tools"] == {"own": "d"}
-
-
-def test_tool_explanation_is_owned_by_the_tool_type(monkeypatch):
-    monkeypatch.setattr(svc, "_spawn", lambda target: target())
-    monkeypatch.setattr(svc, "_agent_meta", lambda exp, ws: {"system_prompt": "cur", "tools": {}})
-    monkeypatch.setattr(svc, "stage_recommend", lambda *a, **k: {
-        "tool_status": "COMPLETED", "tool_descriptions": {}, "analyzed_tools": {"t": "old"}})
-    exp = _mk_exp(artifacts={"agent_meta": {}, "recommend": {
-        "tool_provider": "gepa_lite", "tool_status": "COMPLETED",
-        "tool_descriptions": {"t": "new"}, "tool_explanation": "- stale note"}})
-    svc.act_recommend(exp.id, svc._noop, types=["tool_descriptions"])
-    assert "tool_explanation" not in _reload(exp.id).artifacts["recommend"]
-
-
 def test_collect_evidence_normalizes_transcript_role_case():
     """session_transcript yields USER/ASSISTANT; the renderer filters on
-    user/assistant. P1 dropped the whole conversation because of this — the
-    reflection only ever saw judge explanations. Roles are normalised now."""
-    logs = FakeLogs([_record("s1", "e", 0.5)])
+    user/assistant. Roles are normalised so the reflection sees the conversation."""
     evidence, _ = ev.collect_evidence(
-        workspace=WS, log_group="/g", log_stream="run-x", max_sessions=30, logs=logs,
+        records=[_record("s1", "e", 0.5)], max_sessions=30,
         transcript=lambda sid: [{"role": "USER", "text": "the question"},
                                 {"role": "ASSISTANT", "text": "the answer"}],
     )
@@ -625,7 +457,7 @@ def test_truncated_reflection_retries_with_a_bigger_budget():
 
     req = _req([_session()], components=("system_prompt",))
     req.max_tokens = 4096
-    res = prov.optimize(req, svc._noop, converse=converse)
+    res = prov.optimize(req, _noop, converse=converse)
     assert res.status == "COMPLETED" and res.recommended_prompt == "P2"
     assert calls == [4096, 8192]  # the retry doubles the budget
 
@@ -637,7 +469,7 @@ def test_truncated_twice_reports_the_token_limit():
         return '{"diagnosis": "cut', {"input_tokens": 1, "output_tokens": max_tokens,
                                       "stop_reason": "max_tokens"}
 
-    res = prov.optimize(_req([_session()]), svc._noop, converse=converse)
+    res = prov.optimize(_req([_session()]), _noop, converse=converse)
     assert res.status == "FAILED" and "truncated by the token limit" in res.error
     assert "raise prompt_opt_max_tokens" in res.error
     assert res.tool_status == "error"
@@ -655,7 +487,7 @@ def test_parse_reflection_accepts_raw_newlines_inside_strings():
 def test_unparseable_reply_reason_carries_the_json_error():
     prov = gepa_lite.GepaLiteProvider()
     converse = _converse(['{"diagnosis": "x" "revised_prompt": 1}', '{"a": [}'])
-    res = prov.optimize(_req([_session()], components=("system_prompt",)), svc._noop,
+    res = prov.optimize(_req([_session()], components=("system_prompt",)), _noop,
                         converse=converse)
     assert res.status == "FAILED"
     assert res.error.startswith("reflection model returned no parseable JSON — JSON error:")

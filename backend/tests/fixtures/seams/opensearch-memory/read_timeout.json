@@ -1,0 +1,14 @@
+{
+ "seam": "opensearch-memory",
+ "case": "read_timeout",
+ "captured_at": "2026-10-19T09:14:27Z",
+ "notes": "Timeout experiment with a 5 ms read timeout (no load on the domain); 429/5xx not provoked by design.",
+ "response_or_error": {
+  "exception": "urllib3.exceptions.ReadTimeoutError",
+  "str": "HTTPSConnectionPool(host='search-<memory-domain>.cn-northwest-1.es.amazonaws.com.cn', port=443): Read timed out. (read timeout=0.005)",
+  "kwargs": {}
+ },
+ "status": null,
+ "elapsed_s": 0.044,
+ "source": "t1 host, instance role (uv env boto3 1.43.109), via SSM"
+}

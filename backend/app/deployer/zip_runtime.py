@@ -11,6 +11,7 @@ Package/deploy internals adapted from agentcore_eva_opt backend/app/deployer.py
 and role instead of per-agent resources.
 """
 
+import json
 import os
 import re
 import shutil
@@ -25,17 +26,30 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.core.runtime_target import TARGET_PYTHON, pip_platform_args, uv_platform
+from app.deployer import build_dirs, log_retention
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
-from app.deployer.pipeline import StageContext, StageResult, register_method
+from app.deployer.pipeline import (
+    MethodCapabilities,
+    StageContext,
+    StageInterrupted,
+    StageResult,
+    killed_by_signal,
+    register_method,
+)
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
-from app.services import agent_iam
+from app.services import agent_iam, policy_enforcement
 from app.services import inbound_auth as inbound_auth_service
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
-from app.services.requirements_txt import RESOLVE_FIX_HINTS, summarize_resolver_failure
+from app.services.requirements_txt import (
+    RESOLVE_FIX_HINTS,
+    describe_exit,
+    summarize_resolver_failure,
+    terminated_sentence,
+)
 from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES, SKILL_NAME_RE
 from app.services.workspace import WorkspaceContext
 from app.templates.strands_agent import base_requirements, render_main_py
@@ -47,7 +61,72 @@ def sanitize_runtime_name(name: str) -> str:
     The base is shared with the execution role's workload-identity scope
     (``agent_iam.own_workload_identity_arn``), which pins the 6-hex suffix
     length — change both together."""
-    return f"{agent_iam.runtime_name_base(name)}_{uuid.uuid4().hex[:6]}"
+    suffix = uuid.uuid4().hex[: agent_iam.RUNTIME_SUFFIX_HEX_LEN]
+    return f"{agent_iam.runtime_name_base(name)}_{suffix}"
+
+
+# Runtime states a resumed deploy may take over; CREATE_FAILED/UPDATE_FAILED/DELETING
+# are left alone (the former would only fail the poll, the latter is going away).
+ADOPTABLE_RUNTIME_STATUSES = frozenset({"CREATING", "UPDATING", "READY"})
+_RUNTIME_SUFFIX_RE = re.compile(rf"^_[0-9a-f]{{{agent_iam.RUNTIME_SUFFIX_HEX_LEN}}}$")
+
+
+def find_adoptable_runtime(
+    client: Any, db: Any, row: Agent, role_arn: str | None, log: Callable[[str], None]
+) -> dict[str, Any] | None:
+    """The Runtime a dead process already created for ``row``, if exactly one exists.
+
+    N10v2-bug1: ``CreateAgentRuntime`` is accepted, the backend restarts before the
+    ledger commit (or the resumed stage fails earlier), and a naive re-run issues a
+    second create — orphaning the first runtime behind the row. The runtime name is
+    ``<runtime_name_base(name)>_<6 hex>`` with a random suffix, so the lookup is by the
+    deterministic base and the 6-hex shape; because bases are not unique (``a-b`` and
+    ``a_b`` share one, and so may same-named agents in two workspaces), a candidate is
+    adopted only when its ``roleArn`` is the role this deploy is about to use (per-agent
+    roles make that exact) **and** no other ledger row already records it (the guard
+    that still holds on the shared role). Anything else → ``None`` → create as before.
+    A denied ``ListAgentRuntimes`` is logged and treated as "nothing to adopt".
+    """
+    base = agent_iam.runtime_name_base(row.name)
+    try:
+        summaries = rt.list_runtimes(client)
+    except Exception as exc:  # noqa: BLE001 — listing is an optimisation, never a blocker
+        log(f"ListAgentRuntimes failed ({type(exc).__name__}: {exc}) — creating a new runtime")
+        return None
+    candidates: list[dict[str, Any]] = []
+    for summary in summaries:
+        name = str(summary.get("agentRuntimeName") or "")
+        runtime_id = summary.get("agentRuntimeId")
+        if not runtime_id or not name.startswith(base):
+            continue
+        if not _RUNTIME_SUFFIX_RE.match(name[len(base):]):
+            continue
+        try:
+            detail = rt.get_runtime(client, runtime_id)
+        except Exception as exc:  # noqa: BLE001 — deleted between list and get, or denied
+            log(f"GetAgentRuntime {runtime_id} failed ({type(exc).__name__}) — not adopting it")
+            continue
+        if detail.get("status") not in ADOPTABLE_RUNTIME_STATUSES:
+            continue
+        owner_role = detail.get("roleArn")
+        if role_arn and owner_role and owner_role != role_arn:
+            continue
+        taken = (
+            db.query(Agent)
+            .filter(Agent.resource_id == runtime_id, Agent.id != row.id)
+            .first()
+        )
+        if taken is not None:
+            continue
+        candidates.append({**detail, "agentRuntimeName": name})
+    if len(candidates) == 1:
+        return candidates[0]
+    if candidates:
+        log(
+            f"{len(candidates)} runtimes named {base}_* could be this agent's — "
+            "ambiguous, creating a new runtime"
+        )
+    return None
 
 
 # The deploy target: AgentCore Runtime zips run ARM64 on Python 3.13. The
@@ -57,6 +136,43 @@ def sanitize_runtime_name(name: str) -> str:
 # aarch64 would produce a lock that does not match the artifact.
 
 LOCK_FILENAME = "requirements.lock"
+
+
+def _build_env() -> dict[str, str]:
+    """Ambient environment plus the configured PyPI mirror — `uv pip compile`
+    and `pip install` both read these; nothing else in this module should set
+    `UV_INDEX_URL`/`UV_DEFAULT_INDEX`/`PIP_INDEX_URL` directly.
+
+    uv 0.9.10 (this repo's pinned version) deprecates `UV_INDEX_URL` in favor
+    of `UV_DEFAULT_INDEX` — both are set to the same value so the mirror
+    applies regardless of which uv release actually runs the resolve.
+    """
+    settings = get_settings()
+    env = {
+        **os.environ,
+        "UV_INDEX_URL": settings.pip_index_url,
+        "UV_DEFAULT_INDEX": settings.pip_index_url,
+        "PIP_INDEX_URL": settings.pip_index_url,
+    }
+    if settings.pip_extra_index_url:
+        # N11-obs25: the optional secondary index — uv's additional indexes (UV_INDEX)
+        # and pip's extra index — consulted after the primary mirror.
+        env["UV_INDEX"] = settings.pip_extra_index_url
+        env["PIP_EXTRA_INDEX_URL"] = settings.pip_extra_index_url
+    return env
+
+
+def _resolver_detail(raw: str, limit: int = 600) -> str:
+    """The resolver's own words, bounded and single-line — the summary above names the
+    package, this names the cause (N13-bug1 / N11-obs25: a mirror serving an expired
+    certificate surfaced only as "no matching distribution" until the raw text was
+    kept)."""
+    text = " ".join((raw or "").split())
+    if not text:
+        return ""
+    if len(text) > limit:
+        text = "…" + text[-limit:]
+    return f" (resolver output: {text})"
 
 
 def _compile_lock(
@@ -91,17 +207,37 @@ def _compile_lock(
         ],
         capture_output=True,
         text=True,
+        env=_build_env(),
     )
     if proc.returncode != 0:
+        raw = proc.stderr or proc.stdout or ""
+        _raise_if_stopped_with_the_service("requirements resolve (uv)", proc.returncode)
         raise RuntimeError(
-            "could not resolve the requirements into a hashed lockfile: "
+            f"could not resolve the requirements into a hashed lockfile "
+            f"({describe_exit(proc.returncode)}): "
             + summarize_resolver_failure(
-                proc.stderr or proc.stdout or "",
+                raw,
                 python_version=python_version or TARGET_PYTHON,
                 hints=RESOLVE_FIX_HINTS,
+                returncode=proc.returncode,
             )
+            + _resolver_detail(raw)
         )
     return lock
+
+
+def _raise_if_stopped_with_the_service(what: str, returncode: int | None) -> None:
+    """N17-obs113: a build subprocess a signal killed (`systemctl restart` SIGTERMs the
+    whole control group; an operator's kill; the OOM killer) is not a failed build — the
+    stage is interrupted: the pipeline resumes it at the next start when the service is
+    stopping, else re-runs it once in-process; `failure` is the terminal message when the
+    retry is killed too."""
+    if killed_by_signal(returncode):
+        raise StageInterrupted(
+            f"{what} was killed ({describe_exit(returncode)}) — the stage re-runs",
+            failure=f"{what} failed ({describe_exit(returncode)}): "
+            + terminated_sentence(returncode or 0),
+        )
 
 
 def build_zip(
@@ -148,11 +284,15 @@ def build_zip(
         ],
         capture_output=True,
         text=True,
+        env=_build_env(),
     )
     if proc.returncode != 0:
+        _raise_if_stopped_with_the_service("pip install", proc.returncode)
         raise RuntimeError(
-            "pip install of the locked requirements failed: "
-            + summarize_resolver_failure(proc.stderr or "", hints=RESOLVE_FIX_HINTS)
+            f"pip install of the locked requirements failed ({describe_exit(proc.returncode)}): "
+            + summarize_resolver_failure(
+                proc.stderr or "", hints=RESOLVE_FIX_HINTS, returncode=proc.returncode
+            )
         )
 
     (pkg_dir / "main.py").write_text(code, encoding="utf-8")
@@ -202,11 +342,26 @@ def _approved_skill_paths(
     workspace: WorkspaceContext, log: Callable[[str], None]
 ) -> dict[str, str]:
     """{skill name → s3 prefix uri} for every APPROVED AGENT_SKILLS record."""
-    try:
-        from app.services.registry_console import attachable_records
+    from app.services import registry_backend
 
-        records = attachable_records(workspace).get("skills", [])
-        return {s["name"]: s["path"] for s in records}
+    backend = registry_backend.backend_or_none()
+    if backend is None:
+        log("skill registry unavailable — skills skipped")
+        return {}
+    try:
+        paths: dict[str, str] = {}
+        for summary in backend.list_records(workspace, "AGENT_SKILLS", "APPROVED"):
+            record = backend.get_record(workspace, summary["recordId"])
+            try:
+                definition = json.loads(
+                    record["descriptors"]["agentSkills"]["skillDefinition"]["inlineContent"]
+                )
+            except (KeyError, TypeError, ValueError):
+                continue  # malformed descriptor — skip, never break the deploy
+            path = definition.get("path") or ""
+            if path:
+                paths[record["name"]] = path
+        return paths
     except Exception as exc:  # registry lookup must never break a deploy
         log(f"skill registry lookup failed ({type(exc).__name__}) — skills skipped")
         return {}
@@ -373,8 +528,37 @@ def _download_named_skills(
     return {"bundled": bundled, "files": total_files, "bytes": total_bytes}
 
 
-def _generate_code(spec: AgentSpec) -> tuple[str, str]:
-    """(code, source label) — studio artifacts arrive pre-generated."""
+def _preset_template(agent: Agent) -> str | None:
+    """A ``zip_runtime`` system preset's template name (``PRESETS[system_key].template``),
+    None for every ordinary agent (plan §C.1 — no AgentSpec field carries it)."""
+    if not getattr(agent, "system_key", None):
+        return None
+    from app.system_agents.presets import get_preset
+
+    preset = get_preset(agent.system_key or "")
+    return preset.template if preset else None
+
+
+def _preset_lifecycle(agent: Agent) -> dict[str, int] | None:
+    if not getattr(agent, "system_key", None):
+        return None
+    from app.system_agents.presets import get_preset
+
+    preset = get_preset(agent.system_key or "")
+    return dict(preset.lifecycle) if preset and preset.lifecycle else None
+
+
+def _generate_code(
+    spec: AgentSpec, template: str | None = None, *, principal_carrier: bool = False,
+) -> tuple[str, str]:
+    """(code, source label) — studio artifacts arrive pre-generated; a system preset's
+    ``template`` (the evaluation worker) renders its own entrypoint. ``principal_carrier``
+    (stream A3) renders the per-user principal carrier into the shared Strands template only —
+    the other sources (worker, converted bundle, studio, A2A) carry their own code."""
+    if template == "eval_worker":
+        from app.templates.eval_worker import render_main_py as render_worker
+
+        return render_worker(spec), "evaluation worker template"
     if spec.code_bundle:
         # harness conversion: the bundle's main.py is already the entrypoint
         # (config-bundle contract grafted at convert time)
@@ -382,12 +566,22 @@ def _generate_code(spec: AgentSpec) -> tuple[str, str]:
     if spec.method == "studio" and spec.code:
         from app.templates.studio_agent import adapt_studio_code
 
-        return adapt_studio_code(spec.code), "studio artifact (adapted)"
+        return adapt_studio_code(spec.code, spec), "studio artifact (adapted)"
     if spec.protocol == "a2a":
         from app.templates.strands_a2a_agent import render_a2a_main_py
 
         return render_a2a_main_py(spec), "strands A2A template"
-    return render_main_py(spec), "strands template"
+    return (
+        render_main_py(spec, principal_carrier=principal_carrier),
+        "strands template"
+        + (" + principal carrier" if principal_carrier else ""),
+    )
+
+
+def _principal_carrier(ctx: StageContext, agent: Agent, spec: AgentSpec) -> bool:
+    """Stream A3: the job's one carrier decision — the same answer the narrowing used to
+    arm or disarm the guard (``policy_enforcement.job_carrier_decision``)."""
+    return policy_enforcement.job_carrier_decision(ctx, agent, spec)[0]
 
 
 def write_bundle_files(spec: AgentSpec, pkg_dir: Path) -> int:
@@ -407,23 +601,6 @@ STUDIO_EXTRA_REQUIREMENTS = [
     # studio's generator imports the strands_tools catalog
     "strands-agents-tools",
 ]
-
-# Carries `openai` + `aws-bedrock-token-generator`, which the template's
-# OpenAIResponsesModel(bedrock_mantle_config=...) branch needs. Emitted as its
-# own line next to the base strands-agents[otel] pin — pip intersects both specs
-# for the same project, and this is the shape the canvas publish path produces.
-#
-# The floor is NOT the base pin's >=1.0: the `openai.gpt-5.*` → /openai/v1
-# base-path split that the default Mantle model needs landed in 1.46, and
-# `bedrock_mantle_config` is a keyword argument, so an older resolution would
-# fail at first invoke instead of at package time. 1.47 is the verified SDK.
-#
-# `openai` is named again on purpose. The extra only asks for >=1.68, but
-# strands' openai_responses module imports `openai` 2.x APIs at module scope, so
-# a resolver that settles on 1.x would package cleanly and ImportError at
-# container start. Today pip picks 2.x anyway; this makes that deterministic
-# rather than a property of when the zip happened to be built.
-MANTLE_EXTRA_REQUIREMENTS = ["strands-agents[openai]>=1.47,<2", "openai>=2,<3"]
 
 
 def platform_requirements(
@@ -455,14 +632,16 @@ def platform_requirements(
         # nodes use, so it supplies its own extras via spec.requirements;
         # spec.model_source is inert for studio specs.
         extra = STUDIO_EXTRA_REQUIREMENTS
-    elif model_source == "mantle":
-        extra = MANTLE_EXTRA_REQUIREMENTS
     else:
         extra = []
     return base_requirements() + extra
 
 
-def _method_requirements(spec: AgentSpec) -> list[str]:
+def _method_requirements(spec: AgentSpec, template: str | None = None) -> list[str]:
+    if template == "eval_worker":
+        from app.templates.eval_worker import base_requirements as worker_requirements
+
+        return worker_requirements() + spec.requirements
     return (
         platform_requirements(spec.method, spec.model_source, spec.protocol)
         + spec.requirements
@@ -471,27 +650,54 @@ def _method_requirements(spec: AgentSpec) -> list[str]:
 
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     spec = AgentSpec(**agent.spec)
-    code, source = _generate_code(spec)
-    requirements = _method_requirements(spec)
+    template = _preset_template(agent)
+    # the deploy-time policy context (the principal carrier), computed once per job and
+    # logged here; Global parity: nothing is narrowed, no guard is rendered
+    policy_enforcement.stage_policy(ctx, agent, spec)
+    # rev-r16 on N16-obs72: the merged environment (spec + platform keys) is derived here,
+    # before any AWS call, so an over-budget map fails this stage with
+    # ``agent.env_budget_exceeded`` instead of the deploy stage's ValidationException
+    runtime_environment(
+        spec, ctx.workspace.resources, workload_name=agent.resource_id or "",
+        agent_id=agent.id,
+    )
+    code, source = _generate_code(spec, template,
+                                  principal_carrier=_principal_carrier(ctx, agent, spec))
+    requirements = _method_requirements(spec, template)
     ctx.scratch["code"] = code
     ctx.scratch["requirements"] = requirements
     ctx.log(f"{source} · {len(code)} bytes · model {spec.model_id}")
     return StageResult(detail=f"{source} · {len(code)} bytes")
 
 
+# N12-bug10: build dirs live INSIDE the checkout (git-ignored data/), owned by whoever runs
+# the backend — never a shared /tmp/launchpad_build_<name> that a root-run bootstrap could
+# leave root-owned for the service user to trip over (PermissionError on
+# deployment_package.zip); the checkout-local dir also survives /tmp cleaning. The root and
+# the per-agent path live in `deployer/build_dirs.py` together with their retention
+# (N17-obs151: removed on agent delete, swept at startup); `build_dir_for` is re-exported
+# here for the Harness method, which assembles its package in the very same place.
+build_dir_for = build_dirs.build_dir_for
+
+
 def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     from app.deployer.input_contract import record_input_contract
 
+    # round 16: the creation-time validator must have refused this — kept as the
+    # last line of defence for stored specs (tests/fail_early_registry.py)
     bucket = ctx.workspace.resources.get("artifacts_bucket")
     if not bucket:
         raise RuntimeError(
             "artifacts_bucket missing from this workspace's resource map — run its bootstrap"
         )
     spec = AgentSpec(**agent.spec)
-    code = ctx.scratch.get("code") or _generate_code(spec)[0]
-    requirements = ctx.scratch.get("requirements") or _method_requirements(spec)
+    template = _preset_template(agent)
+    code = ctx.scratch.get("code") or _generate_code(
+        spec, template, principal_carrier=_principal_carrier(ctx, agent, spec),
+    )[0]
+    requirements = ctx.scratch.get("requirements") or _method_requirements(spec, template)
 
-    build_dir = Path(f"/tmp/launchpad_build_{agent.name}")
+    build_dir = build_dir_for(agent.name)
     t0 = time.monotonic()
     bundled: dict[str, Any] = {}
 
@@ -499,6 +705,10 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
         if spec.code_bundle:
             count = write_bundle_files(spec, pkg_dir)
             ctx.log(f"bundle files staged: {count} (+ main.py)")
+        if template == "eval_worker":
+            from app.templates.eval_worker import write_library
+
+            ctx.log(f"evaluation engine library staged: {write_library(pkg_dir)} files")
         bundled.update(bundle_skills(spec, code, pkg_dir, ctx.log, ctx.workspace))
 
     zip_path = build_zip(
@@ -526,15 +736,43 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
 
 def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
     spec = AgentSpec(**agent.spec)
+    settings = get_settings()
     role_arn, detail = agent_iam.provision_execution_role(
-        agent, spec, get_settings(), ctx.workspace, ctx.log, iam=iam_client
+        agent, spec, settings, ctx.workspace, ctx.log, iam=iam_client,
     )
+    if agent.system_key:  # a system preset is never deployed on the shared role
+        from app.system_agents.service import require_dedicated_role
+
+        require_dedicated_role(agent, role_arn, ctx.workspace, settings)
     ctx.scratch["execution_role_arn"] = role_arn
     return StageResult(detail=detail)
 
 
+def _needs_workload_pin(client: Any, runtime_id: str, ready: dict[str, Any]) -> bool:
+    """Observed state, not a mode heuristic: pin only when the live environment does not
+    already name this runtime's workload identity (``ready`` is the READY
+    GetAgentRuntime detail; re-read when it carries no environment block)."""
+    from app.templates.identity_support import ENV_WORKLOAD
+
+    live = ready.get("environmentVariables")
+    if not isinstance(live, dict):
+        live = rt.get_runtime(client, runtime_id).get("environmentVariables") or {}
+    return live.get(ENV_WORKLOAD) != runtime_id
+
+
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
     resources = ctx.workspace.resources
+    if agent.system_key:
+        # Defensive: a resumed job may re-enter here with no provision step in this
+        # attempt's scratch, so the role would otherwise resolve to the workspace
+        # resource map's shared execution_role_arn — the same guard provision runs,
+        # re-checked against whatever role this attempt is actually about to send.
+        from app.system_agents.service import require_dedicated_role
+
+        role_arn = ctx.scratch.get("execution_role_arn") or resources.get(
+            "execution_role_arn", ""
+        )
+        require_dedicated_role(agent, role_arn or None, ctx.workspace, get_settings())
     client = control_client(ctx.workspace)
     mode = ctx.scratch.get("mode", "create")
     db = ctx.session()
@@ -545,10 +783,14 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         # the console badge) read the snapshot, never re-resolve.
         resolved_auth = inbound_auth_service.resolve_for_agent(row, db)
         authorizer = inbound_auth_service.authorizer_configuration(resolved_auth)
+        # the deploy-time policy context (scratch), recomputed on a resumed job
+        policy = policy_enforcement.stage_policy(ctx, row, AgentSpec(**row.spec))
 
         def _kwargs() -> dict:
             spec = AgentSpec(**row.spec)
-            environment = runtime_environment(spec, resources, agent_id=row.id)
+            environment = runtime_environment(
+                spec, resources, workload_name=row.resource_id or "", agent_id=row.id,
+            )
             return {
                 "s3_bucket": ctx.scratch.get("s3_bucket")
                 or resources.get("artifacts_bucket", ""),
@@ -566,7 +808,27 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "authorizer_configuration": authorizer,
                 # managed session storage — likewise reset when omitted on update
                 "filesystem_configurations": filesystem_configurations(spec) or None,
+                # Runtime lifecycle (idle timeout / max lifetime) of a system preset —
+                # the evaluation worker's 8 h async budget (plan §B.0, R-15). N12-bug7:
+                # UpdateAgentRuntime treats an omitted lifecycleConfiguration as "reset to
+                # the defaults" (900 s idle), so it is echoed on EVERY call that touches
+                # the runtime — create, re-publish and the A2A workload-name pin — not
+                # only at create time. None (ordinary agent) omits the field.
+                "lifecycle": _preset_lifecycle(row),
             }
+
+        # N10v3-bug5 (F4 pin): LAUNCHPAD_WORKLOAD_NAME = this runtime's own workload
+        # identity (its runtime id), which does not exist until CreateAgentRuntime
+        # returns. Once the runtime is READY the live environment is read back: when it
+        # does not name itself yet, one follow-up UpdateAgentRuntime pins it (an update
+        # needs READY first). A re-publish, a resumed or adopted create whose env already
+        # carries it → no-op. Live correction (N12-bug8 / r4-F): the pin is informational
+        # only — a runtime-linked workload identity CANNOT self-mint a token (Identity
+        # refuses GetWorkloadAccessToken: "linked to a service"), so an A2A server gets
+        # its key solely from the token the Runtime injects when the CALLER sends
+        # runtimeUserId (every Launchpad caller now does); the template tries the
+        # self-mint once, then disables it for the process.
+        is_a2a = AgentSpec(**row.spec).protocol == "a2a"
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)
             runtime_id = row.resource_id
@@ -583,6 +845,20 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         elif row.resource_id:
             runtime_id = row.resource_id
             ctx.log(f"resuming — runtime {runtime_id} already created, polling status")
+        elif existing := find_adoptable_runtime(
+            client, db, row, _kwargs()["role_arn"], ctx.log
+        ):
+            # N10v2-bug1: the previous process created it but never recorded it
+            runtime_id = existing["agentRuntimeId"]
+            row.resource_id = runtime_id
+            row.arn = existing["agentRuntimeArn"]
+            row.version = str(existing.get("agentRuntimeVersion", "1"))
+            db.commit()
+            ctx.log(
+                f"adopting runtime {runtime_id} ({existing['agentRuntimeName']}, "
+                f"{existing.get('status')}) created before the restart — "
+                "no second CreateAgentRuntime"
+            )
         else:
             created = agent_iam.retry_iam_propagation(
                 lambda: rt.create_code_runtime(
@@ -594,15 +870,30 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             row.resource_id = runtime_id
             row.arn = created["agentRuntimeArn"]
             row.version = str(created.get("agentRuntimeVersion", "1"))
-            db.commit()
+            db.commit()  # the identity is on the ledger the moment the API accepts
             ctx.log(
-                f"CreateAgentRuntime accepted · runtimeId {runtime_id} · "
+                f"CreateAgentRuntime accepted · runtimeId {runtime_id} · {row.arn} · "
                 f"inbound auth {resolved_auth.mode}"
             )
 
         ready = rt.wait_runtime_ready(
             client, runtime_id, on_status=lambda s: ctx.log(f"runtime status: {s}")
         )
+        if is_a2a and _needs_workload_pin(client, runtime_id, ready):
+            ctx.log(
+                f"A2A runtime: pinning LAUNCHPAD_WORKLOAD_NAME={runtime_id} (names the "
+                "runtime's own workload identity; the key itself comes from the token "
+                "the caller's runtimeUserId makes the Runtime inject) — UpdateAgentRuntime"
+            )
+            updated = agent_iam.retry_iam_propagation(
+                lambda: rt.update_code_runtime(client, runtime_id=runtime_id, **_kwargs()),
+                ctx.log,
+            )
+            row.version = str(updated.get("agentRuntimeVersion", row.version or "1"))
+            db.commit()
+            ready = rt.wait_runtime_ready(
+                client, runtime_id, on_status=lambda s: ctx.log(f"runtime status: {s}")
+            )
         row.arn = ready["agentRuntimeArn"]
         # The inbound-auth snapshot lands only once the runtime is READY on the
         # version that carries it: a Create/Update that is accepted and then
@@ -615,6 +906,13 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
         stamp_input_contract(ctx, db, row)
         db.commit()
+        # the live version now renders this policy context — clear the stale badge,
+        # snapshot it on the row and journal `bundle.apply`
+        carrier, decides = policy_enforcement.job_carrier_decision(ctx, row, AgentSpec(**row.spec))
+        policy_enforcement.mark_applied(db, row, policy, job_id=ctx.job_id, carrier=carrier,
+                                        interceptor=decides)
+        # N11-obs56: bounded retention on the runtime's log group (fail-soft, idempotent)
+        ctx.log(log_retention.apply_runtime_log_retention(ctx, runtime_id))
         # as_user return-URL allow-list on the runtime's auto-created workload
         # identity, reconciled on every deploy (create and redeploy)
         detail = f"READY · {ready['agentRuntimeArn']}"
@@ -628,6 +926,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 def _stage_register(ctx: StageContext, agent: Agent) -> StageResult:
     from app.deployer.registration import register_stage
 
+    if _preset_template(agent):
+        # a system worker is not a discoverable agent: no A2A record, no Skill record
+        return StageResult(skipped=True, detail="system worker · registry skipped")
     return register_stage(ctx, agent)
 
 
@@ -639,15 +940,49 @@ STAGES = {
     "register": _stage_register,
 }
 
-register_method("zip_runtime", STAGES)
-register_method("studio", STAGES)  # studio agents ride the same zip fast path
+# N12-obs33/34: the Strands template applies routed config bundles (its `_config_bundle()`
+# reader) and is rebuilt from the spec on every deploy; Studio canvas output is member code
+# the platform wraps but never rewrites (its bundle shim is opt-in), so a studio agent can
+# be canaried (candidate = re-adapted artifact) but not bundle-experimented.
+register_method(
+    "zip_runtime", STAGES,
+    MethodCapabilities(
+        config_bundle=True, runtime_versions=True, candidate_mint=True,
+        # creation-time domain (round 16): the Strands template renders the shared Gateway
+        # client, rest tools + authenticated rest / mcp through the identity client
+        # (identity_support) and ask_<peer> A2A tools; it has NO builtin channel and no
+        # unauthenticated remote-MCP client (N16-obs2 / N16-obs3 — both were accepted and
+        # silently dropped before this declaration refused them)
+        builtin_tools=frozenset(),
+        tool_types=frozenset({"gateway", "rest", "a2a"}),
+        tool_auth_modes=frozenset({"as_agent", "as_user"}),
+        native_tools=frozenset(),
+        protocols=frozenset({"http", "a2a"}),
+        memory=True, knowledge_bases=True,
+        requires=frozenset({"artifacts_bucket"}),
+    ),
+)
+register_method(  # studio agents ride the same zip fast path
+    "studio", STAGES,
+    MethodCapabilities(
+        user_source=True, runtime_versions=True, candidate_mint=True,
+        # the canvas generates its own code (adapt_studio_code grafts only the bundle shim
+        # and the model prelude): a gateway ToolRef is honoured as IAM grant + env for that
+        # code; nothing else is rendered into it
+        builtin_tools=frozenset(),
+        tool_types=frozenset({"gateway"}),
+        tool_auth_modes=frozenset(),
+        native_tools=frozenset(),
+        protocols=frozenset({"http"}),
+        memory=True, knowledge_bases=False,
+        requires=frozenset({"artifacts_bucket"}),
+    ),
+)
 
 
-def delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> None:
+def delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> str | None:
+    """``rt.RUNTIME_DELETED`` / ``rt.RUNTIME_ABSENT`` (N16-obs87: read back first, an
+    AccessDenied on an already-gone id is not a refusal); ``None`` without a runtime id."""
     if not agent.resource_id:
-        return
-    client = control_client(workspace)
-    try:
-        rt.delete_runtime(client, agent.resource_id)
-    except client.exceptions.ResourceNotFoundException:
-        pass
+        return None
+    return rt.delete_runtime_if_present(control_client(workspace), agent.resource_id)

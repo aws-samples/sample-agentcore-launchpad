@@ -4,16 +4,21 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field, model_validator
+from fastapi import APIRouter, Depends, Query, Request
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.errors import AppError
 from app.evaluation import online
-from app.evaluation.online_evaluators import ONLINE_EVAL_MAX
+from app.evaluation.online_evaluators import ONLINE_EVAL_MAX, refuse_hidden_evaluators
+from app.evaluation.routers import LogSource
 from app.models.ledger import Agent
+from app.routers.auth import require_identity
 from app.routers.workspaces import WorkspaceScope, require_workspace
+from app.services import agent_access
+from app.services.creators import Creator
+from app.services.visibility import Viewer, require_viewer
 
 router = APIRouter(prefix="/api/eval/online", tags=["evaluation-online"])
 
@@ -51,7 +56,10 @@ class FilterSpec(BaseModel):
 
 
 class OnlineConfigCreate(BaseModel):
-    agent_id: str
+    # exactly one target: a platform agent, or a CloudWatch log source (N17-obs337 —
+    # Global's cloudWatchLogs {logGroupNames ≤ 10, serviceNames}; the batch run's shape)
+    agent_id: str | None = None
+    log_source: LogSource | None = None
     mode: Literal["scores", "insights"] = "scores"
     # scores mode: 1..10 evaluators; insights mode: 1..3 insight ids (+ frequencies)
     evaluators: list[str] | None = Field(default=None, max_length=ONLINE_EVAL_MAX)
@@ -66,6 +74,8 @@ class OnlineConfigCreate(BaseModel):
 
     @model_validator(mode="after")
     def _one_analysis_kind(self) -> OnlineConfigCreate:
+        if bool(self.agent_id) == bool(self.log_source):
+            raise ValueError("exactly one target required: agent_id or log_source")
         if self.mode == "insights":
             if self.evaluators:
                 raise ValueError("insights mode takes no evaluators")
@@ -80,6 +90,11 @@ class OnlineConfigCreate(BaseModel):
 
 
 class OnlineConfigPatch(BaseModel):
+    # N13-obs21 (E12 NC-05): an unknown or protected key (`agent_id`, `mode`, `config_id`,
+    # a typo) is 422 `validation.invalid_request`, never silently ignored — the console's
+    # `patchBody` sends only the keys below.
+    model_config = ConfigDict(extra="forbid")
+
     description: str | None = Field(default=None, max_length=200)
     evaluators: list[str] | None = Field(default=None, min_length=1, max_length=ONLINE_EVAL_MAX)
     insights: list[str] | None = Field(default=None, min_length=1, max_length=3)
@@ -93,10 +108,12 @@ class ReportStart(BaseModel):
     range: Literal["1h", "6h", "24h", "7d"] = "24h"
 
 
-def _agent_in(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
-    agent = db.get(Agent, agent_id)
-    if agent is not None and agent.workspace_id != ws.id:
-        agent = None
+def _agent_in(
+    db: Session, ws: WorkspaceScope, agent_id: str, viewer: Viewer = Viewer.ALL
+) -> Agent:
+    """An active agent of this workspace the caller may see; a foreign, missing or
+    isolation-hidden id answers 400 ``agent.not_active`` alike."""
+    agent = agent_access.agent_in(db, ws.id, agent_id, viewer=viewer)
     if agent is None or agent.status != "active":
         raise AppError("agent.not_active", "agent must be active", status_code=400)
     return agent
@@ -104,22 +121,29 @@ def _agent_in(db: Session, ws: WorkspaceScope, agent_id: str) -> Agent:
 
 @router.get("")
 def list_configs(
-    db: Session = Depends(get_db), ws: WorkspaceScope = Depends(require_workspace)
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    configs = online.list_configs(db, ws)
+    configs = online.list_configs(db, ws, viewer=viewer)
     return {"configs": configs, "total": len(configs)}
 
 
 @router.post("", status_code=201)
 def create_config(
     req: OnlineConfigCreate,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    agent = _agent_in(db, ws, req.agent_id)
+    agent = _agent_in(db, ws, req.agent_id, viewer) if req.agent_id else None
+    # a custom evaluator hidden from the caller is refused like an unknown one
+    refuse_hidden_evaluators(db, ws.id, viewer, req.evaluators, code_prefix="online_eval")
     default_sampling = 100.0 if req.mode == "insights" else 10.0
     return online.create_config(
         db, ws, agent,
+        log_source=req.log_source.model_dump() if req.log_source else None,
         mode=req.mode,
         evaluators=req.evaluators,
         insights=req.insights,
@@ -131,6 +155,7 @@ def create_config(
         filters=[f.payload() for f in req.filters],
         description=req.description,
         enable_on_create=req.enable_on_create,
+        creator=Creator.of_request(request),
     )
 
 
@@ -139,21 +164,25 @@ def get_config(
     config_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return online.get_config(db, ws, config_id)
+    return online.get_config(db, ws, config_id, viewer=viewer)
 
 
 @router.patch("/{config_id}")
 def patch_config(
     config_id: str,
     req: OnlineConfigPatch,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     patch = req.model_dump(exclude_none=True)
     if "filters" in patch:
         patch["filters"] = [f.payload() for f in req.filters or []]
-    return online.patch_config(db, ws, config_id, patch)
+    return online.patch_config(db, ws, config_id, patch, viewer=viewer,
+                               identity=require_identity(request))  # N17-obs426
 
 
 @router.get("/{config_id}/reports")
@@ -161,18 +190,23 @@ def list_reports(
     config_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return online.reports(db, ws, config_id)
+    return online.reports(db, ws, config_id, viewer=viewer)
 
 
 @router.post("/{config_id}/reports", status_code=202)
 def run_report(
     config_id: str,
     req: ReportStart,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return online.start_report(db, ws, config_id, req.range)
+    return online.start_report(
+        db, ws, config_id, req.range, creator=Creator.of_request(request), viewer=viewer
+    )
 
 
 @router.get("/{config_id}/reports/{batch_id}")
@@ -181,43 +215,55 @@ def report_detail(
     batch_id: str,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return online.report_detail(db, ws, config_id, batch_id)
+    return online.report_detail(db, ws, config_id, batch_id, viewer=viewer)
 
 
 @router.post("/{config_id}/pause")
 def pause_config(
     config_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return online.set_execution_status(db, ws, config_id, enabled=False)
+    return online.set_execution_status(db, ws, config_id, enabled=False, viewer=viewer,
+                                       identity=require_identity(request))
 
 
 @router.post("/{config_id}/resume")
 def resume_config(
     config_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return online.set_execution_status(db, ws, config_id, enabled=True)
+    return online.set_execution_status(db, ws, config_id, enabled=True, viewer=viewer,
+                                       identity=require_identity(request))
 
 
 @router.delete("/{config_id}")
 def delete_config(
     config_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    return online.delete_config(db, ws, config_id)
+    return online.delete_config(db, ws, config_id, viewer=viewer,
+                                identity=require_identity(request))
 
 
 @router.get("/{config_id}/results")
 def config_results(
     config_id: str,
     range: str = Query(default="24h"),  # noqa: A002 — mirrors the observability API
+    db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     # An insights-mode config never writes score records, so this is simply empty
     # for it; the console reads `mode` from the detail and shows REPORTS instead.
-    return online.results(ws, config_id, range)
+    return online.results(db, ws, config_id, range, viewer=viewer)

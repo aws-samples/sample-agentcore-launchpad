@@ -1,0 +1,30 @@
+{
+ "seam": "ssm-getparameter",
+ "case": "get_parameter_not_found",
+ "captured_at": "2026-10-19T09:10:15Z",
+ "notes": "",
+ "response_or_error": {
+  "exception": "botocore.exceptions.ClientError",
+  "Error": {
+   "Message": "",
+   "Code": "ParameterNotFound"
+  },
+  "ResponseMetadata": {
+   "RequestId": "ca4df920-b5d7-4368-9566-95716ba3bef2",
+   "HTTPStatusCode": 400,
+   "HTTPHeaders": {
+    "server": "Server",
+    "date": "Mon, 19 Oct 2026 09:10:15 GMT",
+    "content-type": "application/x-amz-json-1.1",
+    "content-length": "30",
+    "connection": "keep-alive",
+    "x-amzn-requestid": "ca4df920-b5d7-4368-9566-95716ba3bef2"
+   }
+  },
+  "extra_top_level_keys": [],
+  "str": "An error occurred (ParameterNotFound) when calling the GetParameter operation: "
+ },
+ "status": 400,
+ "elapsed_s": 0.056,
+ "source": "t1 host, instance role (uv env boto3 1.43.109), via SSM"
+}

@@ -1,12 +1,15 @@
-import { Network, Plus, Search, Shuffle } from "lucide-react";
+import { Network, Plus, Search } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 
+import { useAuth } from "../../../auth/auth-context";
 import { api, type DiscoverableRegistryRecord, errorMessage } from "../../../lib/api";
-import { REGISTRY_STATUSES, REGISTRY_TYPES } from "../../../lib/registry";
+import { REGISTRY_TYPES } from "../../../lib/registry";
 import { fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
+import { useMayMutate } from "../../ownership";
+import { notifyRegistryChanged } from "../../registryPending";
 import {
   Alert,
   Button,
@@ -24,9 +27,72 @@ import {
   Tag,
 } from "../../ui";
 import { isRegistryUnavailable, type RegistryRecord, statusLabel, typeLabel } from "./common";
+import { ImportGatewayDialog } from "./ImportGatewayDialog";
 import { StatusTag, SystemTag, TypeTag } from "./tags";
 
 type Tab = "records" | "discoverable";
+
+/**
+ * N17-obs267 (user request 2026-10-22 "可不可以把待审批和已经审批的分一下类"): the publisher
+ * list is split by review state so pending records are not lost among the rest. The tab is
+ * the deep-linkable `?status=` query param; DEPRECATED (disabled) records appear under 「全部」
+ * only, where the status select narrows to them.
+ */
+type StatusTab = "pending" | "published" | "draft" | "all";
+const STATUS_TABS: StatusTab[] = ["pending", "published", "draft", "all"];
+const TAB_STATUSES: Record<StatusTab, readonly string[] | null> = {
+  pending: ["PENDING_APPROVAL"],
+  published: ["APPROVED"],
+  draft: ["DRAFT", "REJECTED"],
+  all: null,
+};
+const ALL_STATUSES = ["DRAFT", "PENDING_APPROVAL", "APPROVED", "REJECTED", "DEPRECATED"];
+
+function isStatusTab(value: string | null): value is StatusTab {
+  return value !== null && (STATUS_TABS as string[]).includes(value);
+}
+
+function inTab(tab: StatusTab, status: string): boolean {
+  const allowed = TAB_STATUSES[tab];
+  return allowed === null || allowed.includes(status);
+}
+
+function StatusTabs({
+  value,
+  counts,
+  loading,
+  onChange,
+}: {
+  value: StatusTab;
+  counts: Record<StatusTab, number>;
+  loading: boolean;
+  onChange: (next: StatusTab) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="v2-seg v2-registry-status-tabs" role="tablist" aria-label={t("v2.registry.statusTabs.label")}>
+      {STATUS_TABS.map((tab) => (
+        <button
+          key={tab}
+          type="button"
+          role="tab"
+          aria-selected={tab === value}
+          className={tab === value ? "on" : ""}
+          onClick={() => onChange(tab)}
+          data-testid={`v2-registry-tab-${tab}`}
+        >
+          {t(`v2.registry.statusTabs.${tab}`)}
+          <span
+            className={tab === "pending" && counts.pending > 0 ? "v2-registry-tab-count attention" : "v2-registry-tab-count"}
+            data-testid={`v2-registry-tab-${tab}-count`}
+          >
+            {loading ? "—" : counts[tab]}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
 
 interface ListData {
   records: RegistryRecord[];
@@ -108,20 +174,44 @@ function NotDiscoverableTag() {
 // ─── publisher list ────────────────────────────────────────────────────────
 export function RecordList() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const toast = useV2Toast();
   const [params, setParams] = useSearchParams();
   const { data, loading, error, reload } = useRegistryData(t("registry.unavailableBody"));
   const typeParam = params.get("type") ?? "";
   const type = (REGISTRY_TYPES as string[]).includes(typeParam) ? typeParam : "";
-  const [status, setStatus] = useState("");
+  // a status inside the current tab (the 「草稿 / 已驳回」 and 「全部」 tabs hold several)
+  const [statusPick, setStatus] = useState("");
   const [q, setQ] = useState("");
   const [searchHits, setSearchHits] = useState<RegistryRecord[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [deleting, setDeleting] = useState<RegistryRecord | null>(null);
   const [busy, setBusy] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  // creator-or-admin on edit / delete (server rule `registry.forbidden`, N15-obs7); reads stay shared
+  const mayMutate = useMayMutate();
+  // N17-obs267: an administrator lands on 「待审批」 while anything waits for review
+  const { isAdmin } = useAuth();
 
   const records = useMemo(() => data?.records ?? [], [data]);
+  // the list is unpaginated server-side, so the tab counts come from the rows already loaded
+  const tabCounts = useMemo(() => {
+    const out: Record<StatusTab, number> = { pending: 0, published: 0, draft: 0, all: records.length };
+    for (const r of records) {
+      if (r.status === "PENDING_APPROVAL") out.pending += 1;
+      else if (r.status === "APPROVED") out.published += 1;
+      else if (r.status === "DRAFT" || r.status === "REJECTED") out.draft += 1;
+    }
+    return out;
+  }, [records]);
+  const statusParam = params.get("status");
+  const statusTab: StatusTab = isStatusTab(statusParam)
+    ? statusParam
+    : isAdmin && tabCounts.pending > 0
+      ? "pending"
+      : "all";
+  const tabStatuses = TAB_STATUSES[statusTab] ?? ALL_STATUSES;
+  // a pick left over from another tab (back / forward between deep links) never narrows this one
+  const status = tabStatuses.includes(statusPick) ? statusPick : "";
   const discoverableIds = data?.discoverable ? new Set(data.discoverable.map((r) => r.record_id)) : null;
   const isHidden = (r: RegistryRecord) => discoverableIds !== null && !discoverableIds.has(r.record_id);
 
@@ -129,12 +219,21 @@ export function RecordList() {
     const needle = searchHits ? "" : q.trim().toLowerCase();
     return (searchHits ?? records).filter((r) => {
       if (type && r.type !== type) return false;
+      if (!inTab(statusTab, r.status)) return false;
       if (status && r.status !== status) return false;
       if (!needle) return true;
       return `${r.name} ${r.record_id} ${r.description ?? ""}`.toLowerCase().includes(needle);
     });
-  }, [records, searchHits, type, status, q]);
+  }, [records, searchHits, type, statusTab, status, q]);
   const paged = usePaged(rows, 12);
+
+  const setStatusTab = (next: StatusTab) => {
+    const p = new URLSearchParams(params);
+    p.set("status", next);
+    setParams(p);
+    setStatus("");
+    paged.setPage(1);
+  };
 
   const setType = (next: string) => {
     const p = new URLSearchParams(params);
@@ -171,6 +270,7 @@ export function RecordList() {
       setDeleting(null);
       setSearchHits(null);
       reload();
+      notifyRegistryChanged();
     } catch (err) {
       toast("error", t("common.actionFailed", { msg: errorMessage(err) }));
     } finally {
@@ -182,7 +282,7 @@ export function RecordList() {
 
   const open = (r: RegistryRecord) => setParams({ view: "detail", id: r.record_id });
   const count = (tp: string) => records.filter((r) => r.type === tp).length;
-  const pending = records.filter((r) => r.status === "PENDING_APPROVAL").length;
+  const pending = tabCounts.pending;
   const hiddenCount = records.filter(isHidden).length;
 
   const columns: Column<RegistryRecord>[] = [
@@ -221,10 +321,12 @@ export function RecordList() {
       render: (r) => (
         <div className="v2-actions">
           <LinkButton onClick={() => open(r)}>{t("v2.common.view")}</LinkButton>
-          {r.type !== "A2A" && r.status !== "DEPRECATED" && !r.system && (
-            <LinkButton onClick={() => setParams({ view: "edit", id: r.record_id })}>{t("v2.common.edit")}</LinkButton>
+          {r.type !== "A2A" && r.status !== "DEPRECATED" && !r.system && mayMutate(r) && (
+            <LinkButton onClick={() => setParams({ view: "edit", id: r.record_id })} testId={`v2-registry-edit-${r.record_id}`}>
+              {t("v2.common.edit")}
+            </LinkButton>
           )}
-          {!r.system && (
+          {!r.system && mayMutate(r) && (
             <LinkButton danger onClick={() => setDeleting(r)} testId={`v2-registry-delete-${r.record_id}`}>
               {t("v2.common.delete")}
             </LinkButton>
@@ -257,19 +359,16 @@ export function RecordList() {
         />
       </div>
       <Card>
+        <StatusTabs value={statusTab} counts={tabCounts} loading={loading && !data} onChange={setStatusTab} />
         <div className="v2-toolbar">
-          <Button onClick={() => { setSearchHits(null); reload(); }}>{t("v2.common.refresh")}</Button>
+          <Button onClick={() => { setSearchHits(null); reload(); notifyRegistryChanged(); }}>{t("v2.common.refresh")}</Button>
           <Button kind="primary" onClick={() => setParams(type && type !== "A2A" ? { view: "register", type } : { view: "register" })} testId="v2-registry-register">
             <Plus size={14} aria-hidden="true" />
             {t("v2.registry.register")}
           </Button>
-          <Button onClick={() => navigate("/v2/governance")} title={t("v2.registry.importGatewayHint")}>
+          <Button onClick={() => setImportOpen(true)} title={t("v2.registry.importGatewayHint")} testId="v2-registry-import-gateway">
             <Network size={14} aria-hidden="true" />
             {t("v2.registry.importGateway")}
-          </Button>
-          <Button onClick={() => setParams({ view: "a2a-demo" })} testId="v2-registry-a2a-demo">
-            <Shuffle size={14} aria-hidden="true" />
-            {t("v2.registry.a2aDemo")}
           </Button>
           <FilterSelect
             label={t("v2.registry.col.type")}
@@ -279,13 +378,16 @@ export function RecordList() {
             options={REGISTRY_TYPES.map((tp) => ({ value: tp, label: `${typeLabel(t, tp)} (${count(tp)})` }))}
             testId="v2-registry-type"
           />
-          <FilterSelect
-            label={t("v2.registry.col.status")}
-            value={status}
-            allLabel={t("v2.common.all")}
-            onChange={setStatus}
-            options={REGISTRY_STATUSES.map((s) => ({ value: s, label: statusLabel(t, s) }))}
-          />
+          {tabStatuses.length > 1 && (
+            <FilterSelect
+              label={t("v2.registry.col.status")}
+              value={status}
+              allLabel={t("v2.common.all")}
+              onChange={setStatus}
+              options={tabStatuses.map((s) => ({ value: s, label: statusLabel(t, s) }))}
+              testId="v2-registry-status"
+            />
+          )}
           <div className="end">
             <form className="v2-row" onSubmit={(e) => void runSearch(e)}>
               <SearchInput
@@ -327,6 +429,18 @@ export function RecordList() {
         <Pager page={paged.page} pages={paged.pages} total={paged.total} onPage={paged.setPage} />
         {error && data && <Alert tone="warn">{error}</Alert>}
       </Card>
+      <ImportGatewayDialog
+        open={importOpen}
+        onOpenRecord={(id) => setParams({ view: "detail", id })}
+        onClose={(imported) => {
+          setImportOpen(false);
+          if (imported) {
+            setSearchHits(null);
+            reload();
+            notifyRegistryChanged();
+          }
+        }}
+      />
       <Confirm
         open={deleting !== null}
         title={t("v2.registry.deleteTitle")}

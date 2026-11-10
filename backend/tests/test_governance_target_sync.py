@@ -1,8 +1,8 @@
 """Gateway target synchronization (SynchronizeGatewayTargets) with a stub control client.
 
-The sync is a synchronous control-plane call journaled inline in ``policy_changes``.
-The managed-gateway and synchronizable-target gates run before any AWS mutation
-and answer 409 with a stable ``detail.reason``.
+The sync is a synchronous control-plane call. The managed-gateway and
+synchronizable-target gates run before any AWS mutation and answer 409 with a
+stable ``detail.reason``.
 """
 
 from datetime import UTC, datetime
@@ -11,11 +11,9 @@ from unittest.mock import MagicMock
 import pytest
 from botocore.exceptions import ClientError
 
-from app.core.db import SessionLocal
-from app.models.ledger import PolicyChange
 from app.routers import governance as governance_router
 from app.services import governance
-from app.services.agentcore import policy
+from app.services.agentcore import gateway as gateway_api
 
 from .conftest import ws_ctx
 
@@ -66,7 +64,7 @@ def _control(*, managed: bool = True, target: dict | None = None) -> MagicMock:
         "updatedAt": datetime.now(UTC),
     }
     control.list_tags_for_resource.return_value = {
-        "tags": dict(policy.MANAGED_TAGS) if managed else {}
+        "tags": dict(gateway_api.MANAGED_TAGS) if managed else {}
     }
     control.list_gateways.return_value = {"items": [{"gatewayId": GW, "protocolType": "MCP"}]}
     control.list_gateway_targets.return_value = {"items": [{"targetId": current["targetId"]}]}
@@ -88,14 +86,6 @@ def install(monkeypatch):
     return _install
 
 
-def _journal() -> list[PolicyChange]:
-    db = SessionLocal()
-    try:
-        return db.query(PolicyChange).order_by(PolicyChange.created_at).all()
-    finally:
-        db.close()
-
-
 def _post(client, target_id: str = TARGET):
     return client.post(f"/api/governance/gateways/{GW}/targets/{target_id}/synchronize")
 
@@ -103,7 +93,7 @@ def _post(client, target_id: str = TARGET):
 # ---- happy path -------------------------------------------------------------
 
 
-def test_sync_calls_aws_once_and_journals_the_target(client, install):
+def test_sync_calls_aws_once(client, install):
     control = install(_control())
 
     response = _post(client)
@@ -113,7 +103,7 @@ def test_sync_calls_aws_once_and_journals_the_target(client, install):
     assert body["id"] == TARGET
     assert body["name"] == f"target-{TARGET}"
     assert body["status"] == "SYNCHRONIZING"
-    assert body["last_synchronized_at"].startswith("2026-09-05T08:00")
+    assert body["last_synchronized_at"].startswith("2026-09-05T16:00")  # +08:00 (N17-obs463)
     assert body["listing_mode"] == "ALL"
     assert body["synchronizable"] is False
     assert body["not_synchronizable_reason"] == "synchronizing"
@@ -134,19 +124,6 @@ def test_sync_calls_aws_once_and_journals_the_target(client, install):
         gatewayIdentifier=GW, targetIdList=[TARGET]
     )
 
-    rows = _journal()
-    assert len(rows) == 1
-    row = rows[0]
-    assert row.operation == "target.synchronize"
-    assert row.status == "succeeded"
-    assert row.gateway_id == GW
-    assert row.before["id"] == TARGET
-    assert row.before["status"] == "READY"
-    assert row.requested == {"target_id": TARGET, "target_name": f"target-{TARGET}"}
-    assert row.after["targetId"] == TARGET
-    assert row.after["status"] == "SYNCHRONIZING"
-    assert row.completed_at is not None
-
 
 # ---- gates before any AWS call ----------------------------------------------
 
@@ -160,7 +137,6 @@ def test_unmanaged_gateway_is_refused_before_calling_aws(client, install):
     assert response.json()["code"] == "governance.gateway_not_managed"
     control.synchronize_gateway_targets.assert_not_called()
     control.get_gateway_target.assert_not_called()
-    assert _journal() == []
 
 
 @pytest.mark.parametrize(
@@ -185,7 +161,6 @@ def test_static_targets_are_not_synchronizable(client, install, config, reason):
     assert body["detail"]["reason"] == reason
     assert body["detail"]["target_id"] == TARGET
     control.synchronize_gateway_targets.assert_not_called()
-    assert _journal() == []
 
 
 @pytest.mark.parametrize(
@@ -211,7 +186,6 @@ def test_transient_and_pending_auth_targets_are_refused(client, install, status,
     assert body["detail"]["reason"] == reason
     assert body["detail"]["status"] == status
     control.synchronize_gateway_targets.assert_not_called()
-    assert _journal() == []
 
 
 @pytest.mark.parametrize(
@@ -238,7 +212,7 @@ def test_target_id_must_be_ten_alphanumerics(client, install):
 # ---- AWS failure ------------------------------------------------------------
 
 
-def test_aws_conflict_maps_to_409_and_leaves_a_failed_journal_row(client, install):
+def test_aws_conflict_maps_to_409(client, install):
     control = install(_control())
     control.synchronize_gateway_targets.side_effect = ClientError(
         {"Error": {"Code": "ConflictException", "Message": "target is busy"}},
@@ -249,15 +223,9 @@ def test_aws_conflict_maps_to_409_and_leaves_a_failed_journal_row(client, instal
 
     assert response.status_code == 409
     assert response.json()["code"] == "aws.conflict"
-    rows = _journal()
-    assert len(rows) == 1
-    assert rows[0].operation == "target.synchronize"
-    assert rows[0].status == "failed"
-    assert "target is busy" in (rows[0].error or "")
-    assert rows[0].after is None
 
 
-def test_missing_target_maps_to_404_without_a_journal_row(client, install):
+def test_missing_target_maps_to_404(client, install):
     control = install(_control())
     control.get_gateway_target.side_effect = ClientError(
         {"Error": {"Code": "ResourceNotFoundException", "Message": "no such target"}},
@@ -268,7 +236,6 @@ def test_missing_target_maps_to_404_without_a_journal_row(client, install):
 
     assert response.status_code == 404
     control.synchronize_gateway_targets.assert_not_called()
-    assert _journal() == []
 
 
 # ---- gateway_detail projection ----------------------------------------------
@@ -307,7 +274,7 @@ def test_gateway_detail_targets_expose_sync_projection():
     control.list_registry_records.return_value = {"registryRecords": []}
     governance.invalidate_gateway_cache()
 
-    detail = governance.gateway_detail(control, MagicMock(), GW, ws_ctx({"registry_id": ""}))
+    detail = governance.gateway_detail(control, GW, ws_ctx({"registry_id": ""}))
 
     targets = {t["id"]: t for t in detail["targets"]}
     assert targets["DYNAMIC001"]["synchronizable"] is True

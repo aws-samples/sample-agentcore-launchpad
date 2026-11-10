@@ -1,0 +1,2 @@
+{"type":"step_start","timestamp":1760090100000,"sessionID":"ses_err","part":{"id":"prt_1","sessionID":"ses_err","messageID":"msg_1","type":"step-start"}}
+{"type":"error","timestamp":1760090100100,"sessionID":"ses_err","part":{"error":{"name":"UnknownError","data":{"message":"401 Unauthorized: invalid bearer token","ref":"err_demo"}}}}

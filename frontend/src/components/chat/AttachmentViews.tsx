@@ -73,7 +73,7 @@ export function AttachmentHint({ capability }: { capability?: AttachmentCapabili
   const supported = capability && (capability.images || capability.text || capability.pdf !== "unsupported");
   const reasonKey = `chatPage.attachments.reasons.${capability?.reason_code}`;
   const reason = capability?.reason_code && [
-    "harness", "republish", "custom", "model", "not_active",
+    "republish", "custom", "model", "not_active",
   ].includes(capability.reason_code) ? t(reasonKey) : null;
   const formats = capability ? [
     capability.images && t("chatPage.attachments.images"),

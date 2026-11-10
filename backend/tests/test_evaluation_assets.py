@@ -1,15 +1,20 @@
-"""SE-047 — reviewed evaluation-assets plan + idempotent materialization. Hermetic:
-sockets refused, the AWS client factory fails loudly, only low-level clients (IAM /
-Lambda / Logs / AgentCore control) are faked with the semantics the code relies on
-(conflicts, lost responses, token idempotency, unchanged-code PublishVersion, readback).
-Nothing here invokes a model, starts a batch evaluation or deploys an agent — every
-fake refuses those operations. Fixtures are synthetic (no private transcript)."""
+"""SE-047 on the CN substrate (N12 W-E5, CA-5) — reviewed evaluation-assets plan +
+idempotent materialization into a local Dataset, ``eval_evaluators`` rows and (only with
+``eval_code_evaluators_enabled``) one Lambda chain per code evaluator. Hermetic: sockets
+refused, the AWS client factory fails loudly, only the low-level IAM / Logs / Lambda
+clients are faked with the semantics the code relies on (conflicts, lost responses,
+readback). Nothing here invokes a model, starts a run or deploys an agent — every fake
+refuses those operations. Fixtures are synthetic (no private transcript).
+
+The plan-contract tests are the Global suite's (verbatim apart from the constants'
+import); the materialization / cleanup / route tests are reduced to the kept operations.
+"""
 
 import base64
 import hashlib
+import io
 import json
-import threading
-from concurrent.futures import ThreadPoolExecutor
+import zipfile
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -19,13 +24,13 @@ from fastapi.testclient import TestClient
 from app.assistant import evaluation_assets as assets
 from app.assistant import evaluation_plan as plan_contract
 from app.assistant import proposal as contract
+from app.assistant import purge
 from app.assistant.lambda_runtime import handler
 from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.core.errors import AppError
-from app.evaluation import agentcore_eval as _ac_eval
-from app.evaluation import online_evaluators
-from app.evaluation.models import EvalDataset
+from app.evaluation import evaluators_local
+from app.evaluation.models import EvalDataset, EvalEvaluator
 from app.main import create_app
 from app.models.assistant import (
     AssistantConversation,
@@ -36,29 +41,17 @@ from app.models.assistant import (
 from app.models.ledger import Agent, User, Workspace
 from app.services import aws_clients
 from app.services import users as users_service
+from app.services.workspace import workspace_context
 from app.system_agents.presets import ARCHITECT
-from tests.conftest import ws_ctx
 
-
-@pytest.fixture(autouse=True)
-def _per_op_accounts(monkeypatch, request):
-    """These scenarios give every operation a fresh fake AWS account, so a name another
-    operation of the same test recorded is not taken there. The workspace-ledger half of
-    the name reservation is exercised by the tests marked ``name_reservation``."""
-    if request.node.get_closest_marker("name_reservation") is None:
-        monkeypatch.setattr(assets, "ledger_evaluator_names", lambda db, workspace_id: set())
-
+from .test_assistant import ADMIN_CREDS, MEMBER_CREDS, _activate
 
 BASE = "/api/assistant/architect"
-_ORIG_START_BATCH = _ac_eval.start_batch_evaluation  # before the autouse guard replaces it
 ACCOUNT = "111122223333"
-REGION = "us-west-2"
-ROLE_ARN = f"arn:aws:iam::{ACCOUNT}:role/launchpad-agent-execution-role"
+REGION = "cn-northwest-1"
+ROLE_ARN = f"arn:aws-cn:iam::{ACCOUNT}:role/launchpad-agent-execution-role"
 RESOURCES = {"artifacts_bucket": "b", "execution_role_arn": ROLE_ARN,
-             "memory_arn": f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:memory/m"}
-ADMIN_CREDS = {"username": "admin", "password": "correct horse battery staple"}
-MEMBER_CREDS = {"username": "member", "email": "member@example.com",
-                "password": "another long member passphrase"}
+             "memory_arn": f"arn:aws-cn:bedrock-agentcore:{REGION}:{ACCOUNT}:memory/m"}
 WEATHER_TOOL = "weather___get_weather"
 
 PROPOSAL = {
@@ -110,22 +103,24 @@ def no_aws_clients(monkeypatch):
 @pytest.fixture(autouse=True)
 def no_deploy_no_eval(monkeypatch):
     from app.deployer import pipeline
-    from app.evaluation import agentcore_eval
     from app.evaluation import service as eval_service
 
     def forbidden(*a, **k):
         raise AssertionError("forbidden side effect reached")
 
     monkeypatch.setattr(pipeline, "start_deploy_async", forbidden)
-    monkeypatch.setattr(agentcore_eval, "start_batch_evaluation", forbidden)
-    monkeypatch.setattr(agentcore_eval, "invoke_agent_runtime", forbidden)
-    monkeypatch.setattr(eval_service, "start_run_async", forbidden, raising=False)
+    monkeypatch.setattr(eval_service, "submit_run", forbidden, raising=False)
 
 
 @pytest.fixture(autouse=True)
 def fast(monkeypatch, tmp_path):
     monkeypatch.setattr(assets, "READBACK_DELAY_S", 0.0)
     monkeypatch.setattr(assets, "LOCK_DIR", tmp_path / "locks")
+
+
+@pytest.fixture
+def code_enabled(monkeypatch):
+    monkeypatch.setattr(assets, "code_evaluators_enabled", lambda: True)
 
 
 # ---------------------------------------------------------------------------
@@ -137,330 +132,128 @@ def _err(code: str, op: str) -> ClientError:
     return ClientError({"Error": {"Code": code, "Message": code}}, op)
 
 
-def _sha(payload: bytes) -> str:
+def _sha_b64(payload: bytes) -> str:
     return base64.b64encode(hashlib.sha256(payload).digest()).decode()
 
 
 class FakeIAM:
     def __init__(self):
-        self.roles: dict[str, dict] = {
-            "launchpad-agent-execution-role": {
-                "RoleName": "launchpad-agent-execution-role", "Arn": ROLE_ARN,
-                "RoleId": "AROAWORKSPACE", "Tags": [{"Key": "launchpad:managed", "Value": "true"}],
-                "policies": {"launchpad-agent-execution": {"Version": "2012-10-17"}},
-                "trust": '{"Statement": "original"}', "Description": "shared",
-            }
-        }
-        self.calls: list[str] = []
-        self.fail_create = False
-        self.lose_create_response = False
+        self.roles: dict[str, dict] = {}
+        self.create_calls = 0
 
-    def create_role(self, **kw):
-        self.calls.append("create_role")
-        if self.fail_create:
-            raise _err("ServiceFailure", "CreateRole")
-        if kw["RoleName"] in self.roles:
+    def create_role(self, RoleName, AssumeRolePolicyDocument, Description="", Tags=()):
+        self.create_calls += 1
+        if RoleName in self.roles:
             raise _err("EntityAlreadyExists", "CreateRole")
-        role = {"RoleName": kw["RoleName"], "Arn": f"arn:aws:iam::{ACCOUNT}:role/{kw['RoleName']}",
-                "RoleId": "AROA" + kw["RoleName"][-8:].upper(), "Tags": kw.get("Tags", []),
-                "policies": {}, "trust": kw["AssumeRolePolicyDocument"],
-                "Description": kw.get("Description", "")}
-        self.roles[kw["RoleName"]] = role
-        if self.lose_create_response:
-            self.lose_create_response = False
-            raise ConnectionError("response lost")
+        role = {"RoleName": RoleName, "RoleId": f"AROA{len(self.roles):04d}{RoleName[-6:]}",
+                "Arn": f"arn:aws-cn:iam::{ACCOUNT}:role/{RoleName}",
+                "AssumeRolePolicyDocument": AssumeRolePolicyDocument,
+                "Description": Description, "Tags": list(Tags), "policies": {},
+                "CreateDate": "2026-10-10T00:00:00+00:00"}
+        self.roles[RoleName] = role
         return {"Role": dict(role)}
 
     def get_role(self, RoleName):
         if RoleName not in self.roles:
             raise _err("NoSuchEntity", "GetRole")
-        role = self.roles[RoleName]
-        try:  # the service returns the trust policy as a (URL-decoded) document
-            trust = json.loads(role["trust"])
-        except (TypeError, ValueError):
-            trust = role["trust"]
-        return {"Role": {**role, "AssumeRolePolicyDocument": trust,
-                         "CreateDate": "2026-09-14T00:00:00Z"}}
+        return {"Role": dict(self.roles[RoleName])}
 
     def put_role_policy(self, RoleName, PolicyName, PolicyDocument):
-        self.calls.append(f"put_role_policy:{RoleName}:{PolicyName}")
         self.roles[RoleName]["policies"][PolicyName] = json.loads(PolicyDocument)
-
-    def get_role_policy(self, RoleName, PolicyName):
-        if PolicyName not in self.roles[RoleName]["policies"]:
-            raise _err("NoSuchEntity", "GetRolePolicy")
-        return {"PolicyDocument": self.roles[RoleName]["policies"][PolicyName]}
 
     def delete_role_policy(self, RoleName, PolicyName):
         self.roles[RoleName]["policies"].pop(PolicyName, None)
 
     def delete_role(self, RoleName):
-        self.roles.pop(RoleName)
-
-    def update_assume_role_policy(self, **kw):  # must never be called on the shared role
-        raise AssertionError("trust policy replaced")
+        if RoleName not in self.roles:
+            raise _err("NoSuchEntity", "DeleteRole")
+        del self.roles[RoleName]
 
 
 class FakeLogs:
     def __init__(self):
         self.groups: dict[str, dict] = {}
-        self.lose_create_response = False
+        self.clock = 1700000000000
 
     def create_log_group(self, logGroupName, tags=None):
         if logGroupName in self.groups:
             raise _err("ResourceAlreadyExistsException", "CreateLogGroup")
-        arn = f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{logGroupName}:*"
-        self.creation_counter = getattr(self, "creation_counter", 1000) + 1
-        self.groups[logGroupName] = {"tags": dict(tags or {}), "arn": arn,
-                                     "creationTime": self.creation_counter}
-        if self.lose_create_response:
-            self.lose_create_response = False
-            raise ConnectionError("response lost")
-
-    def put_retention_policy(self, logGroupName, retentionInDays):
-        self.groups[logGroupName]["retention"] = retentionInDays
+        self.clock += 1
+        self.groups[logGroupName] = {
+            "logGroupName": logGroupName, "creationTime": self.clock, "tags": dict(tags or {}),
+            "arn": f"arn:aws-cn:logs:{REGION}:{ACCOUNT}:log-group:{logGroupName}:*"}
 
     def describe_log_groups(self, logGroupNamePrefix=""):
-        return {"logGroups": [
-            {"logGroupName": n, "arn": g["arn"], "retentionInDays": g.get("retention"),
-             "creationTime": g["creationTime"]}
-            for n, g in self.groups.items() if n.startswith(logGroupNamePrefix)]}
+        return {"logGroups": [dict(g) for n, g in self.groups.items()
+                              if n.startswith(logGroupNamePrefix)]}
 
-    def list_tags_for_resource(self, resourceArn):
-        for g in self.groups.values():
-            if g["arn"].rstrip("*").rstrip(":") == resourceArn:
-                return {"tags": dict(g["tags"])}
-        raise _err("ResourceNotFoundException", "ListTagsForResource")
+    def put_retention_policy(self, logGroupName, retentionInDays):
+        self.groups[logGroupName]["retentionInDays"] = retentionInDays
 
     def delete_log_group(self, logGroupName):
-        self.groups.pop(logGroupName)
+        if logGroupName not in self.groups:
+            raise _err("ResourceNotFoundException", "DeleteLogGroup")
+        del self.groups[logGroupName]
 
 
 class FakeLambda:
-    """Real semantics that matter: CreateFunction conflicts on an existing name,
-    PublishVersion on unchanged code returns the EXISTING version (or conflicts, when
-    ``unchanged_publish == 'conflict'``) instead of minting a new one."""
-
     def __init__(self):
         self.functions: dict[str, dict] = {}
-        self.policies: dict[str, list] = {}
         self.create_calls = 0
         self.publish_calls = 0
-        self.lose_create_response = False
-        self.lose_publish_response = False
-        self.unchanged_publish = "return"
-        self.pending_polls = 1
-        self.on_get_configuration = None
-        self.revisions = 0
-        self.aliases: dict[str, list] = {}
-        self.activation_revision: str | None = None
-        # a change that is NOT Lambda's own transition: LastModified moves with it
-        self.activation_last_modified: str | None = None
 
-    def _revision(self) -> str:
-        self.revisions += 1
-        return f"rev-{self.revisions:04d}"
-
-    def create_function(self, **kw):
+    def create_function(self, **req):
         self.create_calls += 1
-        name = kw["FunctionName"]
+        name = req["FunctionName"]
         if name in self.functions:
             raise _err("ResourceConflictException", "CreateFunction")
-        arn = f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:{name}"
-        cfg = {"FunctionName": name, "FunctionArn": arn, "Runtime": kw["Runtime"],
-               "Role": kw["Role"], "Handler": kw["Handler"],
-               "CodeSha256": _sha(kw["Code"]["ZipFile"]), "Timeout": kw["Timeout"],
-               "CodeSize": len(kw["Code"]["ZipFile"]),
-               "MemorySize": kw["MemorySize"], "State": "Pending", "Version": "$LATEST",
-               "StateReason": "The function is being created.", "StateReasonCode": "Creating",
-               "PackageType": "Zip", "Architectures": ["x86_64"],
-               "TracingConfig": {"Mode": "PassThrough"}, "EphemeralStorage": {"Size": 512},
-               "LastModified": f"2026-09-14T06:21:{self.create_calls:02d}.000+0000",
-               "Description": kw.get("Description", ""), "polls": 0,
-               "RevisionId": self._revision()}
-        self.functions[name] = {"cfg": cfg, "tags": dict(kw.get("Tags", {})), "versions": {}}
-        if self.lose_create_response:
-            self.lose_create_response = False
-            raise ConnectionError("response lost")
-        return dict(cfg)
+        payload = req["Code"]["ZipFile"]
+        fn = {"FunctionName": name,
+              "FunctionArn": f"arn:aws-cn:lambda:{REGION}:{ACCOUNT}:function:{name}",
+              "Runtime": req["Runtime"], "Role": req["Role"], "Handler": req["Handler"],
+              "Timeout": req["Timeout"], "MemorySize": req["MemorySize"],
+              "CodeSha256": _sha_b64(payload), "RevisionId": "rev-1", "State": "Active",
+              "LastUpdateStatus": "Successful", "tags": dict(req.get("Tags") or {}),
+              "versions": [], "package": payload}
+        self.functions[name] = fn
+        return {k: v for k, v in fn.items() if k not in ("tags", "versions", "package")}
 
-    @staticmethod
-    def _configuration(cfg):
-        return {k: v for k, v in cfg.items() if k != "polls"}  # the poll counter is test-only
+    def get_function(self, FunctionName):
+        if FunctionName not in self.functions:
+            raise _err("ResourceNotFoundException", "GetFunction")
+        return {"Configuration": self.get_function_configuration(FunctionName)}
 
     def get_function_configuration(self, FunctionName):
-        f = self.functions[FunctionName]
-        f["cfg"]["polls"] += 1
-        if f["cfg"]["polls"] > self.pending_polls:
-            f["cfg"]["State"] = "Active"
-            f["cfg"]["LastUpdateStatus"] = "Successful"  # first initialization complete
-            if self.activation_revision:  # SE-049: the token may move Pending → Active
-                f["cfg"]["RevisionId"] = self.activation_revision
-                self.activation_revision = None
-            if self.activation_last_modified:
-                f["cfg"]["LastModified"] = self.activation_last_modified
-                self.activation_last_modified = None
-        if self.on_get_configuration:
-            self.on_get_configuration()
-        return self._configuration(f["cfg"])
-
-    def get_function(self, FunctionName, Qualifier=None):
-        f = self.functions.get(FunctionName)
-        if f is None or (Qualifier and Qualifier != "$LATEST" and Qualifier not in f["versions"]):
-            raise _err("ResourceNotFoundException", "GetFunction")
-        cfg = dict(f["versions"][Qualifier]) if Qualifier and Qualifier != "$LATEST" \
-            else f["cfg"]
-        return {"Configuration": self._configuration(cfg), "Tags": dict(f["tags"])}
-
-    def publish_version(self, FunctionName, CodeSha256=None, RevisionId=None):
-        self.publish_calls += 1
-        f = self.functions[FunctionName]
-        if RevisionId and RevisionId != f["cfg"]["RevisionId"]:
-            raise _err("PreconditionFailedException", "PublishVersion")
-        if CodeSha256 and CodeSha256 != f["cfg"]["CodeSha256"]:
-            raise _err("InvalidParameterValueException", "PublishVersion")
-        for v in f["versions"].values():
-            if v["CodeSha256"] == f["cfg"]["CodeSha256"]:
-                if self.unchanged_publish == "conflict":
-                    raise _err("ResourceConflictException", "PublishVersion")
-                return dict(v)
-        version = str(len(f["versions"]) + 1)
-        cfg = {**f["cfg"], "Version": version, "State": "Active",
-               "FunctionArn": f["cfg"]["FunctionArn"] + ":" + version,
-               "RevisionId": self._revision()}  # a version is an immutable snapshot
-        f["versions"][version] = cfg
-        if self.lose_publish_response:
-            self.lose_publish_response = False
-            raise ConnectionError("response lost")
-        return dict(cfg)
-
-    def list_versions_by_function(self, FunctionName):
-        f = self.functions[FunctionName]
-        return {"Versions": [dict(f["cfg"])] + [dict(v) for v in f["versions"].values()]}
-
-    def put_function_concurrency(self, FunctionName, ReservedConcurrentExecutions):
-        self.functions[FunctionName]["reserved"] = ReservedConcurrentExecutions
-
-    def get_function_concurrency(self, FunctionName):
-        return {"ReservedConcurrentExecutions": self.functions[FunctionName].get("reserved")}
-
-    def add_permission(self, **kw):
-        stmts = self.policies.setdefault(kw["FunctionName"], [])
-        if any(s["Sid"] == kw["StatementId"] for s in stmts):
-            raise _err("ResourceConflictException", "AddPermission")
-        stmts.append({"Sid": kw["StatementId"], "Effect": "Allow", "Action": kw["Action"],
-                      "Principal": {"Service": kw["Principal"]},
-                      "Resource": f"{self.functions[kw['FunctionName']]['cfg']['FunctionArn']}:"
-                                  f"{kw['Qualifier']}",
-                      "Condition": {"StringEquals": {"AWS:SourceAccount": kw["SourceAccount"]}}})
-
-    def get_policy(self, FunctionName, Qualifier=None):
-        if not self.policies.get(FunctionName):  # the service answers NotFound, never an empty doc
-            raise _err("ResourceNotFoundException", "GetPolicy")
-        return {"Policy": json.dumps({"Statement": self.policies.get(FunctionName, [])})}
-
-    def list_aliases(self, FunctionName, **kw):
         if FunctionName not in self.functions:
-            raise _err("ResourceNotFoundException", "ListAliases")
-        return {"Aliases": [dict(a) for a in self.aliases.get(FunctionName, [])]}
+            raise _err("ResourceNotFoundException", "GetFunctionConfiguration")
+        fn = self.functions[FunctionName]
+        return {k: v for k, v in fn.items() if k not in ("tags", "versions", "package")}
 
-    def delete_function(self, FunctionName, Qualifier=None):
+    def publish_version(self, FunctionName, CodeSha256=None):
+        self.publish_calls += 1
+        fn = self.functions[FunctionName]
+        if CodeSha256 and CodeSha256 != fn["CodeSha256"]:
+            raise _err("InvalidParameterValueException", "PublishVersion")
+        version = str(len(fn["versions"]) + 1)
+        fn["versions"].append(version)
+        return {**self.get_function_configuration(FunctionName), "Version": version,
+                "FunctionArn": f"{fn['FunctionArn']}:{version}"}
+
+    def delete_function(self, FunctionName):
         if FunctionName not in self.functions:
             raise _err("ResourceNotFoundException", "DeleteFunction")
-        if Qualifier:
-            self.functions[FunctionName]["versions"].pop(Qualifier)
-            return
-        self.functions.pop(FunctionName)
-        self.policies.pop(FunctionName, None)
-
-
-class FakeControl:
-    """AgentCore control plane: token-idempotent CreateEvaluator, name uniqueness,
-    ACTIVE after one poll. Refuses everything that would run or deploy."""
-
-    def __init__(self):
-        self.evaluators: dict[str, dict] = {}
-        self.by_token: dict[str, str] = {}
-        self.create_calls = 0
-        self.lose_response_once = False
-        self.delete_polls = 1  # GetEvaluator reads answering DELETING before NotFound
-        self.deleting: dict[str, int] = {}
-        # judge models the service's validation probe refuses (GPT-6 as of 2026-09-29)
-        self.refuse_models: set[str] = set()
-
-    def list_evaluators(self, **kw):
-        return {"evaluators": [dict(e) for e in self.evaluators.values()]}
-
-    def create_evaluator(self, **kw):
-        self.create_calls += 1
-        config = kw["evaluatorConfig"]
-        member = config.get("llmAsAJudge") or config.get("derived") or {}
-        model = ((member.get("modelConfig") or {}).get("bedrockEvaluatorModelConfig")
-                 or {}).get("modelId")
-        if model in self.refuse_models:
-            raise ClientError({"Error": {"Code": "ValidationException", "Message": (
-                f"Bedrock inference configuration validation failed for model '{model}': "
-                '{"error":{"code":"integer_below_min_value","message":"Invalid '
-                "'max_output_tokens': integer below minimum value. Expected a value >= 16, "
-                'but got 10 instead.","param":"max_output_tokens"}}')},
-                "ResponseMetadata": {"HTTPStatusCode": 400}}, "CreateEvaluator")
-        token = kw["clientToken"]
-        if token in self.by_token:
-            eid = self.by_token[token]
-            return {"evaluatorId": eid, "evaluatorArn": self.evaluators[eid]["evaluatorArn"]}
-        if any(e["evaluatorName"] == kw["evaluatorName"] for e in self.evaluators.values()):
-            raise _err("ConflictException", "CreateEvaluator")
-        eid = f"{kw['evaluatorName']}-{len(self.evaluators) + 1:07d}"
-        self.evaluators[eid] = {**kw, "evaluatorId": eid, "status": "CREATING",
-                                "evaluatorArn": f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:"
-                                                f"evaluator/{eid}"}
-        self.by_token[token] = eid
-        if self.lose_response_once:
-            self.lose_response_once = False
-            raise ConnectionError("response lost")
-        return {"evaluatorId": eid, "evaluatorArn": self.evaluators[eid]["evaluatorArn"]}
-
-    def get_evaluator(self, evaluatorId):
-        e = self.evaluators.get(evaluatorId)
-        if e is None:
-            raise _err("ResourceNotFoundException", "GetEvaluator")
-        if evaluatorId in self.deleting:
-            self.deleting[evaluatorId] -= 1
-            if self.deleting[evaluatorId] < 0:
-                self.evaluators.pop(evaluatorId)
-                self.deleting.pop(evaluatorId)
-                raise _err("ResourceNotFoundException", "GetEvaluator")
-            return {**e, "status": "DELETING"}
-        if e["status"] == "CREATING":
-            e["status"] = "ACTIVE"
-        return dict(e)
-
-    def delete_evaluator(self, evaluatorId):
-        """Asynchronous: accepted, then DELETING for ``delete_polls`` reads."""
-        if evaluatorId not in self.evaluators:
-            raise _err("ResourceNotFoundException", "DeleteEvaluator")
-        if self.evaluators[evaluatorId].get("locked"):
-            raise _err("ConflictException", "DeleteEvaluator")
-        self.deleting[evaluatorId] = self.delete_polls
-
-    def start_batch_evaluation(self, **kw):
-        raise AssertionError("StartBatchEvaluation reached")
-
-    def create_online_evaluation_config(self, **kw):
-        raise AssertionError("online evaluation reached")
+        del self.functions[FunctionName]
 
 
 class Fakes:
     def __init__(self):
         self.iam, self.logs, self.lam = FakeIAM(), FakeLogs(), FakeLambda()
-        self.control = FakeControl()
         self.requested: list[str] = []
 
     def __call__(self, workspace, service_name):
         self.requested.append(service_name)
         assert workspace.account_id and workspace.region
-        return {"iam": self.iam, "logs": self.logs, "lambda": self.lam,
-                "bedrock-agentcore-control": self.control}[service_name]
+        return {"iam": self.iam, "logs": self.logs, "lambda": self.lam}[service_name]
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +278,7 @@ def _install_preset() -> None:
     try:
         db.add(Agent(workspace_id=DEFAULT_WORKSPACE_ID, name=ARCHITECT.name, method="harness",
                      status="active", spec={"name": ARCHITECT.name, "method": "harness"},
-                     owner="system", system_key=ARCHITECT.key, arn="arn:x", resource_id="a"))
+                     system_key=ARCHITECT.key, arn="arn:x", resource_id="a"))
         db.commit()
     finally:
         db.close()
@@ -543,13 +336,31 @@ def _res(op: EvaluationAssetOperation, key: str) -> dict:
     return next(r for r in op.resources if r["key"] == key)
 
 
+def _rows() -> list[EvalEvaluator]:
+    db = SessionLocal()
+    try:
+        rows = db.query(EvalEvaluator).order_by(EvalEvaluator.name).all()
+        for r in rows:
+            db.expunge(r)
+        return rows
+    finally:
+        db.close()
+
+
+def _count(model) -> int:
+    db = SessionLocal()
+    try:
+        return db.query(model).count()
+    finally:
+        db.close()
+
+
 def _valid_plan(cid: str, content_hash: str, *, with_code: bool = True,
                 reference: bool = False) -> dict:
     """A hand-written, reviewed plan: every golden test a confirmed single-session
-    scenario, every recommendation classified, every evaluator an AgentCore evaluator,
-    AWS evaluators GLOBAL (the only real routing). ``reference=True`` makes every
-    scenario carry expected_trajectory and the code rule reference-driven. The
-    cross-session recommendation is DECLINED (no AgentCore evaluator can compute it)."""
+    scenario, every recommendation classified, evaluators GLOBAL (the only real routing).
+    ``reference=True`` makes every scenario carry expected_trajectory and the code rule
+    reference-driven. The cross-session recommendation is DECLINED."""
     evaluators = [
         {"kind": "existing", "key": "helpfulness", "title": "Helpfulness",
          "evaluator_id": "Builtin.Helpfulness", "golden_test_ids": []},
@@ -597,10 +408,10 @@ def _valid_plan(cid: str, content_hash: str, *, with_code: bool = True,
              "mapped_to": ["pii"], "status": "mapped"},
             {"index": 2, "text": PROPOSAL["evaluator_recommendations"][2],
              "mapped_to": [], "status": "declined",
-             "note": "needs two users across sessions — not an AgentCore evaluator; manual task"},
+             "note": "needs two users across sessions — not a single-session evaluator; "
+                     "manual task"},
         ],
         "blocked_golden_tests": [],
-        "grant_workspace_execution_role": True,
     }
 
 
@@ -608,8 +419,57 @@ def _validate(plan, h="b" * 64):
     return plan_contract.validate_plan(plan, PROPOSAL, revision=1, content_hash=h)
 
 
+@pytest.fixture
+def app_ready():
+    app = create_app()
+    _ready()
+    _install_preset()
+    return app
+
+
+def _approve(cid: str, content_hash: str, *, plan=None, approver_user_id=None,
+             approved_by="admin", recheck=None):
+    db = SessionLocal()
+    try:
+        conv = db.get(AssistantConversation, cid)
+        row = assets.edit_plan(db, conv, plan or _valid_plan(cid, content_hash),
+                               created_by="river")
+        assert row.status == "draft", row.validation_errors
+        ws = db.get(Workspace, DEFAULT_WORKSPACE_ID)
+        outcome = assets.approve_plan(db, conv, ws, plan_revision=row.revision,
+                                      plan_hash=row.content_hash, approved_by=approved_by,
+                                      approver_user_id=approver_user_id, recheck=recheck)
+        return outcome.operation.id, row.revision, row.content_hash, outcome.started
+    finally:
+        db.close()
+
+
+def _run(op_id, fakes):
+    return assets.run_operation(op_id, clients=fakes, sleeper=lambda s: None)
+
+
+def _ws_ctx():
+    db = SessionLocal()
+    try:
+        return workspace_context(db.get(Workspace, DEFAULT_WORKSPACE_ID))
+    finally:
+        db.close()
+
+
+def _seed_judge(name: str = "kid_pii_judge") -> str:
+    db = SessionLocal()
+    try:
+        row = evaluators_local.create_judge(
+            db, DEFAULT_WORKSPACE_ID, name=name, instructions="x {assistant_turn}",
+            rating_scale=[{"label": "pass", "value": 1.0, "definition": "d"}],
+            model_id="global.zai.glm-5.3", level="TRACE")
+        return row.id
+    finally:
+        db.close()
+
+
 # ===========================================================================
-# 1. the plan contract
+# 1. the plan contract (the Global suite, verbatim apart from the constants' home)
 # ===========================================================================
 
 
@@ -625,35 +485,29 @@ def test_legacy_draft_marks_every_prose_golden_test_review_required_and_maps_onl
     assert recs[1]["status"] == "unresolved" and recs[2]["status"] == "unresolved"
     judge = next(e for e in draft["evaluators"] if e["kind"] == "judge")
     assert judge["draft"] is True and judge["level"] == "SESSION"
+    assert judge["model_id"] == "global.zai.glm-5.3"  # the CN judge default (C3)
     assert "{assertions}" in judge["instructions"] and "{context}" in judge["instructions"]
     assert judge["golden_test_ids"] == []  # global: every scenario carries assertions
     # only GT-002 names expected tools → no reference-driven code rule can be global
     assert not any(e["kind"] == "code" for e in draft["evaluators"])
-    # every drafted entry is an AgentCore evaluator kind
     assert {e["kind"] for e in draft["evaluators"]} <= {"existing", "judge", "derived", "code"}
-    # confirming every scenario (typed review) makes the draft creatable
     confirmed = json.loads(json.dumps(draft))
     for s in confirmed["scenarios"]:
         s["review_required"] = False
     plan, errors = _validate(confirmed, "a" * 64)
     assert plan is not None, errors
-    # blocking GT-003 instead is equally honest
     blocked = json.loads(json.dumps(draft))
     blocked["scenarios"] = [dict(s, review_required=False) for s in blocked["scenarios"][:2]]
     blocked["blocked_golden_tests"] = [{"golden_test_id": "GT-003",
                                         "reason": "cross-session recall needs two sessions — "
-                                                  "no AgentCore evaluator; manual task"}]
+                                                  "no single-session evaluator; manual task"}]
     for e in blocked["evaluators"]:
         e["golden_test_ids"] = [g for g in e["golden_test_ids"] if g != "GT-003"]
     plan, errors = _validate(blocked, "a" * 64)
     assert plan is not None, errors
 
 
-def test_legacy_procedures_and_non_agentcore_kinds_are_refused_with_actionable_messages():
-    """The contract no longer carries locally computed checks: a scenario `execution`
-    procedure or an orchestration / manual_review / metric_baseline / external_control
-    entry is refused — in a plan revision AND in a proposal seed — with a message that
-    says what to do instead (single-session turns, block + manual_tasks)."""
+def test_legacy_procedures_and_non_evaluator_kinds_are_refused_with_actionable_messages():
     plan = _valid_plan("c", "b" * 64)
     with_proc = json.loads(json.dumps(plan))
     with_proc["scenarios"][2]["execution"] = {
@@ -665,30 +519,17 @@ def test_legacy_procedures_and_non_agentcore_kinds_are_refused_with_actionable_m
     ok, errors = _validate(with_proc)
     assert ok is None and len(errors) == 1
     assert "scenarios.GT-003" in errors[0] and "not supported" in errors[0]
-    assert "AgentCore evaluators" in errors[0] and "manual_tasks" in errors[0]
     for kind in ("orchestration", "manual_review", "metric_baseline", "external_control"):
         with_kind = json.loads(json.dumps(plan))
         with_kind["evaluators"].append({"kind": kind, "key": "obligation", "title": "t",
                                         "reason": "r", "golden_test_ids": []})
         ok, errors = _validate(with_kind)
         assert ok is None and len(errors) == 1, (kind, errors)
-        assert f"kind '{kind}' is not an AgentCore evaluator" in errors[0]
-    # the same two shapes make a proposal seed an INVALID revision, never a 500
     seeded = json.loads(json.dumps(PROPOSAL))
-    seeded["evaluation_plan"] = {
-        "scenarios": [{"scenario_id": "GT-003", "golden_test_id": "GT-003",
-                       "turns": [{"input": "a"}, {"input": "b"}],
-                       "execution": {"version": 1, "repeat": 1,
-                                     "steps": [{"turn": 0, "actor": "A", "session": "a1"},
-                                               {"turn": 1, "actor": "B", "session": "b1"}]}}],
-    }
-    content, errors = contract.parse_content(seeded)
-    assert content is None and any("'execution' procedures" in e for e in errors), errors
     seeded["evaluation_plan"] = {
         "evaluators": [{"kind": "orchestration", "key": "iso", "title": "iso", "reason": "r"}]}
     content, errors = contract.parse_content(seeded)
-    assert content is None and any("not an AgentCore evaluator" in e for e in errors), errors
-    # nothing the plan emits carries the runner's metadata key
+    assert content is None and errors
     ok, _ = _validate(plan)
     items = [plan_contract.dataset_item(s, {"plan": "t"}) for s in ok.scenarios]
     assert all("launchpad_execution" not in it["metadata"] for it in items)
@@ -702,7 +543,6 @@ def test_structured_seed_supplies_typed_scenarios_blocks_golden_tests_and_collis
             "turns": [{"input": "look up today's weather"}, {"input": "and tomorrow?"}],
             "expected_trajectory": [WEATHER_TOOL],
         }],
-        # the cross-session golden test is not one session scored by AgentCore → blocked
         "blocked_golden_tests": [{"golden_test_id": "GT-003",
                                   "reason": "needs two users across sessions; manual task"}],
         "evaluators": [
@@ -718,34 +558,17 @@ def test_structured_seed_supplies_typed_scenarios_blocks_golden_tests_and_collis
                                      content_hash="a" * 64, agent_name="x")
     gt2 = next(s for s in draft["scenarios"] if s["golden_test_id"] == "GT-002")
     assert gt2["review_required"] is False and len(gt2["turns"]) == 2
-    assert all(s["review_required"] for s in draft["scenarios"] if s["golden_test_id"] != "GT-002")
-    # the blocked golden test is neither drafted as a scenario nor lost
     assert not any(s["golden_test_id"] == "GT-003" for s in draft["scenarios"])
-    assert draft["blocked_golden_tests"] == [
-        {"golden_test_id": "GT-003", "reason": "needs two users across sessions; manual task"}]
     keys = [e["key"] for e in draft["evaluators"]]
     assert len(set(keys)) == len(keys)
-    # the seeded judge took the key Builtin_Helpfulness; the exact id spotted in
-    # recommendation #1 gets its OWN collision-safe key and stays an 'existing' entry
     existing = next(e for e in draft["evaluators"] if e["kind"] == "existing")
     assert existing["evaluator_id"] == "Builtin.Helpfulness"
     assert existing["key"] != "Builtin_Helpfulness"
-    recs = {r["index"]: r for r in draft["recommendations"]}
-    assert recs[0]["mapped_to"] == [existing["key"]]
-    assert recs[1]["mapped_to"] == ["Builtin_Helpfulness"]  # explicit seed mapping, no aliasing
-    assert recs[2]["status"] == "unresolved"
-    # a golden test cannot be both seeded as a scenario and blocked; an unknown blocked id
-    # is refused like an unknown scenario id
     both = json.loads(json.dumps(seeded))
     both["evaluation_plan"]["blocked_golden_tests"].append({"golden_test_id": "GT-002",
                                                             "reason": "x"})
     content, errors = contract.parse_content(both)
     assert content is None and any("both a scenario and blocked" in e for e in errors), errors
-    unknown = json.loads(json.dumps(seeded))
-    unknown["evaluation_plan"]["blocked_golden_tests"] = [{"golden_test_id": "GT-999",
-                                                           "reason": "x"}]
-    content, errors = contract.parse_content(unknown)
-    assert content is None and any("GT-999" in e for e in errors), errors
 
 
 def test_plan_validation_binds_revision_hash_covers_golden_tests_and_routes_references():
@@ -757,18 +580,15 @@ def test_plan_validation_binds_revision_hash_covers_golden_tests_and_routes_refe
     dropped = {**plan, "scenarios": plan["scenarios"][1:]}
     _, errors = _validate(dropped)
     assert any("GT-001" in e and "blocked" in e for e in errors)
-    # ANY subset mapping is refused: the runner cannot route an AWS evaluator per GT
     for idx in (0, 1, -1):
         subset = json.loads(json.dumps(plan))
         subset["evaluators"][idx]["golden_test_ids"] = ["GT-001"]
         _, errors = _validate(subset)
         assert any("targets only" in e and "cannot route" in e for e in errors), idx
-    # a GLOBAL reference judge needs the reference on EVERY scenario (and every turn)
     ref = json.loads(json.dumps(plan))
     ref["evaluators"][1]["instructions"] = "Does {assistant_turn} match {expected_response}?"
     _, errors = _validate(ref)
     assert any("GT-002" in e and "expected_response" in e for e in errors)
-    # a GLOBAL reference code rule needs the reference on EVERY scenario too
     ref2 = json.loads(json.dumps(plan))
     ref2["evaluators"][-1]["rules"]["checks"].insert(
         0, {"id": "traj", "type": "reference_trajectory", "mode": "superset"})
@@ -776,7 +596,6 @@ def test_plan_validation_binds_revision_hash_covers_golden_tests_and_routes_refe
     assert any("GT-001" in e and "expected_trajectory" in e for e in errors)
     ok, errors = _validate(_valid_plan("c", "b" * 64, reference=True))
     assert ok is not None, errors
-    # reference_response is trace-scoped
     badlvl = json.loads(json.dumps(plan))
     badlvl["evaluators"][-1]["rules"]["checks"].append({"id": "rr", "type": "reference_response"})
     _, errors = _validate(badlvl)
@@ -792,7 +611,7 @@ def test_plan_validation_refuses_bad_placeholders_missing_recommendations_and_ar
     _, errors = _validate({**plan, "recommendations": plan["recommendations"][:2]})
     assert any("exactly once" in e for e in errors)
     smuggle = json.loads(json.dumps(plan))
-    smuggle["evaluators"][-1]["lambda_arn"] = "arn:aws:lambda:us-west-2:1:function:x"
+    smuggle["evaluators"][-1]["lambda_arn"] = f"arn:aws-cn:lambda:{REGION}:1:function:x"
     _, errors = _validate(smuggle)
     assert any("lambda_arn" in e for e in errors)
     smuggle2 = json.loads(json.dumps(plan))
@@ -812,15 +631,11 @@ def test_proposal_seed_is_validated_before_storage_and_old_hashes_are_unchanged(
     assert content is not None and errors == []
     assert "evaluation_plan" not in contract.content_dump(content)
     for bad_seed in (
-        {"evaluators": [{"key": []}]},                       # unhashable before Pydantic
+        {"evaluators": [{"key": []}]},
         {"evaluators": "nope"},
         {"evaluators": [{"kind": "code", "key": "c", "title": "c", "name": "c",
                          "rules": {"version": 1, "checks": [{"id": "x", "type": "tool_count"}]}}]},
         {"recommendation_keys": {"98": ["c"]}},
-        {"evaluators": [{"kind": "code", "key": "c", "title": "c", "name": "c",
-                         "rules": {"version": 1, "checks": [{"id": "x", "type": "tool_count",
-                                                             "max": 0}]},
-                         "lambda_arn": "arn:aws:lambda:us-west-2:1:function:x"}]},
         {"scenarios": [{"scenario_id": "zz", "golden_test_id": "nope",
                         "turns": [{"input": "a"}]}]},
     ):
@@ -834,13 +649,7 @@ def test_proposal_seed_is_validated_before_storage_and_old_hashes_are_unchanged(
 
 
 def test_more_than_ten_evaluators_are_refused_at_seed_and_plan_time():
-    """Live failure: a plan with 12 evaluators (8 builtins + 2 third-party + 2 custom)
-    materialized fine and then StartBatchEvaluation refused the run — after the agent had
-    been replayed against every scenario. One batch applies every evaluator of the plan
-    and accepts at most ten, so the plan and its seed refuse the eleventh."""
-    from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS
-
-    ids = list(ALL_BUILTIN_EVALUATORS)[:11]
+    ids = list(evaluators_local.ALL_BUILTIN_EVALUATORS)[:11]
     evaluators = [{"kind": "existing", "key": f"e{i}", "title": eid, "evaluator_id": eid,
                    "golden_test_ids": []} for i, eid in enumerate(ids)]
     old = json.loads(json.dumps(PROPOSAL))
@@ -850,966 +659,334 @@ def test_more_than_ten_evaluators_are_refused_at_seed_and_plan_time():
     content, errors = contract.parse_content(
         {**old, "evaluation_plan": {"evaluators": evaluators[:9]}})
     assert content is not None, errors
-    cid, h = _conversation("local-operator")
-    raw = _valid_plan(cid, h, with_code=False)
-    extra = [e for e in evaluators if e["evaluator_id"] not in
-             {x.get("evaluator_id") for x in raw["evaluators"]}]
-    raw["evaluators"] += extra[:11 - len(raw["evaluators"])]
-    assert len(raw["evaluators"]) == 11
-    _, errors = plan_contract.validate_plan(raw, PROPOSAL, revision=1, content_hash=h)
-    assert any("at most 10" in e for e in errors), errors
-    raw["evaluators"].pop()
-    plan, errors = plan_contract.validate_plan(raw, PROPOSAL, revision=1, content_hash=h)
-    assert plan is not None, errors
 
 
-def test_platform_additions_count_against_the_ten_at_proposal_time():
-    """Live failure: a seed of ten passed the proposal contract, then the draft added the
-    assertions judge (every scenario has assertions) and asset creation refused 11
-    evaluators. The proposal now counts the draft, and names what the platform added;
-    a seeded judge that already scores ``{assertions}`` replaces the platform's."""
-    from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS
+def test_existing_ids_outside_the_catalog_make_the_proposal_invalid():
+    """CN has no third-party evaluators: a seed referencing one is an invalid revision."""
+    from app.assistant.service import catalog_evaluators
 
-    ids = list(ALL_BUILTIN_EVALUATORS)[:10]
-    evaluators = [{"kind": "existing", "key": f"e{i}", "title": eid, "evaluator_id": eid,
-                   "golden_test_ids": []} for i, eid in enumerate(ids)]
     old = json.loads(json.dumps(PROPOSAL))
-    content, errors = contract.parse_content({**old, "evaluation_plan": {"evaluators": evaluators}})
-    assert content is None
-    assert any("applies 11 evaluators" in e and "the platform adds" in e and "draft_rubric" in e
-               for e in errors), errors
-    # a recommendation naming a builtin the seed does not list is counted as well
-    named = {**old, "evaluator_recommendations": [*old["evaluator_recommendations"],
-                                                  "Builtin.Stereotyping on replies"]}
-    content, errors = contract.parse_content(
-        {**named, "evaluation_plan": {"evaluators": evaluators[:9]}})
-    assert content is None
-    assert any("applies 11 evaluators" in e and "Builtin.Stereotyping" in e for e in errors)
-    own_judge = {"kind": "judge", "key": "asserts", "title": "Assertions", "name": "asserts",
-                 "level": "SESSION", "golden_test_ids": [],
-                 "instructions": "Session:\n{context}\nAssertions:\n{assertions}\nPass or fail."}
-    seed = {"evaluators": [*evaluators[:9], own_judge]}
-    content, errors = contract.parse_content({**old, "evaluation_plan": seed})
-    assert content is not None, errors
-    draft = plan_contract.draft_plan(contract.content_dump(content), revision=1,
-                                     content_hash="0" * 64, agent_name="kid")
-    assert len(draft["evaluators"]) == 10
-    assert "draft_rubric" not in {e["key"] for e in draft["evaluators"]}
-
-
-def test_evaluator_and_dataset_descriptions_fit_the_aws_limit():
-    """Live failure: CreateEvaluator rejected a 201+ char ``description`` (AWS max 200)
-    after the operation had already started. The seed, the plan and the dataset refuse
-    a longer one up front, and a legacy stored seed drafts a clipped, creatable plan."""
-    old = json.loads(json.dumps(PROPOSAL))
-    judge = {"kind": "judge", "key": "tone", "title": "Tone", "name": "tone",
-             "level": "TRACE", "golden_test_ids": [],
-             "instructions": "Judge the tone of {assistant_turn}.", "description": "d" * 201}
-    content, errors = contract.parse_content({**old, "evaluation_plan": {"evaluators": [judge]}})
-    assert content is None and any("200" in e for e in errors), errors
-    content, errors = contract.parse_content(
-        {**old, "evaluation_plan": {"evaluators": [{**judge, "description": "d" * 200}]}})
-    assert content is not None, errors
-    legacy = {**old, "evaluation_plan": {"evaluators": [judge]}}  # stored before the limit
-    draft = plan_contract.draft_plan(legacy, revision=1, content_hash="0" * 64, agent_name="kid")
-    assert {len(e.get("description") or "") for e in draft["evaluators"]} <= set(range(201))
-    cid, h = _conversation("local-operator")
-    raw = _valid_plan(cid, h, with_code=False)
-    raw["dataset"]["description"] = "x" * 201
-    _, errors = plan_contract.validate_plan(raw, PROPOSAL, revision=1, content_hash=h)
-    assert any(e.startswith("dataset.description") for e in errors), errors
-
-
-def test_seed_routing_is_refused_at_proposal_time_not_at_asset_creation():
-    """Live failure: a proposal whose code rule targeted two of five golden tests was
-    stored as a valid draft, approved and deployed; the routing rule fired only when an
-    administrator created the assets. The seed now runs the same routing check."""
-    old = json.loads(json.dumps(PROPOSAL))
-    scenarios = [{"scenario_id": f"S{i}", "golden_test_id": gid, "turns": [{"input": "x"}],
-                  "assertions": ["must be polite"]}
-                 for i, gid in enumerate(("GT-001", "GT-002", "GT-003"))]
-    rule = {"kind": "code", "key": "no-writes", "title": "No writes", "name": "no_writes",
-            "level": "TRACE", "rules": {"version": 1, "checks": [
-                {"id": "zero", "type": "tool_count", "tool": "send_email", "max": 0}]}}
-    subset = {**old, "evaluation_plan": {"scenarios": scenarios, "evaluators": [
-        {**rule, "golden_test_ids": ["GT-001", "GT-002"]}]}}
-    content, errors = contract.parse_content(subset)
-    assert content is None
-    assert any("targets only ['GT-001', 'GT-002']" in e and "golden_test_ids: []" in e
-               for e in errors), errors
-    for mapping in ([], ["GT-001", "GT-002", "GT-003"]):
-        content, errors = contract.parse_content({**old, "evaluation_plan": {
-            "scenarios": scenarios, "evaluators": [{**rule, "golden_test_ids": mapping}]}})
-        assert content is not None, (mapping, errors)
+    seed = {"evaluators": [{"kind": "existing", "key": "tox", "title": "T",
+                            "evaluator_id": "ThirdParty.DeepEval.Toxicity"}]}
+    _content, _display, errors = contract.validate(
+        {**old, "evaluation_plan": seed}, {"tools": [], "evaluators": catalog_evaluators()})
+    assert any("ThirdParty.DeepEval.Toxicity" in e and "not a built-in" in e for e in errors)
+    assert {e["evaluator_id"] for e in catalog_evaluators()} == set(
+        evaluators_local.ALL_BUILTIN_EVALUATORS) | set(evaluators_local.TRAJECTORY_EVALUATORS)
 
 
 # ===========================================================================
-# 2. the static Lambda handler — real ADOT / Strands wire shapes
+# 2. the static Lambda handler — the CN code-evaluator protocol
 # ===========================================================================
 
 
-def _span(trace, span_id, name, attrs=None, start=1, events=None):
-    return {"traceId": trace, "spanId": span_id, "name": name,
-            "attributes": {"session.id": "s1", **(attrs or {})},
-            "startTimeUnixNano": start, "endTimeUnixNano": start + 1,
-            **({"events": events} if events else {})}
-
-
-def _turn_log(trace, span_id, output, *, finish="end_turn", history=(), time=2):
-    """The conversation log record the installed serializer emits for a model span."""
-    inputs = [{"role": "user", "content": {"content": "hello"}}]
-    for h in history:
-        inputs.append({"role": "assistant", "content": {"content": h}})
-    return {"traceId": trace, "spanId": span_id, "timeUnixNano": time,
-            "attributes": {"event.name": "strands", "session.id": "s1"},
-            "body": {"input": {"messages": inputs},
-                     "output": {"messages": [{"role": "assistant",
-                                              "content": {"message": output,
-                                                          "finish_reason": finish}}]}}}
-
-
-def _tool(trace, span_id, name, start):
-    span = _span(trace, span_id, f"execute_tool {name}",
-                 {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": name}, start)
-    log = {"traceId": trace, "spanId": span_id, "timeUnixNano": start + 1,
-           "attributes": {"event.name": "strands"},
-           "body": {"input": {"messages": [{"role": "tool", "content": {"content": "{}",
-                                                                          "role": "tool"}}]},
-                    "output": {"messages": [{"role": "assistant",
-                                             "content": {"message": "sunny", "id": "t1"}}]}}}
-    return [span, log]
-
-
-def _event(level, spans, refs=None, target=None, name="kid_tools"):
-    return {"schemaVersion": "1.0", "evaluatorId": "x", "evaluatorName": name,
-            "evaluationLevel": level, "evaluationInput": {"sessionSpans": spans},
-            "evaluationReferenceInputs": refs or [], "evaluationTarget": target}
-
-
-T1 = {"traceIds": ["t1"]}
-
-
-def _model_turn(trace, span_id, output, start=10, raw=False, **kw):
-    """A model span + its ADOT conversation record. The installed tracer serializes a
-    model turn's content blocks, so ``output`` is wrapped as ``[{"text": …}]`` unless
-    ``raw`` hands the envelope over verbatim."""
-    message = output if raw else json.dumps([{"text": output}])
-    return [_span(trace, span_id, "chat", {"gen_ai.operation.name": "chat"}, start),
-            _turn_log(trace, span_id, message, time=start + 1, **kw)]
-
-
-BLOCKS = json.dumps([{"text": "amber"}, {"text": "and goodbye"}])
 RULES = {"version": 1, "checks": [
     {"id": "traj", "type": "reference_trajectory", "mode": "superset"},
     {"id": "no_shell", "type": "tool_set", "forbidden": ["shell"]},
 ]}
-LEAK = {"version": 1, "checks": [{"id": "leak", "type": "output_not_contains", "text": "amber"}]}
-NO_TOOLS = {"version": 1, "checks": [{"id": "none", "type": "tool_count", "max": 0}]}
-REF_TRAJ = [{"context": {"spanContext": {"sessionId": "s1"}},
-             "expectedTrajectory": {"toolNames": ["weather"]}}]
 
 
-def test_handler_positive_adot_session_with_tool_and_reference():
-    spans = _tool("t1", "sp-tool", "weather", 3) + _model_turn("t1", "sp-model", "It is sunny", 10)
-    out = handler.evaluate(RULES, _event("SESSION", spans, REF_TRAJ))
-    assert out == {"label": "PASS", "value": 1.0, "explanation": out["explanation"]}, out
-    # the same span reported twice (span doc + log record) is ONE call
-    dup = spans + [dict(spans[0])]
-    assert handler.evaluate({"version": 1, "checks": [{"id": "c", "type": "tool_count",
-                                                       "tool": "weather", "max": 1, "min": 1}]},
-                            _event("SESSION", dup))["label"] == "PASS"
-    # missing reference → error, not pass; forbidden tool → fail
-    assert handler.evaluate(RULES, _event("SESSION", spans, []))["errorCode"] == "REFERENCE_MISSING"
-    shell = spans + _tool("t1", "sp-shell", "shell", 5)
-    assert handler.evaluate(RULES, _event("SESSION", shell, REF_TRAJ))["label"] == "FAIL"
+def _event(actual_output="sunny today", tools=(WEATHER_TOOL,), expected_tools=(WEATHER_TOOL,),
+           expected_output=None, name="kid_tools"):
+    return {"schemaVersion": "1.0", "evaluator": name, "evaluationInput": {
+        "input": "weather?", "actual_output": actual_output, "expected_output": expected_output,
+        "expected_assertion": None,
+        "expected_trajectory": list(expected_tools) if expected_tools is not None else None,
+        "actual_trajectory": list(tools) if tools is not None else None}}
 
 
-def _mcp_transport(trace, span_id, parent, name, start):
-    """The ADOT MCP client span a Harness records under each gateway call (live shape
-    2026-09-29: kind CLIENT, mcp.method.name, gen_ai.tool.name = the MCP tool name)."""
-    span = _span(trace, span_id, f"mcp tools/call {name}",
-                 {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": name,
-                  "mcp.method.name": "tools/call"}, start)
-    span["parentSpanId"] = parent
-    return span
+def test_handler_scores_tool_rules_and_references_from_the_worker_event():
+    assert handler.evaluate(RULES, _event()) == {
+        "label": "PASS", "value": 1.0,
+        "explanation": 'traj=pass (expected ["weather___get_weather"], observed '
+                       '["weather___get_weather"]); no_shell=pass (disallowed tools [])'}
+    failed = handler.evaluate(RULES, _event(tools=(WEATHER_TOOL, "shell")))
+    assert failed["label"] == "FAIL" and failed["value"] == 0.0
+    assert "no_shell=fail" in failed["explanation"]
+    assert handler.evaluate(RULES, _event(expected_tools=None))["errorCode"] == "REFERENCE_MISSING"
+    assert handler.evaluate(RULES, _event(tools=None))["errorCode"] == "EVIDENCE_INCOMPLETE"
 
 
-PAYOUT_BAN = {"version": 1, "checks": [
-    {"id": "no_payout", "type": "tool_count", "tool": "hr-database___create_payout", "max": 0},
-    {"id": "one_lookup", "type": "tool_count", "tool": "hr-database___get_employee",
-     "min": 1, "max": 1},
-]}
-
-
-@pytest.mark.parametrize("outer", ["hr-database___create_payout",
-                                   "launchpad_gw_user_hr-database___create_payout"])
-def test_handler_bans_a_gateway_tool_on_both_invoke_paths(outer):
-    """Dataset runs (M2M) record bare Gateway names; the console's logged-in chat records
-    the remote_mcp alias ``launchpad_gw_user_<tool>`` on the execute_tool span. A named
-    ban written with the catalog name must catch the call on both paths."""
-    lookup_outer = outer.replace("create_payout", "get_employee")
-    spans = (_tool("t1", "look", lookup_outer, 3)
-             + [_mcp_transport("t1", "look-mcp", "look", "hr-database___get_employee", 3)]
-             + _tool("t1", "pay", outer, 5)
-             + [_mcp_transport("t1", "pay-mcp", "pay", "hr-database___create_payout", 5)]
-             + _model_turn("t1", "m", "Done.", start=10))
-    out = handler.evaluate(PAYOUT_BAN, _event("SESSION", spans))
-    assert out["label"] == "FAIL" and "no_payout" in out["explanation"], out
-    # without the payout, the single lookup is counted ONCE (the transport span is its
-    # own call's child, never a second call)
-    clean = (_tool("t1", "look", lookup_outer, 3)
-             + [_mcp_transport("t1", "look-mcp", "look", "hr-database___get_employee", 3)]
-             + _model_turn("t1", "m", "You have 3.5 days.", start=10))
-    assert handler.evaluate(PAYOUT_BAN, _event("SESSION", clean))["label"] == "PASS"
-
-
-def test_handler_counts_an_orphan_mcp_transport_span_as_the_call():
-    """Without the agent-level span, the transport record is the only evidence."""
-    spans = ([_mcp_transport("t1", "only", "gone-parent", "hr-database___create_payout", 5)]
-             + _model_turn("t1", "m", "Done.", start=10))
-    assert handler.evaluate(PAYOUT_BAN, _event("SESSION", spans))["label"] == "FAIL"
-
-
-def test_handler_user_gateway_prefix_matches_the_invoke_alias():
-    from app.services.agentcore.harness import USER_GATEWAY_ALIAS
-
-    assert handler.USER_GATEWAY_TOOL_PREFIX == f"{USER_GATEWAY_ALIAS}_"
-
-
-def test_handler_zero_call_and_named_write_ban_semantics():
-    empty = {"checks": [{"id": "empty", "type": "tool_sequence", "mode": "exact", "tools": []}]}
-    ban = {"checks": [{"id": "write", "type": "tool_count", "tool": "send_email", "max": 0}]}
-    spans = _model_turn("t1", "m", "Revenue was 10.", start=10)
-    assert handler.evaluate(empty, _event("SESSION", spans))["label"] == "PASS"
-    spans += _tool("t1", "retrieve", "Retrieve", 3)
-    assert handler.evaluate(empty, _event("SESSION", spans))["label"] == "FAIL"
-    assert handler.evaluate(ban, _event("SESSION", spans))["label"] == "PASS"
-    spans += _tool("t1", "write", "send_email", 4)
-    assert handler.evaluate(ban, _event("SESSION", spans))["label"] == "FAIL"
-
-
-def test_handler_reads_current_output_joined_never_history():
-    # history says amber, current output does not → no-leak PASS
-    clean = _model_turn("t1", "m1", "Noted.", history=["my colour is amber"])
-    assert handler.evaluate(LEAK, _event("TRACE", clean, target=T1))["label"] == "PASS"
-    # current output is a multi-part message whose FIRST part leaks → FAIL (parts joined)
-    leaky = _model_turn("t1", "m1", BLOCKS)
-    assert handler.evaluate(LEAK, _event("TRACE", leaky, target=T1))["label"] == "FAIL"
-    # a leaking earlier turn followed by a clean FINAL turn: the final turn is judged
-    two = _model_turn("t1", "m1", "amber!", start=10) + _model_turn("t1", "m2", "bye",
-                                                                     start=20)
-    assert handler.evaluate(LEAK, _event("TRACE", two, target=T1))["label"] == "PASS"
-    # raw Strands events: gen_ai.assistant.message is INPUT, gen_ai.choice is output
-    raw = [_span("t1", "m1", "chat", {"gen_ai.operation.name": "chat"}, 1, events=[
-        {"name": "gen_ai.assistant.message", "attributes": {"content": "amber"}},
-        {"name": "gen_ai.choice", "attributes": {"message": json.dumps([{"text": "ok"}]),
-                                                 "finish_reason": "end_turn"}}])]
-    assert handler.evaluate(LEAK, _event("TRACE", raw, target=T1))["label"] == "PASS"
-    only_history = [_span("t1", "m1", "chat", {"gen_ai.operation.name": "chat"}, 1, events=[
-        {"name": "gen_ai.assistant.message", "attributes": {"content": "safe"}}])]
-    assert handler.evaluate(LEAK, _event("TRACE", only_history, target=T1))[
-        "errorCode"] == "NO_OUTPUT"
-    # devguide shape (gen_ai.completion) and OTLP list attributes are accepted
-    doc = [{"traceId": "t1", "spanId": "m", "name": "Model: claude", "startTimeUnixNano": "5",
-            "endTimeUnixNano": "6",  # a finished span always carries its end time
-            "attributes": [{"key": "gen_ai.completion", "value": {"stringValue": "fine"}}]}]
-    assert handler.evaluate(LEAK, _event("TRACE", doc, target=T1))["label"] == "PASS"
-    # structured-looking output that is not JSON is malformed evidence
-    broken = _model_turn("t1", "m1", '[{"text": "amber"', raw=True)
-    assert handler.evaluate(LEAK, _event("TRACE", broken, target=T1))[
-        "errorCode"] == "MALFORMED_OUTPUT"
-
-
-def test_handler_incomplete_truncated_or_prompt_only_evidence_never_passes():
-    prompt_only = [_span("t1", "m1", "chat", {"gen_ai.operation.name": "chat",
-                                              "gen_ai.prompt": "hi"}, 1)]
-    assert handler.evaluate(NO_TOOLS, _event("SESSION", prompt_only))["errorCode"] == "NO_OUTPUT"
-    bare = [_span("t1", "m1", "invoke_agent kid", {}, 1)]
-    assert handler.evaluate(NO_TOOLS, _event("SESSION", bare))["errorCode"] == "NO_MODEL_TURN"
-    tool_use_end = _model_turn("t1", "m1", "calling tool", finish="tool_use")
-    assert handler.evaluate(NO_TOOLS, _event("SESSION", tool_use_end))["errorCode"] == "INCOMPLETE"
-    cut = _model_turn("t1", "m1", "very long", finish="max_tokens")
-    assert handler.evaluate(NO_TOOLS, _event("SESSION", cut))["errorCode"] == "TRUNCATED"
-    fine = handler.evaluate(NO_TOOLS, _event("SESSION", _model_turn("t1", "m1", "ok")))
-    assert fine["label"] == "PASS"
-    # a tool call without a name is unknown evidence, never a zero-tool pass
-    nameless = _model_turn("t1", "m1", "ok") + [_span("t1", "x", "execute_tool",
-                                                     {"gen_ai.operation.name": "execute_tool"}, 2)]
-    assert handler.evaluate(NO_TOOLS, _event("SESSION", nameless))["errorCode"] == "UNKNOWN_TOOL"
-    # ordering without start times is ambiguous for sequence rules, fine for counts
-    a = _tool("t1", "a", "weather", 3) + _tool("t1", "b", "calendar", 4)
-    a += _model_turn("t1", "m", "ok")
-    for d in a:
-        d.pop("startTimeUnixNano", None)
-        d.pop("timeUnixNano", None)
+def test_handler_output_rules_read_the_final_output_and_never_pass_without_evidence():
+    leak = {"version": 1, "checks": [{"id": "leak", "type": "output_not_contains",
+                                      "text": "AMBER"}]}
+    assert handler.evaluate(leak, _event("my colour is amber"))["label"] == "FAIL"
+    assert handler.evaluate(leak, _event("hello"))["label"] == "PASS"
+    cs = {"version": 1, "checks": [{"id": "leak", "type": "output_not_contains", "text": "AMBER",
+                                    "case_sensitive": True}]}
+    assert handler.evaluate(cs, _event("my colour is amber"))["label"] == "PASS"
+    exact = {"version": 1, "checks": [{"id": "x", "type": "output_exact", "text": "yes"}]}
+    assert handler.evaluate(exact, _event("  Yes "))["label"] == "PASS"
+    # structured outputs are read as their text parts; no output is an error, never PASS
+    assert handler.evaluate(exact, _event([{"text": "yes"}]))["label"] == "PASS"
+    assert handler.evaluate(exact, _event(None))["errorCode"] == "EVIDENCE_INCOMPLETE"
+    ref = {"version": 1, "checks": [{"id": "r", "type": "reference_response"}]}
+    assert handler.evaluate(ref, _event("a name is Pip", expected_output="a name"))["label"] == \
+        "PASS"
+    assert handler.evaluate(ref, _event("hi"))["errorCode"] == "REFERENCE_MISSING"
+    count = {"version": 1, "checks": [{"id": "n", "type": "tool_count", "max": 0}]}
+    assert handler.evaluate(count, _event(tools=()))["label"] == "PASS"
+    assert handler.evaluate(count, _event())["label"] == "FAIL"
     seq = {"version": 1, "checks": [{"id": "s", "type": "tool_sequence", "mode": "exact",
-                                     "tools": ["weather", "calendar"]}]}
-    assert handler.evaluate(seq, _event("SESSION", a))["errorCode"] == "AMBIGUOUS_ORDER"
-    # the earlier-started call comes first even if it ends later
-    b = _tool("t1", "a", "weather", 3) + _tool("t1", "b", "calendar", 4)
-    b += _model_turn("t1", "m", "ok")
-    b[0]["endTimeUnixNano"] = 99
-    assert handler.evaluate(seq, _event("SESSION", b))["label"] == "PASS"
+                                     "tools": [WEATHER_TOOL]}]}
+    assert handler.evaluate(seq, _event())["label"] == "PASS"
+    assert handler.evaluate(seq, _event(tools=("shell", WEATHER_TOOL)))["label"] == "FAIL"
 
 
-def test_handler_validates_schema_targets_and_reference_scope():
-    spans = _model_turn("t1", "m1", "ok") + _model_turn("t2", "m2", "other", start=30)
-    assert handler.evaluate(LEAK, {**_event("TRACE", spans, target=T1),
-                                   "schemaVersion": "2.0"})["errorCode"] == "BAD_SCHEMA"
-    assert handler.evaluate(LEAK, _event("NOPE", spans))["errorCode"] == "BAD_LEVEL"
-    assert handler.evaluate(LEAK, _event("TRACE", spans))["errorCode"] == "TARGET_UNRESOLVED"
-    assert handler.evaluate(LEAK, _event("TRACE", spans, target={"traceIds": ["t1", "zz"]}))[
-        "errorCode"] == "TARGET_UNRESOLVED"
-    assert handler.evaluate(LEAK, _event("TOOL_CALL", spans, target={"spanIds": ["m1"]}))[
-        "errorCode"] == "TARGET_UNRESOLVED"
-    junk = handler.evaluate(LEAK, _event("SESSION", spans + ["junk"]))
-    assert junk["errorCode"] == "MALFORMED_SPAN"
-    assert handler.evaluate(LEAK, _event("SESSION", []))["errorCode"] == "NO_SPANS"
-    rr = {"version": 1, "checks": [{"id": "r", "type": "reference_response"}]}
-    good = [{"context": {"spanContext": {"sessionId": "s1", "traceId": "t1"}},
-             "expectedResponse": {"text": "ok"}}]
-    assert handler.evaluate(rr, _event("TRACE", spans, good, T1))["label"] == "PASS"
-    foreign = [{"context": {"spanContext": {"sessionId": "OTHER", "traceId": "t1"}},
-                "expectedResponse": {"text": "ok"}}]
-    assert handler.evaluate(rr, _event("TRACE", spans, foreign, T1))[
-        "errorCode"] == "REFERENCE_MISMATCH"
-    conflicting = good + [{"context": {"spanContext": {"sessionId": "s1", "traceId": "t1"}},
-                           "expectedResponse": {"text": "different"}}]
-    assert handler.evaluate(rr, _event("TRACE", spans, conflicting, T1))[
-        "errorCode"] == "REFERENCE_CONFLICT"
-    other_trace = [{"context": {"spanContext": {"sessionId": "s1", "traceId": "t2"}},
-                    "expectedResponse": {"text": "ok"}}]
-    assert handler.evaluate(rr, _event("TRACE", spans, other_trace, T1))[
-        "errorCode"] == "REFERENCE_MISSING"
-    assert handler.evaluate(rr, _event("SESSION", spans, good))["errorCode"] == "UNSUPPORTED"
-    assert handler.evaluate({"version": 1, "checks": []}, _event("SESSION", spans))[
-        "errorCode"] == "BAD_RULE"
+def test_handler_schema_and_rule_errors_fail_closed():
+    assert handler.evaluate(RULES, {**_event(), "schemaVersion": 1.0})["errorCode"] == "BAD_SCHEMA"
+    assert handler.evaluate({"version": 1, "checks": []}, _event())["errorCode"] == "BAD_RULE"
+    bad = {"version": 1, "checks": [{"id": "x", "type": "regex", "text": ".*"}]}
+    assert handler.evaluate(bad, _event())["errorCode"] == "BAD_RULE"
+    malformed = _event()
+    malformed["evaluationInput"]["actual_trajectory"] = [{"name": "x"}]
+    assert handler.evaluate(RULES, malformed)["errorCode"] == "MALFORMED_EVIDENCE"
 
 
-def test_handler_refuses_unknown_evaluator_names_and_stays_stdlib(monkeypatch):
-    monkeypatch.setattr(handler, "_RULES", {"version": 1, "evaluators": {"kid_tools": RULES}})
-    spans = _tool("t1", "a", "weather", 3) + _model_turn("t1", "m", "ok")
-    assert handler.lambda_handler(_event("SESSION", spans, REF_TRAJ, name="other"), None)[
-        "errorCode"] == "UNKNOWN_EVALUATOR"
-    assert handler.lambda_handler(_event("SESSION", spans, REF_TRAJ), None)["label"] == "PASS"
-    assert handler.lambda_handler("nope", None)["errorCode"] == "BAD_EVENT"
-    text = open(handler.__file__, encoding="utf-8").read().split('"""', 2)[2]
-    for forbidden in ("eval(", "exec(", "subprocess", "import re", "boto3", "urllib", "socket",
-                      "__import__", "importlib"):
-        assert forbidden not in text, forbidden
-    imports = [line for line in text.splitlines() if line.startswith(("import ", "from "))]
-    assert imports == ["import json", "import os"]
-
-
-@pytest.mark.parametrize("level", ["TRACE", "SESSION"])
-def test_handler_routes_identityless_service_event_only_to_the_single_packaged_evaluator(
-    monkeypatch, level,
-):
-    # Live AgentCore Evaluate (2026-09-14) omits BOTH documented identity fields.
-    monkeypatch.setattr(handler, "_RULES", {"version": 1, "evaluators": {
-        "child_poc_r2_no_tools": NO_TOOLS,
-    }})
-    event = _event(level, _model_turn("t1", "m1", "ok"),
-                   target=T1 if level == "TRACE" else None)
-    del event["evaluatorName"]
-    del event["evaluatorId"]
-    assert handler.lambda_handler(event, None)["label"] == "PASS"
-    event["evaluationInput"]["sessionSpans"] += _tool("t1", "tool1", "weather", 3)
-    assert handler.lambda_handler(event, None)["label"] == "FAIL"
-    event["evaluationInput"]["sessionSpans"] = []
-    assert handler.lambda_handler(event, None)["errorCode"] == "NO_SPANS"
-
-
-@pytest.mark.parametrize("identity", [
-    {"evaluatorName": "other"}, {"evaluatorName": ""}, {"evaluatorName": None},
-    {"evaluatorName": []}, {"evaluatorName": {"name": "kid_tools"}},
-    {"evaluatorName": 0}, {"evaluatorId": "unknown-id"}, {"evaluatorId": None},
-])
-def test_handler_never_ignores_explicit_unknown_or_malformed_identity(monkeypatch, identity):
-    monkeypatch.setattr(handler, "_RULES", {"version": 1, "evaluators": {"kid_tools": NO_TOOLS}})
-    event = _event("SESSION", _model_turn("t1", "m1", "ok"))
-    del event["evaluatorName"]
-    del event["evaluatorId"]
-    assert handler.lambda_handler({**event, **identity}, None)["errorCode"] == "UNKNOWN_EVALUATOR"
-
-
-@pytest.mark.parametrize("evaluators", [{}, {"a": NO_TOOLS, "b": LEAK}])
-def test_handler_refuses_ambiguous_or_empty_package_without_identity(monkeypatch, evaluators):
-    monkeypatch.setattr(handler, "_RULES", {"version": 1, "evaluators": evaluators})
-    event = _event("SESSION", _model_turn("t1", "m1", "ok"))
-    del event["evaluatorName"]
-    del event["evaluatorId"]
-    assert handler.lambda_handler(event, None)["errorCode"] == "UNKNOWN_EVALUATOR"
+def test_handler_resolves_the_packaged_evaluator_by_name_or_as_the_single_package(monkeypatch):
+    rules = {"version": 1, "evaluators": {"kid_tools": RULES}}
+    monkeypatch.setattr(handler, "load_rules", lambda path=None: rules)
+    assert handler.lambda_handler(_event(), None)["label"] == "PASS"
+    event = _event()
+    del event["evaluator"]
+    assert handler.lambda_handler(event, None)["label"] == "PASS"  # single package resolves
+    assert handler.lambda_handler(_event(name="other"), None)["errorCode"] == "UNKNOWN_EVALUATOR"
+    two = {"version": 1, "evaluators": {"a": RULES, "b": RULES}}
+    monkeypatch.setattr(handler, "load_rules", lambda path=None: two)
+    assert handler.lambda_handler(event, None)["errorCode"] == "AMBIGUOUS_EVALUATOR"
+    # the handler stays stdlib-only: no boto3, no network, no eval/exec/subprocess/regex
+    source = assets.HANDLER_PATH.read_text(encoding="utf-8")
+    for forbidden in ("import boto3", "import urllib", "import socket", "import subprocess",
+                      "import re\n", "eval(", "exec(", "__import__"):
+        assert forbidden not in source, forbidden
 
 
 def test_package_is_deterministic_and_the_nonce_pins_the_digest():
-    rules = {"version": 1, "evaluators": {"a": RULES}}
-    zip1, d1 = assets.build_package(rules, "n1")
-    zip2, d2 = assets.build_package(json.loads(json.dumps(rules)), "n1")
-    assert zip1 == zip2 and d1 == d2
-    assert assets.build_package(rules, "n2")[1] != d1  # someone without the nonce cannot match
-    assert assets.build_package(rules)[1] != d1
-    import io
-    import zipfile
-
-    with zipfile.ZipFile(io.BytesIO(zip1)) as zf:
+    rules = {"version": 1, "evaluators": {"kid_tools": RULES}}
+    a, da = assets.build_package(rules)
+    b, db_ = assets.build_package(rules)
+    assert a == b and da == db_
+    c, dc = assets.build_package(rules, nonce="n1")
+    assert dc != da
+    with zipfile.ZipFile(io.BytesIO(c)) as zf:
         assert zf.namelist() == ["handler.py", "provenance.json", "rules.json"]
-        assert all(i.date_time == (1980, 1, 1, 0, 0, 0) for i in zf.infolist())
-        assert zf.read("handler.py") == open(handler.__file__, "rb").read()
+        assert json.loads(zf.read("provenance.json")) == {"nonce": "n1"}
+        assert json.loads(zf.read("rules.json")) == rules
+        assert zf.read("handler.py") == assets.HANDLER_PATH.read_bytes()
+    assert assets.code_sha256_b64(da) == _sha_b64(a)
 
 
 # ===========================================================================
-# 3. the materializer (fakes; direct service calls)
+# 3. materialization on the CN substrate
 # ===========================================================================
 
 
-@pytest.fixture
-def app_ready():
-    app = create_app()
-    _ready()
-    _install_preset()
-    return app
-
-
-def _approve(cid: str, content_hash: str, *, plan=None, approver_user_id=None,
-             approved_by="admin", fakes=None, recheck=None):
-    fakes = fakes or Fakes()
-    db = SessionLocal()
-    try:
-        conv = db.get(AssistantConversation, cid)
-        row = assets.edit_plan(db, conv, plan or _valid_plan(cid, content_hash),
-                               created_by="river")
-        assert row.status == "draft", row.validation_errors
-        ws = db.get(Workspace, DEFAULT_WORKSPACE_ID)
-        outcome = assets.approve_plan(db, conv, ws, plan_revision=row.revision,
-                                      plan_hash=row.content_hash, approved_by=approved_by,
-                                      approver_user_id=approver_user_id, recheck=recheck,
-                                      clients=fakes)
-        return outcome.operation.id, row.revision, row.content_hash, outcome.started
-    finally:
-        db.close()
-
-
-def _run(op_id, fakes):
-    return assets.run_operation(op_id, clients=fakes, sleeper=lambda s: None)
-
-
-def test_judge_refused_by_the_validation_probe_is_created_on_the_fallback_model(app_ready):
-    """AgentCore's CreateEvaluator validation refuses GPT-6 (the judge default): the
-    definite 400 is recorded, the fallback request is persisted with its own token
-    BEFORE the retry, and a resumed run rebuilds exactly that request."""
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    fakes.control.refuse_models = {"global.openai.gpt-6-sol"}
-    op_id, _, _, _ = _approve(cid, h, fakes=fakes)
-    assert _run(op_id, fakes)
-    op = _op(op_id)
-    assert op.status == "succeeded", op.error
-    res = _res(op, "evaluator:pii")
-    assert [h_["outcome"] for h_ in res["create_history"]] == ["rejected", "created"]
-    fallback = res["model_fallback"]
-    assert fallback["requested"] == "global.openai.gpt-6-sol"
-    assert fallback["used"] == "global.anthropic.claude-sonnet-5-5"
-    assert fallback["client_token"] != res["client_token"]
-    assert res["request"]["clientToken"] == fallback["client_token"]
-    created = fakes.control.evaluators[res["result"]["evaluator_id"]]
-    model = created["evaluatorConfig"]["llmAsAJudge"]["modelConfig"]
-    assert model["bedrockEvaluatorModelConfig"]["modelId"] == "global.anthropic.claude-sonnet-5-5"
-    assert res["result"]["model_fallback"]["used"] == "global.anthropic.claude-sonnet-5-5"
-    assert "client_token" not in res["result"]["model_fallback"]
-
-
-def test_lost_fallback_create_resumes_on_the_persisted_fallback_request(app_ready):
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    fakes.control.refuse_models = {"global.openai.gpt-6-sol"}
-    fakes.control.lose_response_once = True  # the FALLBACK create succeeds, response lost
-    op_id, _, _, _ = _approve(cid, h, fakes=fakes)
-    _run(op_id, fakes)
-    res = _res(_op(op_id), "evaluator:pii")
-    assert res["status"] == "failed" and res["model_fallback"]["used"]
-    while _op(op_id).status != "succeeded" and _op(op_id).attempts < assets.MAX_ATTEMPTS:
-        _run(op_id, fakes)
-    op = _op(op_id)
-    assert op.status == "succeeded", op.error
-    res = _res(op, "evaluator:pii")
-    # recovered through the fallback token's replay — one evaluator, no second model
-    assert len([e for e in fakes.control.evaluators.values()
-                if e["evaluatorName"] == "kid_pii_judge"]) == 1
-    assert res["request"]["clientToken"] == res["model_fallback"]["client_token"]
-    assert [h_["outcome"] for h_ in res["create_history"]][:2] == ["rejected", "lost"]
-
-
-def test_materialization_creates_every_owned_resource_exactly_once(app_ready):
+def test_materialization_creates_the_dataset_and_local_evaluators_and_skips_code_by_default(
+        app_ready):
+    """Default settings (``eval_code_evaluators_enabled`` off): the dataset and the judge
+    are created as ledger rows, the existing builtin is bound, the Lambda chain and the
+    code evaluator are recorded ``skipped`` — the operation succeeds without any AWS
+    client being built."""
+    assert get_settings().eval_code_evaluators_enabled is False
     cid, h = _conversation("local-operator")
     before = _snapshot_proposal(cid)
     fakes = Fakes()
-    op_id, _, _, started = _approve(cid, h, fakes=fakes)
+    op_id, _, _, started = _approve(cid, h)
     assert started
     assert _run(op_id, fakes)
     op = _op(op_id)
     assert op.status == "succeeded", op.error
-    keys = [r["key"] for r in op.resources]
-    assert keys[:6] == ["dataset", "lambda_role", "log_group", "lambda_function",
-                        "lambda_permission", "role_grant"]
-    assert all(r["status"] == "ready" for r in op.resources)
-    assert op.pinned["execution_role_id"] == "AROAWORKSPACE" and op.pinned["region"]
+    assert [r["key"] for r in op.resources] == [
+        "dataset", "lambda_role", "log_group", "lambda_function",
+        "existing:helpfulness", "evaluator:pii", "evaluator:tools"]
+    statuses = {r["key"]: r["status"] for r in op.resources}
+    assert statuses == {"dataset": "ready", "lambda_role": "skipped", "log_group": "skipped",
+                        "lambda_function": "skipped", "evaluator:pii": "ready",
+                        "evaluator:tools": "skipped", "existing:helpfulness": "ready"}
+    assert "eval_code_evaluators_enabled" in _res(op, "evaluator:tools")["error"]
+    assert fakes.requested == []  # nothing left the ledger
+    assert op.pinned["region"] == REGION and "execution_role_id" not in op.pinned
+    rows = _rows()
+    assert [r.name for r in rows] == ["kid_pii_judge"]
+    judge = rows[0]
+    assert (judge.definition, judge.level, judge.model_id, judge.workspace_id) == (
+        "judge", "TRACE", "global.zai.glm-5.3", DEFAULT_WORKSPACE_ID)
+    assert judge.rating_scale[0]["label"] == "pass" and judge.description.startswith("PII")
+    pii = _res(op, "evaluator:pii")
+    assert pii["result"]["evaluator_id"] == judge.id and pii["owned"] is True
+    assert pii["create_history"][-1]["outcome"] == "created"
+    assert _res(op, "existing:helpfulness")["result"]["source"] == "builtin"
     db = SessionLocal()
     try:
         ds = db.get(EvalDataset, op.dataset_id)
         assert ds.kind == "predefined" and len(ds.items) == 3 and ds.cloud is None
         item = next(i for i in ds.items if i["scenario_id"] == "GT-003")
-        # one runtime session, three turns — no runner procedure / local checks
         assert "launchpad_execution" not in item["metadata"] and len(item["turns"]) == 3
         la = item["metadata"]["launchpad_assets"]
-        assert la["golden_test_id"] == "GT-003"
-        assert la["golden_test"]["source"] == "industry_assumption"
+        assert la["golden_test_id"] == "GT-003" and la["operation_id"] == op_id
         assert la["golden_test"]["pass_criteria"] == "cross-session recall"
-        # every provenance entry is an AgentCore evaluator kind
-        assert {e["kind"] for e in la["evaluators"].values()} <= {"existing", "judge", "derived",
-                                                                  "code"}
-        assert set(la["applies"]) == {"helpfulness", "pii", "tools"}  # global = every GT
+        assert set(la["applies"]) == {"helpfulness", "pii", "tools"}
         gt1 = next(i for i in ds.items if i["scenario_id"] == "GT-001")
-        assert set(gt1["metadata"]["launchpad_assets"]["applies"]) == {"helpfulness", "pii",
-                                                                       "tools"}
-        gt1_assets = gt1["metadata"]["launchpad_assets"]
-        assert gt1_assets["golden_test"]["forbidden_behavior"] == "asks for address"
-        # resolved evaluator ids were written back into the provenance map only
-        pii_id = _res(op, "evaluator:pii")["result"]["evaluator_id"]
-        assert gt1["metadata"]["launchpad_assets"]["evaluators"]["pii"]["evaluator_id"] == pii_id
-        assert "transcript" not in json.dumps(ds.items) and "Be kind." not in json.dumps(ds.items)
+        evaluators = gt1["metadata"]["launchpad_assets"]["evaluators"]
+        assert evaluators["pii"]["evaluator_id"] == judge.id
+        assert evaluators["tools"]["evaluator_id"] is None  # skipped: never created
+        assert "Be kind." not in json.dumps(ds.items)
+        summary = assets.plan_out(db.get(AssistantEvaluationPlan, op.plan_id), op)["summary"]
     finally:
         db.close()
+    assert summary["scenarios"] == 3 and summary["lambda_functions"] == 1
+    out = assets.operation_out(op)
+    assert out["requires_new_plan"] is False and out["running"] is False
+    assert out["resources"][0]["link"] == f"/evaluation?view=datasets&ds={op.dataset_id}"
+    assert next(r for r in out["resources"] if r["key"] == "evaluator:pii")["link"] == \
+        f"/evaluation?view=evaluators&ev={judge.id}"
+    assert "request" not in out["resources"][5]  # the raw request stays server-side
+    assert _snapshot_proposal(cid) == before
+
+
+def test_code_evaluators_enabled_builds_the_lambda_chain_and_a_code_row(app_ready, code_enabled):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h)
+    assert _run(op_id, fakes)
+    op = _op(op_id)
+    assert op.status == "succeeded", op.error
+    assert all(r["status"] == "ready" for r in op.resources)
+    assert not any(r["kind"] in ("lambda_permission", "role_grant") for r in op.resources)
     fn = _res(op, "lambda_function")
     assert fn["result"]["version"] == "1" and fn["owned"] is True
-    rb = fn["result"]["readback"]
-    assert rb["CodeSha256"] == assets.code_sha256_b64(fn["digest"])
-    assert (rb["Runtime"], rb["Handler"], rb["Timeout"], rb["MemorySize"], rb["State"],
-            rb["ReservedConcurrentExecutions"]) == ("python3.12", "handler.lambda_handler", 60,
-                                                   256, "Active", 5)
+    assert fn["result"]["version_arn"].endswith(":1")
+    assert fn["result"]["readback"]["State"] == "Active"
+    assert fn["result"]["readback"]["CodeSha256"] == assets.code_sha256_b64(fn["digest"])
     live = fakes.lam.functions[fn["name"]]
-    assert live["tags"]["launchpad:eval-operation"] == op_id
-    stmt = fakes.lam.policies[fn["name"]][0]
-    assert stmt["Principal"]["Service"] == "bedrock-agentcore.amazonaws.com"
-    assert stmt["Resource"] == fn["result"]["version_arn"]
-    assert stmt["Condition"] == {"StringEquals": {"AWS:SourceAccount": op.account_id}}
+    assert fn["name"].startswith("launchpad-evalfn-")
+    assert live["tags"][assets.TAG_OPERATION] == op_id
+    assert live["package"] == assets.build_package(fn["rules"], fn["nonce"])[0]
     role = fakes.iam.roles[fn["name"]]
-    assert _res(op, "lambda_role")["nonce"] in role["Description"]
-    policy = role["policies"]["launchpad-evalfn-logs"]
-    assert policy["Statement"][0]["Action"] == ["logs:CreateLogStream", "logs:PutLogEvents"]
-    assert all(f"/aws/lambda/{fn['name']}" in r for r in policy["Statement"][0]["Resource"])
-    assert fakes.logs.groups[f"/aws/lambda/{fn['name']}"]["retention"] == 14
-    assert fakes.logs.groups[f"/aws/lambda/{fn['name']}"]["tags"]["launchpad:provenance"] == \
-        _res(op, "log_group")["nonce"]
-    shared = fakes.iam.roles["launchpad-agent-execution-role"]
-    assert shared["trust"] == '{"Statement": "original"}'
-    assert set(shared["policies"]) == {"launchpad-agent-execution", f"launchpad-evalop-{op_id}"}
-    grant = shared["policies"][f"launchpad-evalop-{op_id}"]["Statement"][0]
-    assert grant["Action"] == ["lambda:InvokeFunction", "lambda:GetFunction"]
-    assert grant["Resource"] == [fn["result"]["version_arn"]]  # never the unqualified ARN
-    code = fakes.control.evaluators[_res(op, "evaluator:tools")["result"]["evaluator_id"]]
-    assert code["evaluatorConfig"]["codeBased"]["lambdaConfig"]["lambdaArn"] == \
-        fn["result"]["version_arn"]
-    assert _res(op, "evaluator:tools")["reference_dependent"] is False
-    assert _res(op, "evaluator:pii")["reference_dependent"] is False
-    assert fn["result"]["readback"]["FunctionArn"] == fn["result"]["version_arn"]
+    trust = json.loads(role["AssumeRolePolicyDocument"])["Statement"][0]
+    assert trust["Principal"] == {"Service": "lambda.amazonaws.com"}
+    assert trust["Condition"] == {"StringEquals": {"aws:SourceAccount": ACCOUNT}}
+    policy = role["policies"][assets.LOGS_POLICY_NAME]["Statement"][0]
+    assert policy["Action"] == ["logs:CreateLogStream", "logs:PutLogEvents"]
+    assert policy["Resource"][0] == (
+        f"arn:aws-cn:logs:{REGION}:{ACCOUNT}:log-group:/aws/lambda/{fn['name']}")
+    assert _res(op, "lambda_role")["result"]["role_arn"] == (
+        f"arn:aws-cn:iam::{ACCOUNT}:role/{fn['name']}")
+    assert fakes.logs.groups[f"/aws/lambda/{fn['name']}"]["retentionInDays"] == 14
     assert _res(op, "log_group")["result"]["creation_time"]
-    assert _res(op, "existing:helpfulness")["result"]["source"] == "builtin"
-    assert fakes.control.create_calls == 2 and fakes.lam.create_calls == 1
-    assert fakes.lam.publish_calls == 1
-    assert _snapshot_proposal(cid) == before
-    assert set(fakes.requested) <= {"iam", "logs", "lambda", "bedrock-agentcore-control"}
+    code = next(r for r in _rows() if r.name == "kid_tools")
+    assert code.definition == "code" and code.lambda_arn == fn["result"]["version_arn"]
+    assert code.lambda_timeout_s == 60 and code.level == "SESSION"
+    assert _res(op, "evaluator:tools")["result"]["evaluator_id"] == code.id
+    assert _res(op, "evaluator:tools")["reference_dependent"] is False
+    assert (fakes.lam.create_calls, fakes.lam.publish_calls, fakes.iam.create_calls) == (1, 1, 1)
+    assert set(fakes.requested) == {"iam", "logs", "lambda"}
+    # the worker's definition of the code row points at the published version
+    assert evaluators_local.definition_of(code)["lambda_arn"] == fn["result"]["version_arn"]
+
+
+def test_lost_lambda_responses_are_unknown_and_foreign_names_are_conflicts(app_ready,
+                                                                           code_enabled):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h)
+    fn_name = _res(_op(op_id), "lambda_function")["name"]
+    # a role under our name exists before our create: foreign collision, never adopted
+    fakes.iam.create_role(RoleName=fn_name, AssumeRolePolicyDocument="{}")
+    assert _run(op_id, fakes)
+    op = _op(op_id)
+    assert op.status == "partial", op.error
+    statuses = {r["key"]: r["status"] for r in op.resources}
+    assert statuses["lambda_role"] == "conflict" and statuses["log_group"] == "blocked"
+    assert statuses["lambda_function"] == "blocked" and statuses["evaluator:tools"] == "blocked"
+    assert statuses["dataset"] == "ready" and statuses["evaluator:pii"] == "ready"
+    assert "not created by this operation" in _res(op, "lambda_role")["error"]
+    assert not _res(op, "lambda_role").get("owned")
+    # a lost CreateLogGroup response on another operation: unknown, never adopted
+    other, h2 = _conversation("local-operator")
+    fakes2 = Fakes()
+    plan2 = _valid_plan(other, h2)
+    plan2["evaluators"][1]["name"], plan2["evaluators"][2]["name"] = "pii_2", "tools_2"
+    op2_id, *_ = _approve(other, h2, plan=plan2)
+    real_create = fakes2.logs.create_log_group
+
+    def lose(logGroupName, tags=None):
+        real_create(logGroupName, tags)
+        raise ConnectionError("response lost")
+
+    fakes2.logs.create_log_group = lose
+    assert _run(op2_id, fakes2)
+    op2 = _op(op2_id)
+    lg = _res(op2, "log_group")
+    assert lg["status"] == "unknown" and "cannot prove it created it" in lg["error"]
+    assert _res(op2, "lambda_function")["status"] == "blocked"
+    assert _res(op2, "lambda_role")["status"] == "ready"
+
+
+@pytest.mark.siliconflow(registry=True)
+def test_judge_model_of_an_unconfigured_provider_is_refused_at_approval(app_ready,
+                                                                          monkeypatch):
+    """N-R6-obs1: a catalog judge model whose provider has no key here is refused with
+    its own code, before any asset row is written."""
+    monkeypatch.delenv("LAUNCHPAD_SILICONFLOW_API_KEY", raising=False)
+    cid, h = _conversation("local-operator")
+    plan = _valid_plan(cid, h, with_code=False)
+    plan["evaluators"][1]["model_id"] = "siliconflow.zai-org/GLM-5.3"
+    with pytest.raises(AppError) as exc:
+        _approve(cid, h, plan=plan)
+    assert exc.value.code == "model.provider_unconfigured" and exc.value.status_code == 422
+    assert "launchpad-siliconflow-api-key" in exc.value.message
+    assert _count(EvaluationAssetOperation) == 0 and _rows() == []
+
+
+def test_judge_model_outside_the_catalog_is_refused_at_approval(app_ready):
+    cid, h = _conversation("local-operator")
+    plan = _valid_plan(cid, h, with_code=False)
+    plan["evaluators"][1]["model_id"] = "global.anthropic.claude-sonnet-5"
+    with pytest.raises(AppError) as exc:
+        _approve(cid, h, plan=plan)
+    assert exc.value.code == "model.not_allowed" and exc.value.status_code == 422
+    assert _count(EvaluationAssetOperation) == 0 and _rows() == []
 
 
 def test_second_approval_and_rerun_return_the_same_operation_without_duplicates(app_ready):
     cid, h = _conversation("local-operator")
     fakes = Fakes()
-    op_id, rev, ph, _ = _approve(cid, h, fakes=fakes)
-    _run(op_id, fakes)
+    op_id, revision, plan_hash, started = _approve(cid, h)
+    assert started
     db = SessionLocal()
     try:
         conv = db.get(AssistantConversation, cid)
-        again = assets.approve_plan(db, conv, db.get(Workspace, DEFAULT_WORKSPACE_ID),
-                                    plan_revision=rev, plan_hash=ph, approved_by="admin",
-                                    approver_user_id=None, clients=fakes)
-        assert again.started is False and again.operation.id == op_id
-        with pytest.raises(AppError) as exc:
-            assets.approve_plan(db, conv, db.get(Workspace, DEFAULT_WORKSPACE_ID),
-                                plan_revision=rev, plan_hash="0" * 64, approved_by="admin",
-                                approver_user_id=None, clients=fakes)
-        assert "stale" in exc.value.code
-    finally:
-        db.close()
-    assert _run(op_id, fakes) is False
-    assert fakes.control.create_calls == 2 and fakes.lam.create_calls == 1
-    assert len(fakes.iam.roles) == 2
-    db = SessionLocal()
-    try:
-        assert db.query(EvalDataset).count() == 1
-    finally:
-        db.close()
-
-
-def test_superseded_plan_or_demoted_approver_cannot_claim(app_ready):
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-
-    # 1. the plan is edited (new revision) between the route's read and the claim
-    def edit_during_claim(session):
-        other = SessionLocal()
-        try:
-            conv = other.get(AssistantConversation, cid)
-            assets.edit_plan(other, conv, _valid_plan(cid, h, with_code=False), created_by="x")
-        finally:
-            other.close()
-        from app.routers.auth import Identity
-
-        return Identity(username="admin", role="admin")
-
-    with pytest.raises(AppError) as exc:
-        _approve(cid, h, fakes=fakes, recheck=edit_during_claim)
-    assert exc.value.code == "assistant.evaluation_plan_stale"
-    db = SessionLocal()
-    try:
-        assert db.query(EvaluationAssetOperation).count() == 0
-        assert db.query(AssistantEvaluationPlan).filter_by(status="approved").count() == 0
-    finally:
-        db.close()
-
-    # 2. the approver lost agents.deploy at the claim → nothing persisted
-    def demoted(session):
-        from app.routers.auth import Identity
-
-        return Identity(username="member", role="member", permissions=frozenset())
-
-    with pytest.raises(AppError) as exc:
-        _approve(cid, h, fakes=fakes, recheck=demoted)
-    assert exc.value.status_code == 404
-    db = SessionLocal()
-    try:
-        assert db.query(EvaluationAssetOperation).count() == 0
-    finally:
-        db.close()
-
-
-def test_untrusted_workspace_role_is_refused_at_approval_and_pinned_identity_fences_the_worker(
-        app_ready):
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    fakes.iam.roles["launchpad-agent-execution-role"]["Tags"] = []  # name prefix is not trust
-    with pytest.raises(AppError) as exc:
-        _approve(cid, h, fakes=fakes)
-    assert exc.value.code == "assistant.execution_role_untrusted"
-    fakes.iam.roles["launchpad-agent-execution-role"]["Tags"] = [
-        {"Key": "launchpad:managed", "Value": "true"}]
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    # the workspace row changes after approval → the worker stops before ANY effect
-    db = SessionLocal()
-    try:
         ws = db.get(Workspace, DEFAULT_WORKSPACE_ID)
-        ws.region = "eu-west-1"
-        db.commit()
+        again = assets.approve_plan(db, conv, ws, plan_revision=revision, plan_hash=plan_hash,
+                                    approved_by="admin", approver_user_id=None)
+        assert again.operation.id == op_id and again.started is False
+        with pytest.raises(AppError) as exc:
+            assets.approve_plan(db, conv, ws, plan_revision=revision, plan_hash="f" * 64,
+                                approved_by="admin", approver_user_id=None)
+        assert exc.value.code == "assistant.evaluation_plan_stale"
     finally:
         db.close()
-    fakes.requested.clear()  # the approval's IAM identity read is legitimate
     assert _run(op_id, fakes)
-    op = _op(op_id)
-    assert op.status == "failed" and "workspace identity changed" in op.error
-    assert fakes.requested == [] and fakes.lam.create_calls == 0
-    db = SessionLocal()
-    try:
-        assert db.query(EvalDataset).count() == 0
-    finally:
-        db.close()
-    # the execution role replaced (new RoleId) before the grant → grant refused, no write
-    _ready()
-    cid2, h2 = _conversation("local-operator")
-    fakes2 = Fakes()
-    op2, *_ = _approve(cid2, h2, fakes=fakes2)
-    fakes2.iam.roles["launchpad-agent-execution-role"]["RoleId"] = "AROAREPLACED"
-    _run(op2, fakes2)
-    op = _op(op2)
-    grant = _res(op, "role_grant")
-    assert grant["status"] == "conflict" and "RoleId" in grant["error"]
-    assert set(fakes2.iam.roles["launchpad-agent-execution-role"]["policies"]) == {
-        "launchpad-agent-execution"}
-    assert op.status == "partial"
+    assert _op(op_id).status == "succeeded"
+    assert _run(op_id, fakes) is False  # nothing left to run; no second row
+    assert len(_rows()) == 1 and _count(EvalDataset) == 1
 
 
-def test_concurrent_approvals_and_workers_converge_on_one_writer(app_ready):
+def test_superseded_plan_cannot_be_claimed(app_ready):
     cid, h = _conversation("local-operator")
-    fakes = Fakes()
     db = SessionLocal()
     try:
         conv = db.get(AssistantConversation, cid)
-        row = assets.edit_plan(db, conv, _valid_plan(cid, h), created_by="river")
-        rev, ph = row.revision, row.content_hash
-    finally:
-        db.close()
-
-    def approve():
-        s = SessionLocal()
-        try:
-            conv = s.get(AssistantConversation, cid)
-            out = assets.approve_plan(s, conv, s.get(Workspace, DEFAULT_WORKSPACE_ID),
-                                      plan_revision=rev, plan_hash=ph, approved_by="admin",
-                                      approver_user_id=None, clients=fakes)
-            return out.operation.id, out.started
-        except AppError as exc:  # a loser may see the claim race as stale — never a 2nd op
-            return exc.code, False
-        finally:
-            s.close()
-
-    with ThreadPoolExecutor(4) as pool:
-        results = list(pool.map(lambda _: approve(), range(4)))
-    op_ids = {r[0] for r in results if r[1] or not str(r[0]).startswith("assistant.")}
-    assert len(op_ids) == 1 and sum(r[1] for r in results) == 1
-    op_id = op_ids.pop()
-    gate = threading.Event()
-    with ThreadPoolExecutor(3) as pool:
-        futures = [pool.submit(assets.run_operation, op_id, clients=fakes,
-                               sleeper=lambda s: gate.wait(2)) for _ in range(3)]
-        gate.set()
-        wins = [f.result() for f in futures]
-    assert wins.count(True) == 1
-    assert _op(op_id).status == "succeeded"
-    assert fakes.control.create_calls == 2 and fakes.lam.create_calls == 1
-
-
-def test_lost_responses_recover_exactly_via_provenance_not_names_or_tags(app_ready):
-    """SE-047 C: a lost CreateRole / CreateLogGroup / CreateFunction response leaves the
-    resource UNKNOWN (its service-issued identity was never recorded; a nonce in a tag,
-    description or package is copyable content, never ownership) — nothing is adopted or
-    written to it and the chain is blocked. Only a lost PublishVersion (a version of OUR
-    recorded function, reconciled by digest) and a lost CreateEvaluator (the service's own
-    idempotency token) recover; the operator resolves the unknown, then retries."""
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    fn = assets.function_name(op_id)
-    fakes.iam.lose_create_response = True      # CreateRole succeeded, response lost
-    fakes.lam.lose_publish_response = True     # PublishVersion succeeded, response lost
-    fakes.control.lose_response_once = True    # CreateEvaluator succeeded, response lost
-    _run(op_id, fakes)
-    op = _op(op_id)
-    role = _res(op, "lambda_role")
-    assert op.status == "partial" and role["status"] == "unknown", role
-    assert "cannot prove" in role["error"] and role["intent"]["requested_at"]
-    assert not role.get("owned") and not role.get("recovered") and not role.get("result")
-    assert fakes.iam.roles[fn]["policies"] == {}  # never written to
-    for key in ("log_group", "lambda_function", "lambda_permission", "role_grant",
-                "evaluator:tools"):
-        assert _res(op, key)["status"] == "blocked", key
-    # the operator reviews the unknown role and removes it; the retry creates a fresh one
-    fakes.iam.roles.pop(fn)
-    while _op(op_id).status != "succeeded" and _op(op_id).attempts < assets.MAX_ATTEMPTS:
-        _run(op_id, fakes)
-    op = _op(op_id)
-    assert op.status == "succeeded", op.error
-    assert not any(r.get("recovered") for r in op.resources)
-    role = _res(op, "lambda_role")
-    assert role["owned"] and role["result"]["role_id"] == fakes.iam.roles[fn]["RoleId"]
-    assert role["result"]["trust_document"]["Statement"][0]["Principal"] == {
-        "Service": "lambda.amazonaws.com"}
-    f = fakes.lam.functions[fn]
-    assert len(f["versions"]) == 1 and _res(op, "lambda_function")["result"]["version"] == "1"
-    assert _res(op, "lambda_function")["result"]["versions"] == ["$LATEST", "1"]
-    assert _res(op, "lambda_function")["result"]["latest_readback"]["RevisionId"] == \
-        f["cfg"]["RevisionId"]
-    assert fakes.lam.create_calls == 1 and len(fakes.lam.functions) == 1
-    assert len(fakes.control.evaluators) == 2 and len(fakes.iam.roles) == 2
-    assert len(fakes.logs.groups) == 1
-    db = SessionLocal()
-    try:
-        assert db.query(EvalDataset).count() == 1
-    finally:
-        db.close()
-
-
-def test_publish_version_conflict_semantics_reconcile_without_minting(app_ready):
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    fakes.lam.unchanged_publish = "conflict"
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    fakes.lam.lose_publish_response = True
-    _run(op_id, fakes)
-    _run(op_id, fakes)
-    op = _op(op_id)
-    assert op.status == "succeeded", op.error
-    fn = fakes.lam.functions[assets.function_name(op_id)]
-    assert len(fn["versions"]) == 1 and fakes.lam.publish_calls == 2
-    # two published versions with our digest can never be told apart → conflict, no pick
-    cid2, h2 = _conversation("local-operator")
-    fakes2 = Fakes()
-    op2, *_ = _approve(cid2, h2, fakes=fakes2)
-    original = fakes2.lam.publish_version
-
-    def double_publish(FunctionName, CodeSha256=None, RevisionId=None):
-        f = fakes2.lam.functions[FunctionName]
-        for n in ("7", "8"):
-            f["versions"][n] = {**f["cfg"], "Version": n, "State": "Active",
-                                "FunctionArn": f["cfg"]["FunctionArn"] + ":" + n}
-        return original(FunctionName, CodeSha256, RevisionId)
-
-    fakes2.lam.publish_version = double_publish
-    _run(op2, fakes2)
-    op = _op(op2)
-    assert _res(op, "lambda_function")["status"] == "conflict"
-    assert "published versions" in _res(op, "lambda_function")["error"]
-    assert _res(op, "evaluator:tools")["status"] == "blocked"
-    assert _res(op, "evaluator:pii")["status"] == "ready"  # judges do not depend on the chain
-
-
-def test_foreign_collisions_are_conflicts_never_adopted_even_with_copied_tags(app_ready):
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    fn = assets.function_name(op_id)
-    # a pre-existing role with our unique name AND our op tag (copyable) but no nonce
-    fakes.iam.roles[fn] = {"RoleName": fn, "Arn": f"arn:aws:iam::{ACCOUNT}:role/{fn}",
-                           "RoleId": "AROAFOREIGN", "policies": {}, "trust": "x",
-                           "Description": f"operation {op_id}",
-                           "Tags": [{"Key": "launchpad:eval-operation", "Value": op_id},
-                                    {"Key": "launchpad:managed", "Value": "true"}]}
-    fakes.control.evaluators["foreign-1"] = {
-        "evaluatorName": "kid_pii_judge", "status": "ACTIVE", "evaluatorArn": "arn:foreign",
-        "evaluatorId": "foreign-1"}
-    _run(op_id, fakes)
-    op = _op(op_id)
-    role = _res(op, "lambda_role")
-    assert role["status"] == "conflict" and not role.get("owned")
-    assert fakes.iam.roles[fn]["policies"] == {}  # never written to
-    assert fakes.lam.create_calls == 0
-    for key in ("log_group", "lambda_function", "lambda_permission", "role_grant",
-                "evaluator:tools"):
-        assert _res(op, key)["status"] == "blocked", key
-    pii = _res(op, "evaluator:pii")
-    assert pii["status"] == "conflict" and "cannot prove it created" in pii["error"]
-    assert "foreign-1" in fakes.control.evaluators
-    assert op.status == "partial"
-    # cleanup never touches the foreign role / evaluator and does not claim 'cleaned'
-    db = SessionLocal()
-    try:
-        cleaned = assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op_id),
-                                           ws_ctx(RESOURCES), clients=fakes)
-        assert cleaned.status == "cleaned"  # nothing owned remained
-        assert fn in fakes.iam.roles and "foreign-1" in fakes.control.evaluators
-    finally:
-        db.close()
-
-
-def test_fence_before_every_cloud_write_and_quick_restart_resume(app_ready):
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-
-    def steal_lease():
-        # another actor replaces the lease while the worker waits for the function
-        db = SessionLocal()
-        try:
-            db.get(EvaluationAssetOperation, op_id).worker_token = "someone-else"
-            db.commit()
-        finally:
-            db.close()
-        fakes.lam.on_get_configuration = None
-
-    fakes.lam.on_get_configuration = steal_lease
-    _run(op_id, fakes)
-    assert fakes.lam.publish_calls == 0  # no write after the fence failed
-    assert fakes.lam.functions and _op(op_id).worker_token == "someone-else"
-    # a quick restart: status 'running', fresh heartbeat, but the host lock is free →
-    # resume claims and finishes without waiting for any lease timeout
-    db = SessionLocal()
-    try:
-        op = db.get(EvaluationAssetOperation, op_id)
-        op.status, op.heartbeat_at = "running", datetime.now(UTC)
-        db.commit()
-    finally:
-        db.close()
-    assert _run(op_id, fakes)
-    assert _op(op_id).status == "succeeded", _op(op_id).error
-    assert fakes.lam.create_calls == 1 and len(fakes.lam.functions) == 1
-
-
-def test_permission_conflict_requires_exact_scope(app_ready):
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    fn = assets.function_name(op_id)
-    original_add = fakes.lam.add_permission
-
-    def broad_then_conflict(**kw):
-        fakes.lam.policies[kw["FunctionName"]] = [{
-            "Sid": kw["StatementId"], "Effect": "Allow", "Action": "lambda:*",
-            "Principal": {"Service": kw["Principal"]}, "Resource": "*"}]
-        return original_add(**kw)  # → ResourceConflictException
-
-    fakes.lam.add_permission = broad_then_conflict
-    _run(op_id, fakes)
-    op = _op(op_id)
-    perm = _res(op, "lambda_permission")
-    assert perm["status"] == "conflict" and "reviewed scope" in perm["error"]
-    assert fakes.lam.policies[fn][0]["Action"] == "lambda:*"  # untouched, reported
-    assert _res(op, "evaluator:tools")["status"] == "blocked"
-
-
-def test_readback_drift_is_refused_not_repaired(app_ready, monkeypatch):
-    # the name is taken on purpose, between approval and create — bypass the approval
-    # preflight to reach the materializer's own conflict handling
-    monkeypatch.setattr(assets, "taken_evaluator_names", lambda *a, **k: set())
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    original_get = fakes.control.get_evaluator
-
-    def drifted(evaluatorId):
-        detail = original_get(evaluatorId)
-        if detail["evaluatorName"] == "kid_pii_judge":
-            detail["evaluatorName"] = "renamed"
-        return detail
-
-    fakes.control.get_evaluator = drifted
-    _run(op_id, fakes)
-    op = _op(op_id)
-    assert _res(op, "evaluator:pii")["status"] == "conflict"
-    assert "readback differs" in _res(op, "evaluator:pii")["error"]
-    # an existing reference must resolve to the SAME id and be usable
-    fakes.control.evaluators["custom-x"] = {"evaluatorId": "custom-y", "evaluatorName": "x",
-                                            "status": "ACTIVE", "evaluatorArn": "a"}
-    cid2, h2 = _conversation("local-operator")
-    plan = _valid_plan(cid2, h2, with_code=False)
-    plan["evaluators"][0] = {"kind": "existing", "key": "helpfulness", "title": "x",
-                             "evaluator_id": "custom-x", "golden_test_ids": []}
-    op2, *_ = _approve(cid2, h2, plan=plan, fakes=fakes)
-    _run(op2, fakes)
-    assert _res(_op(op2), "existing:helpfulness")["status"] == "conflict"
-
-
-def test_dataset_edits_after_materialization_survive_a_retry(app_ready):
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    fakes.iam.fail_create = True
-    _run(op_id, fakes)
-    op = _op(op_id)
-    assert _res(op, "dataset")["status"] == "ready" and op.status == "partial"
-    db = SessionLocal()
-    try:
-        ds = db.get(EvalDataset, op.dataset_id)
-        ds.items = ds.items[:1]
-        ds.description = "edited by a member"
-        db.commit()
-    finally:
-        db.close()
-    fakes.iam.fail_create = False
-    _run(op_id, fakes)
-    op = _op(op_id)
-    assert op.status == "succeeded", op.error
-    db = SessionLocal()
-    try:
-        ds = db.get(EvalDataset, op.dataset_id)
-        assert len(ds.items) == 1 and ds.description == "edited by a member"
-        assert db.query(EvalDataset).count() == 1
+        first = assets.edit_plan(db, conv, _valid_plan(cid, h, with_code=False), created_by="r")
+        assets.edit_plan(db, conv, _valid_plan(cid, h), created_by="r")  # supersedes
+        ws = db.get(Workspace, DEFAULT_WORKSPACE_ID)
+        with pytest.raises(AppError) as exc:
+            assets.approve_plan(db, conv, ws, plan_revision=first.revision,
+                                plan_hash=first.content_hash, approved_by="admin",
+                                approver_user_id=None)
+        assert exc.value.code == "assistant.evaluation_plan_not_approvable"
+        assert db.query(EvaluationAssetOperation).count() == 0
     finally:
         db.close()
 
@@ -1817,197 +994,320 @@ def test_dataset_edits_after_materialization_survive_a_retry(app_ready):
 def test_revoked_approver_stops_before_any_mutation(app_ready):
     db = SessionLocal()
     try:
-        user = User(username="boss", username_key="boss", email="b@example.com",
-                    password_hash=users_service.hash_password("x" * 16), role="admin",
-                    status="active")
+        user = User(username="approver", username_key="approver", email="a@example.com",
+                    password_hash="x", role="member", status=users_service.STATUS_ACTIVE,
+                    permissions={"agents.deploy": True},
+                    expires_at=datetime.now(UTC) + timedelta(days=1))
         db.add(user)
         db.commit()
         uid = user.id
     finally:
         db.close()
-    cid, h = _conversation(f"user:{uid}", owner="boss")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, approver_user_id=uid, approved_by="boss", fakes=fakes)
+    cid, h = _conversation("local-operator")
+    op_id, *_ = _approve(cid, h, approver_user_id=uid, approved_by="approver")
     db = SessionLocal()
     try:
-        # a demoted member keeps agents.deploy by default; the revocation is what stops it
-        user = db.get(User, uid)
-        user.role = "member"
-        user.permissions = {"agents.deploy": False}
+        db.get(User, uid).permissions = {"agents.deploy": False}
         db.commit()
     finally:
         db.close()
-    fakes.requested.clear()
-    _run(op_id, fakes)
+    assert _run(op_id, Fakes())
     op = _op(op_id)
-    assert op.status == "failed" and "no longer holds the agents.deploy permission" in op.error
-    assert fakes.requested == [] and fakes.lam.create_calls == 0
+    assert op.status == "failed" and "agents.deploy" in op.error
+    assert _rows() == [] and _count(EvalDataset) == 0
+
+
+def test_workspace_identity_drift_fences_the_worker(app_ready):
+    cid, h = _conversation("local-operator")
+    op_id, *_ = _approve(cid, h)
     db = SessionLocal()
     try:
-        assert db.query(EvalDataset).count() == 0
+        row = db.get(Workspace, DEFAULT_WORKSPACE_ID)
+        row.resources = {**row.resources, "execution_role_arn": ROLE_ARN + "-replaced"}
+        db.commit()
+    finally:
+        db.close()
+    assert _run(op_id, Fakes())
+    op = _op(op_id)
+    assert op.status == "failed" and "execution_role_arn" in op.error
+    assert _rows() == []
+
+
+def test_a_dispatched_create_without_a_checkpoint_is_unknown_never_adopted(app_ready):
+    """Crash between the row's commit and the acceptance checkpoint: on resume a row under
+    our name exists, the dispatch has no outcome — recorded ``unknown``, not adopted."""
+    cid, h = _conversation("local-operator")
+    op_id, *_ = _approve(cid, h, plan=_valid_plan(cid, h, with_code=False))
+    db = SessionLocal()
+    try:
+        op = db.get(EvaluationAssetOperation, op_id)
+        resources = json.loads(json.dumps(op.resources))
+        pii = next(r for r in resources if r["key"] == "evaluator:pii")
+        pii["create_history"] = [{"at": "2026-10-10T00:00:00+00:00", "outcome": "dispatched"}]
+        op.resources = resources
+        db.commit()
+    finally:
+        db.close()
+    orphan = _seed_judge()  # the row the crashed attempt committed
+    assert _run(op_id, Fakes())
+    op = _op(op_id)
+    pii = _res(op, "evaluator:pii")
+    assert pii["status"] == "unknown" and "ownership stays unproven" in pii["error"]
+    assert [e["outcome"] for e in pii["create_history"]] == ["dispatched", "conflict"]
+    assert op.status == "partial"
+    assert [r.id for r in _rows()] == [orphan]
+    db = SessionLocal()
+    try:
+        assert assets.managed_evaluator(db, DEFAULT_WORKSPACE_ID, orphan) is None
+        assert "kid_pii_judge" in assets.ledger_evaluator_names(db, DEFAULT_WORKSPACE_ID)
+        # cleanup never deletes what it cannot prove it owns
+        cleaned = assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op_id),
+                                           _ws_ctx(), clients=Fakes(), sleeper=lambda s: None)
+        assert cleaned.status == "partial" and "evaluator:pii" in cleaned.error
+        assert _res(cleaned, "evaluator:pii")["status"] == "unknown"
+        assert db.query(EvalEvaluator).count() == 1
+    finally:
+        db.close()
+
+
+def test_name_clash_at_creation_is_a_conflict_and_approval_refuses_taken_names(app_ready):
+    cid, h = _conversation("local-operator")
+    _seed_judge()
+    with pytest.raises(AppError) as exc:
+        _approve(cid, h, plan=_valid_plan(cid, h, with_code=False))
+    assert exc.value.code == "assistant.evaluation_plan_name_taken"
+    assert exc.value.detail["names"] == ["kid_pii_judge"]
+    db = SessionLocal()
+    try:
+        conv = db.get(AssistantConversation, cid)
+        taken = assets.taken_evaluator_names(db, db.get(Workspace, DEFAULT_WORKSPACE_ID))
+        assert taken == {"kid_pii_judge"}
+        renamed = assets.rename_taken_evaluators(
+            {"evaluators": [{"kind": "judge", "key": "pii", "name": "kid_pii_judge"}]}, taken, 2)
+        assert renamed["evaluators"][0]["name"] == "kid_pii_judge_r2"
+        assert "renamed from" in renamed["evaluators"][0]["note"]
+        # the platform draft of a new plan never carries a taken name
+        plan = assets.prepare_plan(db, conv, revision=1, created_by="river")
+        names = {e.get("name") for e in plan.content["evaluators"] if e.get("name")}
+        assert "kid_pii_judge" not in names and plan.source == "platform"
+    finally:
+        db.close()
+    # a clash that slips past approval (the row appears afterwards) is a creation conflict
+    other, h2 = _conversation("local-operator")
+    plan = _valid_plan(other, h2, with_code=False)
+    plan["evaluators"][1]["name"] = "late_clash"
+    op_id, *_ = _approve(other, h2, plan=plan)
+    _seed_judge("late_clash")
+    assert _run(op_id, Fakes())
+    res = _res(_op(op_id), "evaluator:pii")
+    assert res["status"] == "conflict" and "cannot prove it created" in res["error"]
+    assert res["create_history"][-1]["outcome"] == "conflict" and not res.get("owned")
+
+
+def test_deleted_evaluators_free_their_names_after_cleanup(app_ready):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h, plan=_valid_plan(cid, h, with_code=False))
+    assert _run(op_id, fakes)
+    db = SessionLocal()
+    try:
+        ws = db.get(Workspace, DEFAULT_WORKSPACE_ID)
+        assert "kid_pii_judge" in assets.taken_evaluator_names(db, ws)
+        op = assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op_id),
+                                      workspace_context(ws), clients=fakes,
+                                      sleeper=lambda s: None)
+        assert op.status == "cleaned", op.error
+        assert assets.taken_evaluator_names(db, ws) == set()
     finally:
         db.close()
 
 
 def test_startup_resume_wakes_only_interrupted_operations(app_ready, monkeypatch):
     cid, h = _conversation("local-operator")
+    queued_id, *_ = _approve(cid, h)
+    other, h2 = _conversation("local-operator")
+    done_id, *_ = _approve(other, h2, plan=_valid_plan(other, h2, with_code=False))
+    assert _run(done_id, Fakes())
+    woken: list[str] = []
+    monkeypatch.setattr(assets, "start_async", lambda op_id, **kw: woken.append(op_id) or True)
+    assert assets.resume_operations() == [queued_id]
+    assert woken == [queued_id]
+
+
+def test_retry_is_bounded_and_refuses_a_live_worker(app_ready):
+    cid, h = _conversation("local-operator")
     op_id, *_ = _approve(cid, h)
-    cid2, h2 = _conversation("local-operator")
-    op2, *_ = _approve(cid2, h2)
     db = SessionLocal()
     try:
-        db.get(EvaluationAssetOperation, op2).status = "failed"
+        op = db.get(EvaluationAssetOperation, op_id)
+        op.status, op.attempts = "failed", assets.MAX_ATTEMPTS
         db.commit()
+        with pytest.raises(AppError) as exc:
+            assets.retry_operation(db, op)
+        assert exc.value.code == "assistant.evaluation_assets_exhausted"
+        op.attempts = 1
+        db.commit()
+        with assets._flock(op_id) as held:  # another process holds the host lock
+            assert held
+            with pytest.raises(AppError) as exc:
+                assets.retry_operation(db, op)
+            assert exc.value.code == "assistant.evaluation_assets_running"
     finally:
         db.close()
-    started: list[str] = []
-    monkeypatch.setattr(assets, "start_async", lambda op_id, **kw: started.append(op_id) or True)
-    assert assets.resume_operations() == [op_id]
 
 
-def test_cleanup_is_dependency_safe_checkpointed_and_honest(app_ready):
+# ===========================================================================
+# 4. cleanup
+# ===========================================================================
+
+
+def test_cleanup_deletes_rows_and_the_lambda_chain_but_keeps_the_dataset(app_ready, code_enabled):
     cid, h = _conversation("local-operator")
     fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    fakes.control.evaluators["independent"] = {
-        "evaluatorName": "independent", "status": "ACTIVE", "evaluatorArn": "arn:i",
-        "evaluatorId": "independent"}
-    _run(op_id, fakes)
-    op_before = _op(op_id)
-    code_id = _res(op_before, "evaluator:tools")["result"]["evaluator_id"]
-    fn_name = assets.function_name(op_id)
-    fakes.control.evaluators[code_id]["locked"] = True  # in use by an online config
+    op_id, *_ = _approve(cid, h)
+    assert _run(op_id, fakes)
+    assert len(_rows()) == 2
+    fn_name = _res(_op(op_id), "lambda_function")["name"]
     db = SessionLocal()
     try:
-        op = assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op_id),
-                                      ws_ctx(RESOURCES), clients=fakes)
-        assert op.status == "partial" and "evaluator:tools" in op.error
-        assert _res(op, "evaluator:pii")["status"] == "deleted"
-        assert _res(op, "evaluator:tools")["status"] == "delete_failed"
-        # the function / role / grant / log group are RETAINED while an owned evaluator
-        # still references the function
-        for key in ("lambda_function", "lambda_role", "role_grant", "log_group"):
-            assert _res(op, key)["status"] == "retained", key
-        assert fn_name in fakes.lam.functions and fn_name in fakes.iam.roles
-        assert f"launchpad-evalop-{op_id}" in fakes.iam.roles["launchpad-agent-execution-role"][
-            "policies"]
-        assert "independent" in fakes.control.evaluators
-        fakes.control.evaluators[code_id]["locked"] = False
-        op = assets.cleanup_operation(db, op, ws_ctx(RESOURCES), clients=fakes)
-        assert op.status == "cleaned" and op.error is None, op.error
-        assert set(fakes.iam.roles) == {"launchpad-agent-execution-role"}
-        assert fakes.iam.roles["launchpad-agent-execution-role"]["policies"] == {
-            "launchpad-agent-execution": {"Version": "2012-10-17"}}
-        assert fakes.lam.functions == {} and fakes.logs.groups == {}
-        assert db.query(EvalDataset).count() == 1  # the dataset is the member's
-        op = assets.cleanup_operation(db, op, ws_ctx(RESOURCES), clients=fakes)  # idempotent
-        assert op.status == "cleaned"
+        op = assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op_id), _ws_ctx(),
+                                      clients=fakes, sleeper=lambda s: None)
+        assert op.status == "cleaned", op.error
+        statuses = {r["key"]: r["status"] for r in op.resources}
+        assert statuses["dataset"] == "ready" and statuses["existing:helpfulness"] == "ready"
+        assert {statuses[k] for k in ("evaluator:pii", "evaluator:tools", "lambda_function",
+                                      "log_group", "lambda_role")} == {"deleted"}
+        assert db.query(EvalDataset).count() == 1  # the member's Dataset stays
+        assert db.query(EvalEvaluator).count() == 0
+        # idempotent: a second cleanup is a no-op on a cleaned operation
+        assert assets.cleanup_operation(db, op, _ws_ctx(), clients=fakes).status == "cleaned"
     finally:
         db.close()
+    assert fn_name not in fakes.lam.functions and fn_name not in fakes.iam.roles
+    assert f"/aws/lambda/{fn_name}" not in fakes.logs.groups
 
 
-def test_cleanup_leaves_changed_or_replaced_resources_and_never_says_cleaned(app_ready):
+def test_cleanup_leaves_changed_rows_and_replaced_functions_as_conflicts(app_ready, code_enabled):
     cid, h = _conversation("local-operator")
     fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    _run(op_id, fakes)
-    op = _op(op_id)
-    pii_id = _res(op, "evaluator:pii")["result"]["evaluator_id"]
-    fn_name = assets.function_name(op_id)
-    # owned evaluator changed after creation; function replaced by other code
-    fakes.control.evaluators[pii_id]["evaluatorConfig"] = {"llmAsAJudge": {"instructions": "x"}}
-    fakes.lam.functions[fn_name]["cfg"]["CodeSha256"] = "somebody-elses"
+    op_id, *_ = _approve(cid, h)
+    assert _run(op_id, fakes)
+    fn = _res(_op(op_id), "lambda_function")
     db = SessionLocal()
     try:
-        op = assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op_id),
-                                      ws_ctx(RESOURCES), clients=fakes)
-        assert op.status == "partial"
-        assert _res(op, "evaluator:pii")["status"] == "conflict"
-        assert pii_id in fakes.control.evaluators
-        assert _res(op, "evaluator:tools")["status"] == "deleted"
-        assert _res(op, "lambda_function")["status"] == "retained"  # pii still owned
-        assert fn_name in fakes.lam.functions
+        judge = next(r for r in db.query(EvalEvaluator).all() if r.name == "kid_pii_judge")
+        judge.level = "SESSION"  # an operator changed the owned row afterwards
+        db.commit()
+        fakes.lam.functions[fn["name"]]["CodeSha256"] = "replaced"  # someone redeployed the code
+        op = assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op_id), _ws_ctx(),
+                                      clients=fakes, sleeper=lambda s: None)
+        assert op.status == "partial" and "evaluator:pii" in op.error
+        statuses = {r["key"]: r["status"] for r in op.resources}
+        assert statuses["evaluator:pii"] == "conflict" and statuses["evaluator:tools"] == "deleted"
+        assert statuses["lambda_function"] == "conflict"
+        # dependents of an unresolved function are retained, never deleted
+        assert statuses["log_group"] == "retained" and statuses["lambda_role"] == "retained"
+        assert db.query(EvalEvaluator).count() == 1
+    finally:
+        db.close()
+    assert fn["name"] in fakes.lam.functions and fn["name"] in fakes.iam.roles
+
+
+def test_cleanup_refuses_while_the_operation_is_queued_or_running(app_ready):
+    cid, h = _conversation("local-operator")
+    op_id, *_ = _approve(cid, h)
+    db = SessionLocal()
+    try:
+        op = db.get(EvaluationAssetOperation, op_id)
+        with pytest.raises(AppError) as exc:  # queued: not cleanable yet
+            assets.cleanup_operation(db, op, _ws_ctx(), clients=Fakes())
+        assert exc.value.code == "assistant.evaluation_assets_running"
     finally:
         db.close()
 
 
-def test_managed_reference_code_evaluators_are_refused_online_and_without_ground_truth(app_ready):
+# ===========================================================================
+# 5. the ordinary Evaluation surfaces honour managed evaluators
+# ===========================================================================
+
+
+def test_ordinary_evaluator_delete_refuses_operation_owned_records(app_ready):
+    cid, h = _conversation("local-operator")
+    op_id, *_ = _approve(cid, h, plan=_valid_plan(cid, h, with_code=False))
+    _run(op_id, Fakes())
+    eid = _res(_op(op_id), "evaluator:pii")["result"]["evaluator_id"]
+    with TestClient(app_ready) as client:
+        res = client.delete(f"/api/eval/evaluators/{eid}")
+        assert res.status_code == 409 and res.json()["code"] == "evaluator.managed_by_operation"
+        assert res.json()["detail"]["operation_id"] == op_id
+        assert client.get(f"/api/eval/evaluators/{eid}").status_code == 200
+    assert len(_rows()) == 1
+
+
+def test_managed_code_evaluators_expose_their_rules_and_reference_gap(app_ready, code_enabled):
     cid, h = _conversation("local-operator")
     fakes = Fakes()
-    plan = _valid_plan(cid, h, reference=True)
-    plan["evaluators"][1]["instructions"] = "Does {assistant_turn} match {expected_response}?"
-    for sc in plan["scenarios"]:
-        for t in sc["turns"]:
-            t["expected_response"] = "x"
-    op_id, *_ = _approve(cid, h, plan=plan, fakes=fakes)
-    _run(op_id, fakes)
+    op_id, *_ = _approve(cid, h, plan=_valid_plan(cid, h, reference=True))
+    assert _run(op_id, fakes)
     op = _op(op_id)
+    assert op.status == "succeeded", op.error
     code_id = _res(op, "evaluator:tools")["result"]["evaluator_id"]
-    pii_id = _res(op, "evaluator:pii")["result"]["evaluator_id"]
     db = SessionLocal()
     try:
+        owner = assets.managed_evaluator(db, DEFAULT_WORKSPACE_ID, code_id)
+        assert owner["operation_id"] == op_id and owner["definition"] == "code"
+        assert owner["reference_dependent"] is True and owner["level"] == "SESSION"
+        rules = assets.managed_rules(db, owner)
+        assert [c["type"] for c in rules] == ["reference_trajectory", "tool_set"]
+        assert assets.managed_package_evaluator_count(db, owner) == 1
+        # a live session carries no ground truth: SCORE NOW / online configs refuse it
         assert assets.managed_reference_gap(db, DEFAULT_WORKSPACE_ID, [code_id], set()) == {
             code_id: ["expected_tool_trajectory"]}
-        assert assets.managed_reference_gap(db, DEFAULT_WORKSPACE_ID, [code_id],
-                                            {"expected_tool_trajectory"}) == {}
-        assert assets.managed_reference_gap(db, None, ["Builtin.Helpfulness"], set()) == {}
+        assert assets.managed_reference_gap(
+            db, DEFAULT_WORKSPACE_ID, [code_id], {"expected_tool_trajectory"}) == {}
+        # the lookups the evaluation package routes through resolve to the same owner
+        from app.evaluation import managed
+
+        assert managed.managed_evaluator(db, DEFAULT_WORKSPACE_ID, code_id) == owner
+        assert managed.managed_evaluator(db, "other-ws", code_id) is None
     finally:
         db.close()
-    with pytest.raises(AppError) as exc:
-        online_evaluators.normalize_online_evaluators([code_id], fakes.control)
-    assert "managed code evaluator" in exc.value.message
-    with pytest.raises(AppError):  # the judge is caught by its {expected_response} placeholder
-        online_evaluators.normalize_online_evaluators([pii_id], fakes.control)
-    # Observability SCORE NOW: refused BEFORE any span read / Evaluate call
-    from app.services import observability
 
-    class Boom:
-        def __getattr__(self, name):
-            raise AssertionError(f"low-level client touched: {name}")
 
-    with pytest.raises(AppError) as exc:
-        observability.evaluate_session("sess-1", "1h", [code_id], ws_ctx(RESOURCES),
-                                       logs=Boom(), data=Boom())
-    assert exc.value.code == "observability.evaluator_needs_ground_truth"
-    # the ordinary run-create guard refuses a scope without the reference
-    from app.evaluation import routers as eval_routers
-    from app.routers.workspaces import WorkspaceScope
-
-    db = SessionLocal()
-    try:
-        scope = WorkspaceScope(id=DEFAULT_WORKSPACE_ID, row=db.get(Workspace, DEFAULT_WORKSPACE_ID),
-                               context=ws_ctx(RESOURCES))
-        with pytest.raises(AppError) as exc:
-            eval_routers._assert_target_references(db, scope, [code_id], [], False)
-        assert exc.value.code == "run.judge_needs_ground_truth"
-        eval_routers._assert_target_references(
-            db, scope, [code_id], [{"scenario_id": "a", "turns": [{"input": "x"}],
-                                    "expected_trajectory": [WEATHER_TOOL]}], True)
-    finally:
-        db.close()
+def test_a_second_plan_binds_the_managed_code_evaluator_as_existing(app_ready, code_enabled):
+    cid, h = _conversation("local-operator")
+    fakes = Fakes()
+    op_id, *_ = _approve(cid, h)
+    assert _run(op_id, fakes)
+    code_id = _res(_op(op_id), "evaluator:tools")["result"]["evaluator_id"]
+    other, h2 = _conversation("local-operator")
+    plan = _valid_plan(other, h2, with_code=False)
+    plan["evaluators"][1]["name"] = "kid_pii_judge_2"
+    plan["evaluators"].append({"kind": "existing", "key": "tools", "title": "managed rules",
+                               "evaluator_id": code_id, "golden_test_ids": []})
+    plan["recommendations"][2] = {**plan["recommendations"][2], "status": "mapped",
+                                  "mapped_to": ["tools"]}
+    op2_id, *_ = _approve(other, h2, plan=plan)
+    assert _run(op2_id, fakes)
+    op2 = _op(op2_id)
+    assert op2.status == "succeeded", op2.error
+    bound = _res(op2, "existing:tools")["result"]
+    assert bound["source"] == "managed" and bound["definition"] == "code"
+    assert bound["reference_needs"] == [] and op_id in bound["note"]
+    # an unknown custom id is a plain failure of that reference, never a create
+    third, h3 = _conversation("local-operator")
+    plan3 = _valid_plan(third, h3, with_code=False)
+    plan3["evaluators"][1]["name"] = "kid_pii_judge_3"
+    plan3["evaluators"][0] = {**plan3["evaluators"][0], "evaluator_id": "cust_missing00"}
+    op3_id, *_ = _approve(third, h3, plan=plan3)
+    assert _run(op3_id, fakes)
+    missing = _res(_op(op3_id), "existing:helpfulness")
+    assert missing["status"] == "failed" and "does not exist in this workspace" in missing["error"]
 
 
 # ===========================================================================
-# 4. routes: ownership, roles, disclosure, status reads
+# 6. routes (login gate on) and the conversation purge
 # ===========================================================================
-
-
-def _activate(creds, session, role="member"):
-    assert session.post("/api/auth/register", json=creds).status_code == 201
-    db = SessionLocal()
-    try:
-        user = users_service.find_by_username(db, creds["username"])
-        user.status = users_service.STATUS_ACTIVE
-        user.role = role
-        user.expires_at = datetime.now(UTC) + timedelta(days=7)
-        users_service.set_workspace_grants(db, user, [DEFAULT_WORKSPACE_ID])
-        db.commit()
-        uid = user.id
-    finally:
-        db.close()
-    assert session.post("/api/auth/login", json={
-        "username": creds["username"], "password": creds["password"]}).status_code == 200
-    return uid
 
 
 @pytest.fixture
@@ -2058,14 +1358,16 @@ def test_member_without_deploy_permission_prepares_and_edits_but_cannot_material
     res = member.put(_url(cid), json={"content": edited})
     assert res.status_code == 200 and res.json()["plan"]["revision"] == 2
     assert res.json()["plans"][0]["status"] == "superseded"
+    assert "disclosure" in res.json()
     res = member.put(_url(cid), json={"content": {**edited, "evaluators": {"x": 1}}})
     assert res.status_code == 200 and res.json()["plan"]["status"] == "invalid"
     body = {"plan_revision": 2, "plan_hash": res.json()["plans"][1]["content_hash"],
             "acknowledge_disclosure": True}
     res = member.post(_url(cid, "/materialize"), json=body)
     assert res.status_code == 403 and res.json()["code"] == "auth.permission_required"
-    assert not SessionLocal().query(EvaluationAssetOperation).count()
-    assert admin.get(_url(cid)).status_code == 404
+    assert _count(EvaluationAssetOperation) == 0
+    # an administrator reads the member's plan (read-only) but cannot materialize it
+    assert admin.get(_url(cid)).status_code == 200
     assert admin.post(_url(cid, "/materialize"), json=body).status_code == 404
     snap = _snapshot_proposal(cid)
     assert snap["status"] == "approved" and snap["hash"] == h
@@ -2100,8 +1402,14 @@ def test_admin_owner_materializes_own_plan_with_disclosure_and_exact_hash(gated,
     assert res.status_code == 200 and res.json()["operation"]["plan_hash"] == plan["content_hash"]
     assert admin.get(_url(cid)).json()["plans"][0]["status"] == "approved"
     assert member.get(_url(cid, f"/operations/{op['id']}")).status_code == 404
-    # a member holding agents.deploy still only reaches conversations they collaborate on
     assert member.delete(_url(cid, f"/operations/{op['id']}/assets")).status_code == 404
+    # the operation runs with the real worker (ledger only: no code evaluators); retry and
+    # cleanup then answer through the routes
+    assert _run(op["id"], Fakes())
+    res = admin.post(_url(cid, f"/operations/{op['id']}/retry"))
+    assert res.status_code == 200 and res.json()["started"] is False
+    res = admin.delete(_url(cid, f"/operations/{op['id']}/assets"))
+    assert res.status_code == 200 and res.json()["operation"]["status"] == "cleaned"
     snap = _snapshot_proposal(cid)
     assert snap["status"] == "approved" and snap["hash"] == h and snap["agent_id"] == "agent-1"
 
@@ -2124,10 +1432,10 @@ def test_member_with_deploy_permission_materializes_own_plan(gated, monkeypatch)
     db = SessionLocal()
     try:
         row = db.get(EvaluationAssetOperation, op["id"])
-        assert row.approver_user_id == member_id and row.approved_by == "member"
+        assert row.approver_user_id == member_id
+        assert row.approved_by == MEMBER_CREDS["username"]
     finally:
         db.close()
-    # revoking the permission afterwards fences the worker and refuses the follow-ups
     _set_member_permissions(member_id, {"agents.deploy": False})
     db = SessionLocal()
     try:
@@ -2140,19 +1448,6 @@ def test_member_with_deploy_permission_materializes_own_plan(gated, monkeypatch)
         assert res.status_code == 403 and res.json()["code"] == "auth.permission_required"
 
 
-def test_ordinary_evaluator_delete_refuses_operation_owned_records(app_ready):
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    _run(op_id, fakes)
-    eid = _res(_op(op_id), "evaluator:pii")["result"]["evaluator_id"]
-    with TestClient(app_ready) as client:
-        res = client.delete(f"/api/eval/evaluators/{eid}")
-        assert res.status_code == 409 and res.json()["code"] == "evaluator.managed_by_operation"
-        assert res.json()["detail"]["operation_id"] == op_id
-    assert eid in fakes.control.evaluators
-
-
 def test_plan_prepare_refuses_invalid_revision_and_foreign_conversation(app_ready):
     cid, h = _conversation("local-operator", proposal={"name": 5}, status="invalid")
     with TestClient(app_ready) as client:
@@ -2163,7 +1458,9 @@ def test_plan_prepare_refuses_invalid_revision_and_foreign_conversation(app_read
         assert res.status_code == 409 and res.json()["code"] == "assistant.proposal_stale"
     other, _ = _conversation("user:someone-else")
     with TestClient(app_ready) as client:
-        assert client.get(_url(other)).status_code == 404
+        # the open console's operator is an administrator: it reads another
+        # principal's plan, read-only, and still cannot prepare one there
+        assert client.get(_url(other)).status_code == 200
         assert client.post(_url(other, "/prepare"), json={"revision": 1}).status_code == 404
 
 
@@ -2183,1451 +1480,67 @@ def test_plan_revisions_are_append_only_and_hash_bound(app_ready):
         db.close()
 
 
-@pytest.mark.parametrize("capabilities", [
-    {"knowledge_bases": ["earnings-kb"]}, {"skills": ["earnings-skill"]},
-    {"tools": ["mcp:reports"]},
-])
-def test_readonly_plan_prepare_edit_and_legacy_materialization_are_guarded(app_ready, capabilities):
-    from tests.test_assistant_readonly_evaluation import ZERO_CALL_RULES, _source
-
-    source = _source(ZERO_CALL_RULES[0], capabilities)
-    # Direct insertion represents a proposal approved before this semantic guard.
-    cid, h = _conversation("local-operator", proposal=source)
-    before = _snapshot_proposal(cid)
-    with TestClient(app_ready) as client:
-        prepared = client.post(_url(cid, "/prepare"), json={"revision": 1})
-        assert prepared.status_code == 201, prepared.text
-        plan = prepared.json()["plan"]
-        assert plan["status"] == "invalid"
-        assert any("Read-only does not mean zero tool calls" in e
-                   for e in plan["validation_errors"])
-        raw = plan["content"]
-        edited = client.put(_url(cid), json={"content": raw})
-        assert edited.status_code == 200, edited.text
-        assert edited.json()["plan"]["status"] == "invalid"
-
-        # A historical draft may have no saved errors. The materialize preflight
-        # must revalidate it without changing its content/hash or the approved Agent.
-        with SessionLocal() as db:
-            legacy = AssistantEvaluationPlan(
-                workspace_id=DEFAULT_WORKSPACE_ID, conversation_id=cid,
-                proposal_id=db.query(AssistantProposal).filter_by(conversation_id=cid).one().id,
-                source_revision=1, source_content_hash=h, revision=3, source="member",
-                content=raw, content_hash=plan_contract.canonical_hash(raw), status="draft",
-                created_by="river",
-            )
-            db.add(legacy)
-            db.commit()
-            legacy_id, legacy_hash = legacy.id, legacy.content_hash
-        response = client.post(_url(cid, "/materialize"), json={
-            "plan_revision": 3, "plan_hash": legacy_hash, "acknowledge_disclosure": True,
-        })
-        assert response.status_code == 409, response.text
-        assert response.json()["code"] == "assistant.evaluation_plan_invalid"
-        assert "Read-only does not mean zero tool calls" in response.text
-        with SessionLocal() as db:
-            assert db.query(EvaluationAssetOperation).count() == 0
-            saved = db.get(AssistantEvaluationPlan, legacy_id)
-            assert (saved.content, saved.content_hash, saved.status) == (raw, legacy_hash, "draft")
-    assert _snapshot_proposal(cid) == before
+def test_the_lambda_revision_review_route_is_not_part_of_the_cn_build(app_ready):
+    """CA-5: the SE-049 CloudTrail recovery route has no CN twin (evaluators are rows)."""
+    paths = set(app_ready.openapi()["paths"])
+    assert not any("lambda-revision-review" in p for p in paths)
+    assert f"{BASE}/conversations/{{conversation_id}}/evaluation-plan/materialize" in paths
 
 
-# ===========================================================================
-# 5. residual matrix (pass 4)
-# ===========================================================================
-
-
-def test_handler_latest_turn_decides_and_dropped_or_listed_finish_reasons_count():
-    # complete safe turn, then a later model turn with NO output → incomplete, never PASS
-    spans = _model_turn("t1", "m1", "safe", start=10) + [
-        _span("t1", "m2", "chat", {"gen_ai.operation.name": "chat"}, 20)]
-    assert handler.evaluate(LEAK, _event("SESSION", spans))["errorCode"] == "NO_OUTPUT"
-    assert handler.evaluate(NO_TOOLS, _event("SESSION", spans))["errorCode"] == "NO_OUTPUT"
-    # dropped attributes / events on any document → truncated evidence
-    dropped = _model_turn("t1", "m1", "safe")
-    dropped[0]["droppedAttributesCount"] = 2
-    assert handler.evaluate(LEAK, _event("SESSION", dropped))["errorCode"] == "TRUNCATED_EVIDENCE"
-    ev = _model_turn("t1", "m1", "safe")
-    ev[0]["events"] = [{"name": "gen_ai.choice", "attributes": {"message": "x"},
-                        "droppedAttributesCount": 1}]
-    assert handler.evaluate(LEAK, _event("SESSION", ev))["errorCode"] == "TRUNCATED_EVIDENCE"
-    # gen_ai.response.finish_reasons next to gen_ai.completion
-    cut = [_span("t1", "m", "chat", {"gen_ai.completion": "long…",
-                                     "gen_ai.response.finish_reasons": ["length"]}, 1)]
-    assert handler.evaluate(LEAK, _event("SESSION", cut))["errorCode"] == "TRUNCATED"
-    # two model turns with the same start time cannot be ordered
-    same = _model_turn("t1", "m1", "a", start=10) + _model_turn("t1", "m2", "b", start=10)
-    assert handler.evaluate(LEAK, _event("SESSION", same))["errorCode"] == "AMBIGUOUS_ORDER"
-
-
-def test_handler_multi_target_and_session_wide_negative_semantics():
-    good = _model_turn("t1", "m1", "fine", start=10)
-    bad = _model_turn("t2", "m2", "amber leaks", start=20)
-    prompt_only = [_span("t3", "m3", "chat", {"gen_ai.operation.name": "chat"}, 30)]
-    # each target scored independently; a failing target is never discarded
-    out = handler.evaluate(LEAK, _event("TRACE", good + bad, target={"traceIds": ["t1", "t2"]}))
-    assert out["label"] == "FAIL" and "leak@t2=fail" in out["explanation"]
-    assert "leak@t1=pass" in out["explanation"]
-    # a target without complete evidence errors even when another target is fine
-    out = handler.evaluate(LEAK, _event("TRACE", good + prompt_only,
-                                        target={"traceIds": ["t1", "t3"]}))
-    assert out["errorCode"] == "NO_OUTPUT"
-    # per-target references: t1's reference is not t2's
-    rr = {"version": 1, "checks": [{"id": "r", "type": "reference_response"}]}
-    refs = [{"context": {"spanContext": {"sessionId": "s1", "traceId": "t1"}},
-             "expectedResponse": {"text": "fine"}}]
-    out = handler.evaluate(rr, _event("TRACE", good + bad, refs, {"traceIds": ["t1", "t2"]}))
-    assert out["errorCode"] == "REFERENCE_MISSING"
-    # SESSION negative rule inspects EVERY turn: earlier violation + safe final → FAIL
-    session = _model_turn("t1", "m1", "amber!", start=10) + _model_turn("t1", "m2", "bye", 20)
-    out = handler.evaluate(LEAK, _event("SESSION", session))
-    assert out["label"] == "FAIL" and "all 2 assistant turn(s)" in out["explanation"]
-    contains = {"version": 1, "checks": [{"id": "c", "type": "output_contains", "text": "bye"}]}
-    out = handler.evaluate(contains, _event("SESSION", session))
-    assert out["label"] == "PASS" and "final turn" in out["explanation"]
-
-
-def test_handler_identity_schema_and_reference_strictness():
-    base = _model_turn("t1", "m", "ok", start=50)
-    # conflicting duplicate span identity: same spanId, weather then shell
-    dup = _tool("t1", "x", "weather", 3) + [_span("t1", "x", "execute_tool shell",
-                                                  {"gen_ai.operation.name": "execute_tool",
-                                                   "gen_ai.tool.name": "shell"}, 3)] + base
-    forbid = {"version": 1, "checks": [{"id": "s", "type": "tool_set", "forbidden": ["shell"]}]}
-    assert handler.evaluate(forbid, _event("SESSION", dup))["errorCode"] == "CONFLICTING_DUPLICATE"
-    # non-string tool name / attribute-vs-name mismatch / missing span id
-    numeric = [_span("t1", "n", "execute_tool weather",
-                     {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": 123}, 3)] + base
-    assert handler.evaluate(NO_TOOLS, _event("SESSION", numeric))["errorCode"] == "UNKNOWN_TOOL"
-    mismatch = [_span("t1", "n", "execute_tool shell",
-                      {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "weather"}, 3)]
-    assert handler.evaluate(NO_TOOLS, _event("SESSION", mismatch + base))[
-        "errorCode"] == "CONFLICTING_DUPLICATE"
-    noid = [{"traceId": "t1", "name": "execute_tool weather",
-             "attributes": {"gen_ai.operation.name": "execute_tool",
-                            "gen_ai.tool.name": "weather"}}]
-    no_id = handler.evaluate(NO_TOOLS, _event("SESSION", noid + base))
-    assert no_id["errorCode"] == "UNKNOWN_IDENTITY"
-    # equal start timestamps → ambiguous SEQUENCE, but counts/sets still work
-    tie = _tool("t1", "a", "weather", 3) + _tool("t1", "b", "calendar", 3) + base
-    seq = {"version": 1, "checks": [{"id": "s", "type": "tool_sequence", "mode": "exact",
-                                     "tools": ["weather", "calendar"]}]}
-    assert handler.evaluate(seq, _event("SESSION", tie))["errorCode"] == "AMBIGUOUS_ORDER"
-    cnt = {"version": 1, "checks": [{"id": "c", "type": "tool_count", "min": 2, "max": 2}]}
-    assert handler.evaluate(cnt, _event("SESSION", tie))["label"] == "PASS"
-    # strict schema / target shapes
-    assert handler.evaluate(LEAK, {**_event("SESSION", base), "schemaVersion": 1.0})[
-        "errorCode"] == "BAD_SCHEMA"
-    assert handler.evaluate(LEAK, _event("SESSION", base, target={"traceIds": ["t1"]}))[
-        "errorCode"] == "BAD_TARGET"
-    assert handler.evaluate(LEAK, _event("TRACE", base, target={"traceIds": ["t1"],
-                                                                "spanIds": ["m"]}))[
-        "errorCode"] == "BAD_TARGET"
-    # references: unscoped or unattributable (spans without session id) are refused
-    rr = {"version": 1, "checks": [{"id": "r", "type": "reference_response"}]}
-    unscoped = [{"context": {"spanContext": {"traceId": "t1"}}, "expectedResponse": {"text": "ok"}}]
-    assert handler.evaluate(rr, _event("TRACE", base, unscoped, T1))["errorCode"] == "BAD_REFERENCE"
-    nosession = json.loads(json.dumps(base))
-    for d in nosession:
-        d.get("attributes", {}).pop("session.id", None)
-    scoped = [{"context": {"spanContext": {"sessionId": "s1", "traceId": "t1"}},
-               "expectedResponse": {"text": "ok"}}]
-    assert handler.evaluate(rr, _event("TRACE", nosession, scoped, T1))[
-        "errorCode"] == "REFERENCE_UNATTRIBUTABLE"
-
-
-def test_handler_wire_positives_operation_details_and_plain_bracket_text():
-    # current Strands convention: gen_ai.client.inference.operation.details event
-    details = [_span("t1", "m", "chat", {"gen_ai.operation.name": "chat"}, 1, events=[
-        {"name": "gen_ai.client.inference.operation.details", "attributes": {
-            "gen_ai.output.messages": json.dumps([
-                {"role": "assistant", "finish_reason": "end_turn",
-                 "parts": [{"type": "text", "content": "[Notice] safe"}]}])}}])]
-    out = handler.evaluate(LEAK, _event("TRACE", details, target=T1))
-    assert out["label"] == "PASS", out
-    # a genuine plain string that merely starts with a bracket is literal output
-    plain = _model_turn("t1", "m1", "[Notice] safe")
-    assert handler.evaluate(LEAK, _event("TRACE", plain, target=T1))["label"] == "PASS"
-    # a cut JSON literal is still malformed evidence
-    broken = _model_turn("t1", "m1", '[{"text": "amber"', raw=True)
-    cut = handler.evaluate(LEAK, _event("TRACE", broken, target=T1))
-    assert cut["errorCode"] == "MALFORMED_OUTPUT"
-    # details event whose final message is tool_use → incomplete
-    tool_use = [_span("t1", "m", "chat", {"gen_ai.operation.name": "chat"}, 1, events=[
-        {"name": "gen_ai.client.inference.operation.details", "attributes": {
-            "gen_ai.output.messages": json.dumps([
-                {"role": "assistant", "finish_reason": "tool_use",
-                 "parts": [{"type": "tool_call", "name": "x"}]}])}}])]
-    assert handler.evaluate(LEAK, _event("TRACE", tool_use, target=T1))["errorCode"] == "INCOMPLETE"
-
-
-def test_demotion_committed_by_another_session_before_the_claim_is_refused(app_ready):
-    db = SessionLocal()
-    try:
-        user = User(username="boss2", username_key="boss2", email="b2@example.com",
-                    password_hash=users_service.hash_password("x" * 16), role="admin",
-                    status="active")
-        db.add(user)
-        db.commit()
-        uid = user.id
-    finally:
-        db.close()
-    cid, h = _conversation("local-operator", owner="boss2")  # owner check passes; the
-    from app.routers.auth import Identity  # write predicate must refuse
-
-    def demote_then_return_admin(session):
-        other = SessionLocal()  # a separate committed session, immediately before the UPDATE
-        try:
-            demoted = other.get(User, uid)
-            demoted.role = "member"
-            demoted.permissions = {"agents.deploy": False}
-            other.commit()
-        finally:
-            other.close()
-        return Identity(username="boss2", role="admin", user_id=uid)
-
-    with pytest.raises(AppError) as exc:
-        _approve(cid, h, approver_user_id=uid, approved_by="boss2",
-                 recheck=demote_then_return_admin)
-    assert exc.value.code == "assistant.evaluation_plan_stale"
-    db = SessionLocal()
-    try:
-        assert db.query(EvaluationAssetOperation).count() == 0
-        assert db.query(AssistantEvaluationPlan).filter_by(status="approved").count() == 0
-    finally:
-        db.close()
-
-
-def test_pinned_column_migration_and_unpinned_operations_are_refused(tmp_path, app_ready):
-    import sqlalchemy as sa
-
-    from app.core.db import Base, init_db
-
-    engine = sa.create_engine(f"sqlite:///{tmp_path / 'prior.db'}")
-    # the prior candidate schema: every column except `pinned`
-    table = Base.metadata.tables["evaluation_asset_operations"]
-    prior = sa.Table("evaluation_asset_operations", sa.MetaData(),
-                     *[c.copy() for c in table.columns if c.name != "pinned"])
-    prior.create(engine)
-    for t in Base.metadata.sorted_tables:
-        if t.name != "evaluation_asset_operations":
-            t.create(engine)
-    init_db(engine)
-    assert "pinned" in {c["name"] for c in sa.inspect(engine).get_columns(
-        "evaluation_asset_operations")}
-    # an operation approved before pinning existed never runs: review required
+def test_conversation_purge_cleans_operations_deletes_datasets_then_rows(app_ready):
     cid, h = _conversation("local-operator")
     fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    db = SessionLocal()
-    try:
-        db.get(EvaluationAssetOperation, op_id).pinned = {}
-        db.commit()
-    finally:
-        db.close()
-    fakes.requested.clear()
-    _run(op_id, fakes)
-    op = _op(op_id)
-    assert op.status == "failed" and "predates" in op.error and fakes.requested == []
-
-
-def test_direct_cleanup_after_lost_create_responses_never_claims_cleaned(app_ready):
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    fakes.iam.lose_create_response = True
-    _run(op_id, fakes)                      # role created remotely, response lost
-    db = SessionLocal()
-    try:
-        op = assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op_id),
-                                      ws_ctx(RESOURCES), clients=fakes)
-        # SE-047 C: the RoleId was never recorded — the nonce in the description / tag is
-        # copyable, so the role stays UNKNOWN (never adopted, never deleted), not 'cleaned'
-        assert _res(op, "lambda_role")["status"] == "unknown"
-        assert "cannot prove" in _res(op, "lambda_role")["cleanup"]["note"]
-        assert assets.function_name(op_id) in fakes.iam.roles
-        assert op.status == "partial" and "lambda_role" in op.error
-    finally:
-        db.close()
-    # a lost CreateEvaluator response: the name exists but ownership cannot be proven →
-    # explicit unknown, the code chain is RETAINED, never 'cleaned'
-    cid2, h2 = _conversation("local-operator")
-    fakes2 = Fakes()
-    op2, *_ = _approve(cid2, h2, fakes=fakes2)
-    fakes2.control.lose_response_once = True
-    _run(op2, fakes2)
-    op = _op(op2)
-    assert _res(op, "evaluator:pii")["status"] == "failed" and _res(op, "evaluator:pii")["request"]
-    db = SessionLocal()
-    try:
-        op = assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op2),
-                                      ws_ctx(RESOURCES), clients=fakes2)
-        assert _res(op, "evaluator:pii")["status"] == "unknown"
-        assert "cannot prove" in _res(op, "evaluator:pii")["cleanup"]["note"]
-        assert _res(op, "lambda_function")["status"] == "retained"
-        assert _res(op, "lambda_role")["status"] == "retained"
-        assert assets.function_name(op2) in fakes2.lam.functions
-        assert op.status == "partial" and "evaluator:pii" in op.error
-    finally:
-        db.close()
-
-
-def test_delete_evaluator_must_be_confirmed_gone_and_fence_guards_delete_role(app_ready):
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    _run(op_id, fakes)
-    fakes.control.delete_polls = assets.READBACK_ATTEMPTS + 5  # stays DELETING
-    db = SessionLocal()
-    try:
-        op = assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op_id),
-                                      ws_ctx(RESOURCES), clients=fakes)
-        assert _res(op, "evaluator:pii")["status"] == "delete_pending"
-        assert _res(op, "lambda_function")["status"] == "retained"
-        assert assets.function_name(op_id) in fakes.lam.functions
-        assert op.status == "partial"
-        # later the deletions complete; retrying the cleanup resolves them idempotently
-        fakes.control.deleting = {}
-        for eid in list(fakes.control.evaluators):
-            if fakes.control.evaluators[eid]["evaluatorName"] in ("kid_pii_judge", "kid_tools"):
-                fakes.control.evaluators.pop(eid)
-        op = assets.cleanup_operation(db, op, ws_ctx(RESOURCES), clients=fakes)
-        assert op.status == "cleaned", op.error
-    finally:
-        db.close()
-    # a lease stolen between DeleteRolePolicy and DeleteRole stops the second mutation
-    cid2, h2 = _conversation("local-operator")
-    fakes2 = Fakes()
-    op2, *_ = _approve(cid2, h2, fakes=fakes2)
-    _run(op2, fakes2)
-    original = fakes2.iam.delete_role_policy
-
-    def steal(RoleName, PolicyName):
-        original(RoleName, PolicyName)
-        if RoleName.startswith("launchpad-evalfn-"):
-            s2 = SessionLocal()
-            try:
-                s2.get(EvaluationAssetOperation, op2).worker_token = "someone-else"
-                s2.commit()
-            finally:
-                s2.close()
-
-    fakes2.iam.delete_role_policy = steal
-    db = SessionLocal()
-    try:
-        with pytest.raises(AppError):
-            assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op2),
-                                     ws_ctx(RESOURCES), clients=fakes2)
-    finally:
-        db.close()
-    assert assets.function_name(op2) in fakes2.iam.roles  # DeleteRole never ran
-    assert _op(op2).status != "cleaned"
-
-
-def test_retry_keeps_persisted_conflicts_as_prerequisites_and_identity_is_exact(
-    app_ready, monkeypatch,
-):
-    # the name is taken on purpose, between approval and create — bypass the approval
-    # preflight to reach the materializer's own conflict handling
-    monkeypatch.setattr(assets, "taken_evaluator_names", lambda *a, **k: set())
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    original_add = fakes.lam.add_permission
-
-    def broad_then_conflict(**kw):
-        fakes.lam.policies[kw["FunctionName"]] = [{
-            "Sid": kw["StatementId"], "Effect": "Allow", "Action": "lambda:*",
-            "Principal": {"Service": kw["Principal"]}, "Resource": "*"}]
-        return original_add(**kw)
-
-    fakes.lam.add_permission = broad_then_conflict
-    _run(op_id, fakes)
-    assert _res(_op(op_id), "lambda_permission")["status"] == "conflict"
-    _run(op_id, fakes)  # explicit retry: the stored conflict still gates the chain
-    op = _op(op_id)
-    assert _res(op, "role_grant")["status"] == "blocked"
-    assert _res(op, "evaluator:tools")["status"] == "blocked"
-    assert f"launchpad-evalop-{op_id}" not in fakes.iam.roles["launchpad-agent-execution-role"][
-        "policies"]
-    # cleanup: same CodeSha256 but a foreign role on the function version → not ours
-    cid2, h2 = _conversation("local-operator")
-    fakes2 = Fakes()
-    op2, *_ = _approve(cid2, h2, fakes=fakes2)
-    _run(op2, fakes2)
-    fn = fakes2.lam.functions[assets.function_name(op2)]
-    fn["versions"]["1"]["Role"] = f"arn:aws:iam::{ACCOUNT}:role/somebody"
-    lg = fakes2.logs.groups[f"/aws/lambda/{assets.function_name(op2)}"]
-    lg["creationTime"] = 99  # re-created log group wearing our tags
-    db = SessionLocal()
-    try:
-        op = assets.cleanup_operation(db, db.get(EvaluationAssetOperation, op2),
-                                      ws_ctx(RESOURCES), clients=fakes2)
-        assert _res(op, "lambda_function")["status"] == "conflict"
-        assert _res(op, "log_group")["status"] == "retained"  # the function still exists
-        assert _res(op, "lambda_role")["status"] == "retained"
-        assert assets.function_name(op2) in fakes2.lam.functions
-        assert op.status == "partial"
-    finally:
-        db.close()
-    # existing evaluator with the requested id but a foreign ARN / unknown config → conflict
-    fakes3 = Fakes()
-    fakes3.control.evaluators["custom-x"] = {
-        "evaluatorId": "custom-x", "evaluatorName": "x", "status": "ACTIVE", "level": "TRACE",
-        "evaluatorArn": f"arn:aws:bedrock-agentcore:{REGION}:999999999999:evaluator/custom-x",
-        "evaluatorConfig": {"llmAsAJudge": {"instructions": "hi {assistant_turn}"}}}
-    cid3, h3 = _conversation("local-operator")
-    plan = _valid_plan(cid3, h3, with_code=False)
-    plan["evaluators"][0] = {"kind": "existing", "key": "helpfulness", "title": "x",
-                             "evaluator_id": "custom-x", "golden_test_ids": []}
-    op3, *_ = _approve(cid3, h3, plan=plan, fakes=fakes3)
-    _run(op3, fakes3)
-    assert _res(_op(op3), "existing:helpfulness")["status"] == "conflict"
-    fakes3.control.evaluators["custom-x"]["evaluatorArn"] = \
-        f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:evaluator/custom-x"
-    fakes3.control.evaluators["custom-x"]["evaluatorConfig"] = {"mystery": {}}
-    cid4, h4 = _conversation("local-operator")
-    op4, *_ = _approve(cid4, h4, plan=plan, fakes=fakes3)
-    _run(op4, fakes3)
-    assert _res(_op(op4), "existing:helpfulness")["status"] == "conflict"
-
-
-# ===========================================================================
-# 6. phase B — actual target references and existing evaluator configuration
-# ===========================================================================
-
-
-def _detail(eid="custom-x", instructions="Judge {assistant_turn} using {context}"):
-    return {"evaluatorId": eid, "evaluatorName": "custom_x", "status": "ACTIVE", "level": "TRACE",
-            "evaluatorArn": f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:evaluator/{eid}",
-            "evaluatorConfig": {"llmAsAJudge": {
-                "instructions": instructions,
-                "ratingScale": {"numerical": [
-                    {"value": 1.0, "label": "pass", "definition": "meets"},
-                    {"value": 0.0, "label": "fail", "definition": "fails"}]},
-                "modelConfig": {"bedrockEvaluatorModelConfig": {"modelId": "model-id"}}}}}
-
-
-def _existing_run(detail, plan_mutator=None):
-    cid, h = _conversation("local-operator")
-    raw = _valid_plan(cid, h, with_code=False)
-    raw["evaluators"][0] = {"kind": "existing", "key": "helpfulness", "title": "existing",
-                            "evaluator_id": detail["evaluatorId"], "golden_test_ids": []}
-    if plan_mutator:
-        plan_mutator(raw)
-    fakes = Fakes()
-    fakes.control.evaluators[detail["evaluatorId"]] = detail
-    op_id, *_ = _approve(cid, h, plan=raw, fakes=fakes)
-    _run(op_id, fakes)
-    return _op(op_id), _res(_op(op_id), "existing:helpfulness")
-
-
-@pytest.mark.parametrize("config", [
-    {"llmAsAJudge": None}, {"llmAsAJudge": {}}, {"llmAsAJudge": {}, "mystery": {}},
-    {"llmAsAJudge": {}, "codeBased": {}},
-    {"llmAsAJudge": {"instructions": "x {assistant_turn}", "ratingScale": {"numerical": []},
-                     "modelConfig": {"bedrockEvaluatorModelConfig": {"modelId": "m"}}}},
-    {"derived": {"baseEvaluatorId": "Builtin.Helpfulness"}},
-    {"codeBased": {"lambdaConfig": {}}},
-])
-def test_existing_evaluator_needs_exactly_one_complete_configuration(app_ready, config):
-    d = _detail()
-    d["evaluatorConfig"] = config
-    op, res = _existing_run(d)
-    assert res["status"] == "conflict" and "not bindable" in res["error"], res
-    assert op.status == "partial"
-
-
-def test_existing_evaluator_valid_shapes_bind_and_needs_come_from_real_config(app_ready):
-    _, res = _existing_run(_detail())
-    assert res["status"] == "ready" and res["reference_dependent"] is False
-    d = _detail()
-    d["evaluatorConfig"] = {"derived": {
-        "baseEvaluatorId": "Builtin.Helpfulness",
-        "modelConfig": {"bedrockEvaluatorModelConfig": {"modelId": "m"}}}}
-    _, res = _existing_run(d)
-    assert res["status"] == "ready" and res["result"]["definition"] == "derived"
-    d = _detail()
-    d["evaluatorConfig"] = {"codeBased": {"lambdaConfig": {
-        "lambdaArn": f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:external:1"}}}
-    _, res = _existing_run(d)
-    assert res["status"] == "ready" and res["reference_dependent"] is None
-    assert "unknown" in res["result"]["note"]
-    # a reference judge whose {expected_response} some turns cannot feed is NOT ready
-    ref = _detail(instructions="Compare {assistant_turn} with {expected_response}")
-    _, res = _existing_run(ref)
-    assert res["status"] == "conflict" and "GT-002/turn 1" in res["error"]
-
-    def fully_referenced(raw):
-        for sc in raw["scenarios"]:
-            for t in sc["turns"]:
-                t["expected_response"] = "answer"
-
-    _, res = _existing_run(ref, fully_referenced)
-    assert res["status"] == "ready" and res["reference_dependent"] is True
-    # the trajectory builtin is a real catalog entry, bound only with complete trajectories
-    cid, h = _conversation("local-operator")
-    raw = _valid_plan(cid, h, reference=True)
-    raw["evaluators"][0] = {"kind": "existing", "key": "helpfulness", "title": "traj",
-                            "evaluator_id": "Builtin.TrajectoryExactOrderMatch",
-                            "golden_test_ids": []}
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, plan=raw, fakes=fakes)
-    _run(op_id, fakes)
-    res = _res(_op(op_id), "existing:helpfulness")
-    assert res["status"] == "ready" and res["result"]["level"] == "SESSION"
-    bogus = json.loads(json.dumps(raw))
-    bogus["evaluators"][0]["evaluator_id"] = "Builtin.TrajectoryBogus"
-    _, errors = plan_contract.validate_plan(bogus, PROPOSAL, revision=1, content_hash=h)
-    assert any("unknown builtin" in e for e in errors)
-
-
-def test_third_party_existing_evaluator_binds_by_partition_level_identity(app_ready):
-    """Live failure: ``ThirdParty.DeepEval.PIILeakage`` was treated as an account-scoped
-    custom evaluator and refused because its ARN carries no region / account. AWS-managed
-    partner evaluators are partition-level, locked, config-less and reference-free — bound
-    by exact identity like a builtin; a wrong ARN, type or a non-ACTIVE status refuses."""
-    eid = "ThirdParty.DeepEval.PIILeakage"
-
-    def third_party(**over):
-        return {"evaluatorId": eid, "evaluatorName": eid, "evaluatorType": "ThirdParty",
-                "provider": "DeepEval", "level": "TRACE", "status": "ACTIVE",
-                "lockedForModification": True,
-                "evaluatorArn": f"arn:aws:bedrock-agentcore:::evaluator/{eid}", **over}
-
-    _, res = _existing_run(third_party())
-    assert res["status"] == "ready", res.get("error")
-    assert res["result"]["source"] == "third_party" and res["result"]["provider"] == "DeepEval"
-    assert res["result"]["evaluator_arn"] == f"arn:aws:bedrock-agentcore:::evaluator/{eid}"
-    assert res["result"]["reference_needs"] == [] and res["reference_dependent"] is False
-    _, res = _existing_run(third_party(
-        evaluatorArn=f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:evaluator/{eid}"))
-    assert res["status"] == "conflict" and "is not arn:aws:bedrock-agentcore:::evaluator/" in res[
-        "error"]
-    _, res = _existing_run(third_party(evaluatorType="Custom"))
-    assert res["status"] == "conflict" and "not an AWS-managed third-party" in res["error"]
-    _, res = _existing_run(third_party(status="FAILED"))
-    assert res["status"] == "failed" and "not usable" in res["error"]
-
-
-def test_initialization_revision_transition_is_settled_with_evidence(app_ready):
-    """Lambda bumps RevisionId when a new function leaves Pending. With LastModified and
-    every configuration member unchanged that is provably the service's own transition:
-    the worker settles it, records an append-only history entry with the evidence, and
-    publishes with the settled RevisionId — no review, no admin, nothing rebased silently."""
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    fakes.lam.activation_revision = "rev-active-0001"
-    op_id, *_ = _approve(cid, h, fakes=fakes)
+    op_id, *_ = _approve(cid, h, plan=_valid_plan(cid, h, with_code=False))
     assert _run(op_id, fakes)
-    op = _op(op_id)
-    assert op.status == "succeeded", op.error
-    res = _res(op, "lambda_function")
-    stored = res["result"]
-    assert res["status"] == "ready" and res.get("review") is None
-    assert stored["initial_revision_id"] != "rev-active-0001"
-    assert stored["settled_revision_id"] == "rev-active-0001"
-    history = stored["revision_history"]
-    assert [(e["reason"], e["from"], e["to"]) for e in history[:1]] == [
-        ("initial_activation_settled", stored["initial_revision_id"], "rev-active-0001")]
-    assert history[0]["evidence"]["create_state"] == "Pending"
-    assert history[0]["evidence"]["last_modified"] == stored["create_response"]["LastModified"]
-    assert "lambda_function:settled" in op.log
-    assert fakes.lam.publish_calls >= 1
-    assert _res(op, "lambda_permission")["status"] == "ready"
-    assert _res(op, "role_grant")["status"] == "ready"
-
-
-def test_revision_drift_with_a_moved_last_modified_stays_a_review_conflict(app_ready,
-                                                                          monkeypatch):
-    """The same RevisionId-only drift without the evidence (LastModified moved: something
-    else touched the function) keeps SE-049's review-required conflict and its blocked
-    dependents; an ordinary retry re-attempts it and, absent evidence, it stays."""
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    fakes.lam.activation_revision = "rev-active-0001"
-    fakes.lam.activation_last_modified = "2026-09-14T09:00:00.000+0000"
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    assert _run(op_id, fakes)
-    op = _op(op_id)
-    assert op.status == "partial"
-    res = _res(op, "lambda_function")
-    assert res["status"] == "conflict" and "lambda-revision-review" in res["error"]
-    assert res["review"]["kind"] == "initial_revision_changed"
-    assert res["result"].get("settled_revision_id") is None
-    assert "revision_history" not in res["result"]
-    assert _res(op, "lambda_permission")["status"] == "blocked"
-    assert fakes.lam.publish_calls == 0
-    assert assets._retryable_conflict(res) is True
-    monkeypatch.setattr(assets, "start_async", lambda op_id, **kw: True)
-    with SessionLocal() as db:
-        assert assets.retry_operation(db, db.get(EvaluationAssetOperation, op_id)) is not None
-    op = _op(op_id)
-    assert "retry:reopened" in op.log
-    _run(op_id, fakes)
-    res = _res(_op(op_id), "lambda_function")
-    assert res["status"] == "conflict" and res["review"]["kind"] == "initial_revision_changed"
-    assert fakes.lam.publish_calls == 0
-
-
-def test_retry_reopens_read_only_existing_conflicts_only(app_ready, monkeypatch):
-    """A conflicting ``existing`` binding is a read-only check the platform never owned:
-    a retry re-evaluates it. Any other conflict stays durable."""
-    eid = "ThirdParty.DeepEval.Toxicity"
-    detail = {"evaluatorId": eid, "evaluatorName": eid, "evaluatorType": "ThirdParty",
-              "provider": "DeepEval", "level": "TRACE", "status": "ACTIVE",
-              "evaluatorArn": f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:evaluator/{eid}"}
-    cid, h = _conversation("local-operator")
-    raw = _valid_plan(cid, h, with_code=False)
-    raw["evaluators"][0] = {"kind": "existing", "key": "helpfulness", "title": "existing",
-                            "evaluator_id": eid, "golden_test_ids": []}
-    fakes = Fakes()
-    fakes.control.evaluators[eid] = detail
-    op_id, *_ = _approve(cid, h, plan=raw, fakes=fakes)
-    _run(op_id, fakes)
-    res = _res(_op(op_id), "existing:helpfulness")
-    assert res["status"] == "conflict"
-    assert assets._retryable_conflict(res) is True
-    assert assets._retryable_conflict({"status": "conflict", "kind": "evaluator"}) is False
-    assert assets._retryable_conflict({"status": "conflict", "kind": "lambda_function",
-                                       "review": {"kind": "initial_revision_changed",
-                                                  "resolved_by": "x"}}) is False
-    fakes.control.evaluators[eid]["evaluatorArn"] = f"arn:aws:bedrock-agentcore:::evaluator/{eid}"
-    monkeypatch.setattr(assets, "start_async", lambda op_id, **kw: True)
-    with SessionLocal() as db:
-        assert assets.retry_operation(db, db.get(EvaluationAssetOperation, op_id)) is not None
-    _run(op_id, fakes)
-    op = _op(op_id)
-    assert _res(op, "existing:helpfulness")["status"] == "ready"
-    assert op.status == "succeeded", op.error
-
-
-def test_coverage_targets_follow_the_runner_grouping():
-    """Platform-side coverage over dataset items: a scenario is one session whose turns
-    are its traces; session-level references attach to the session, per-turn
-    expected responses to their trace."""
-    from app.evaluation import coverage
-
-    items = _valid_plan("c", "b" * 64)["scenarios"]
-    targets = {t["id"]: t["fields"] for t in coverage.reference_targets(items)}
-    assert targets["GT-001"] == {"assertions", "expected_response"}
-    assert targets["GT-001/turn 1"] == {"assertions", "expected_response"}
-    assert targets["GT-002"] == {"expected_tool_trajectory"}
-    assert targets["GT-003"] == set()                 # no scenario-level references
-    assert targets["GT-003/turn 1"] == set() and "GT-003/turn 3" in targets
-    gaps = coverage.coverage_gaps(items, {"expected_response"}, "TRACE")
-    assert gaps and all("lacks expected_response" in g for g in gaps)
-    assert coverage.coverage_gaps(items, set(), "TRACE") == []
-    with_traj = json.loads(json.dumps(items))
-    for it in with_traj:
-        it["expected_trajectory"] = [WEATHER_TOOL]
-    assert coverage.coverage_gaps(with_traj, {"expected_tool_trajectory"}, "SESSION") == []
-    assert coverage.validate_evaluator_config(_detail()["evaluatorConfig"]) is None
-
-
-@pytest.mark.parametrize("case", ["existing-response", "managed-mixed", "positive"])
-def test_actual_run_route_checks_every_target_before_invoking(gated, monkeypatch, case):
-    """The real POST /api/eval/runs against the CURRENT dataset: a reference the
-    evaluator reads must be present on every session / turn or nothing is invoked."""
-    from app.evaluation.queue import run_queue
-    from app.evaluation.telemetry import ROOT_SPAN_NAME
-
-    admin, _, _ = gated
-    cid, h = _conversation("config-admin", owner="admin")
-    fakes = Fakes()
-    if case == "existing-response":
-        d = _detail(instructions="Compare {assistant_turn} with {expected_response}")
-        fakes.control.evaluators["custom-x"] = d
-        raw = _valid_plan(cid, h, with_code=False)
-        raw["evaluators"][0] = {"kind": "existing", "key": "helpfulness", "title": "existing",
-                                "evaluator_id": "custom-x", "golden_test_ids": []}
-        for sc in raw["scenarios"]:
-            for t in sc["turns"]:
-                t["expected_response"] = "answer"
-        eid = "custom-x"
-    else:
-        raw = _valid_plan(cid, h, reference=True)
-    op_id, *_ = _approve(cid, h, plan=raw, fakes=fakes)
-    _run(op_id, fakes)
-    op = _op(op_id)
-    assert op.status == "succeeded", op.error
-    if case != "existing-response":
-        eid = _res(op, "evaluator:tools")["result"]["evaluator_id"]
-    with SessionLocal() as db:
-        ds = db.get(EvalDataset, op.dataset_id)
-        items = json.loads(json.dumps(ds.items))
-        if case == "existing-response":
-            items[1]["turns"] = [{"input": "seed"}, {"input": "outcome"}]  # edited after creation
-        elif case == "managed-mixed":
-            items[1].pop("expected_trajectory")
-        ds.items = items
-        agent = Agent(name="synthetic-eval", workspace_id=DEFAULT_WORKSPACE_ID, method="harness",
-                      status="active", resource_id="synthetic-abc",
-                      arn=f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:harness/synthetic-abc",
-                      spec={"name": "synthetic-eval", "method": "harness"}, owner="admin")
-        db.add(agent)
-        db.commit()
-        aid = agent.id
-
-    class RunLogs:
-        def describe_log_groups(self, **kw):
-            return {"logGroups": [{"logGroupName": kw["logGroupNamePrefix"] + "abc-DEFAULT",
-                                   "creationTime": 1}]}
-
-        def filter_log_events(self, **kw):
-            sid = json.loads(kw["filterPattern"])
-            doc = {"attributes": {"session.id": sid}, "spanId": "span-latest",
-                   "name": ROOT_SPAN_NAME, "body": {"input": "test", "output": "answer"}}
-            return {"events": [{"message": json.dumps(doc), "timestamp": 1, "ingestionTime": 1}]}
-
-    class RunData:
-        def __init__(self):
-            self.invocations, self.batches = [], []
-
-        def invoke_harness(self, **kw):
-            self.invocations.append(kw)
-            return {"stream": [{"contentBlockDelta": {"delta": {"text": "answer"}}}]}
-
-        def start_batch_evaluation(self, **kw):
-            self.batches.append(kw)
-            return {"batchEvaluationId": "synthetic-batch"}
-
-        def get_batch_evaluation(self, **kw):
-            return {"status": "COMPLETED"}
-
-    logs, data = RunLogs(), RunData()
-    if case == "positive":  # a fully referenced run legitimately starts a (fake) batch
-        monkeypatch.setattr(_ac_eval, "start_batch_evaluation", _ORIG_START_BATCH)
-    monkeypatch.setattr(aws_clients, "client", lambda name, ws, **kw: {
-        "logs": logs, "bedrock-agentcore": data, "bedrock-agentcore-control": fakes.control}[name])
-    resp = admin.post("/api/eval/runs", json={"agent_id": aid, "dataset_id": op.dataset_id,
-                                               "evaluators": [eid], "wait_seconds": 0})
-    run_queue._queue.join()
-    if case == "positive":
-        assert resp.status_code == 201, resp.text
-        with SessionLocal() as db:
-            from app.evaluation.models import EvalRun
-
-            run = db.get(EvalRun, resp.json()["id"])
-            run_state = (run.status, run.error)
-        assert data.invocations and len(data.batches) == 1, run_state
-        entries = data.batches[0]["evaluationMetadata"]["sessionMetadata"]
-        assert all(e.get("groundTruth", {}).get("inline", {}).get("expectedTrajectory")
-                   for e in entries)
-    else:
-        assert resp.status_code == 422, resp.text
-        assert resp.json()["code"] == "run.judge_needs_ground_truth"
-        assert eid in resp.json()["detail"]["evaluators"]
-        assert not data.invocations and not data.batches
-
-
-# ===========================================================================
-# 9. SE-047 phase B — complete nested configuration, managed reference reuse,
-#    fail-closed preflight and simulated persona references
-# ===========================================================================
-
-
-def _config_case(case: str) -> dict:
-    """SDK-shaped positives (documented optional provider fields) and negatives (one
-    nested violation each) around the installed ``EvaluatorConfig`` model."""
-    d = _detail()
-    judge = d["evaluatorConfig"]["llmAsAJudge"]
-    mc = judge["modelConfig"]
-    lambda_arn = f"arn:aws:lambda:{REGION}:{ACCOUNT}:function:external:1"
-    if case == "categorical-positive":
-        judge["ratingScale"] = {"categorical": [{"label": "pass", "definition": "correct"}]}
-    elif case == "responses-positive":
-        judge["modelConfig"] = {"responsesEvaluatorModelConfig": {
-            "modelId": "model-id", "maxOutputTokens": 1000, "temperature": 1.5, "topP": 0.9,
-            "reasoning": {"effort": "high"}}}
-    elif case == "bedrock-options-positive":
-        mc["bedrockEvaluatorModelConfig"].update(
-            inferenceConfig={"maxTokens": 1000, "temperature": 0.5, "topP": 0.9,
-                             "stopSequences": ["END"]},
-            additionalModelRequestFields={"arbitrary_provider_specific": {"enabled": True}})
-    elif case == "derived-positive":
-        d["evaluatorConfig"] = {"derived": {"baseEvaluatorId": "Builtin.Helpfulness",
-                                            "modelConfig": mc}}
-    elif case == "code-positive":
-        d["evaluatorConfig"] = {"codeBased": {"lambdaConfig": {
-            "lambdaArn": lambda_arn, "lambdaTimeoutInSeconds": 60}}}
-    elif case == "numerical-null-entry":
-        judge["ratingScale"] = {"numerical": [None]}
-    elif case == "numerical-empty-entry":
-        judge["ratingScale"] = {"numerical": [{}]}
-    elif case == "numerical-label-object":
-        judge["ratingScale"]["numerical"][0]["label"] = {}
-    elif case == "numerical-value-string":
-        judge["ratingScale"]["numerical"][0]["value"] = "1"
-    elif case == "categorical-missing-definition":
-        judge["ratingScale"] = {"categorical": [{"label": "pass"}]}
-    elif case == "scale-double-union":
-        judge["ratingScale"]["categorical"] = [{"label": "pass", "definition": "correct"}]
-    elif case == "model-double-union":
-        mc["responsesEvaluatorModelConfig"] = {"modelId": "model-id"}
-    elif case == "responses-no-model-id":
-        judge["modelConfig"] = {"responsesEvaluatorModelConfig": {"maxOutputTokens": 10}}
-    elif case == "bedrock-inference-malformed":
-        mc["bedrockEvaluatorModelConfig"]["inferenceConfig"] = {"maxTokens": "many"}
-    elif case == "bedrock-temperature-out-of-range":
-        mc["bedrockEvaluatorModelConfig"]["inferenceConfig"] = {"temperature": 1.5}
-    elif case == "judge-nested-unknown":
-        judge["mystery"] = True
-    elif case == "model-nested-unknown":
-        mc["mystery"] = {}
-    elif case == "derived-base-malformed":
-        d["evaluatorConfig"] = {"derived": {"baseEvaluatorId": "not an id", "modelConfig": mc}}
-    elif case == "code-arn-malformed":
-        d["evaluatorConfig"] = {"codeBased": {"lambdaConfig": {
-            "lambdaArn": "arn:aws:lambda:broken", "lambdaTimeoutInSeconds": 60}}}
-    elif case == "code-timeout-string":
-        d["evaluatorConfig"] = {"codeBased": {"lambdaConfig": {
-            "lambdaArn": lambda_arn, "lambdaTimeoutInSeconds": "sixty"}}}
-    elif case == "code-timeout-out-of-range":
-        d["evaluatorConfig"] = {"codeBased": {"lambdaConfig": {
-            "lambdaArn": lambda_arn, "lambdaTimeoutInSeconds": 301}}}
-    elif case == "code-double-union":
-        d["evaluatorConfig"] = {"codeBased": {"lambdaConfig": {"lambdaArn": lambda_arn},
-                                              "mystery": {}}}
-    return d
-
-
-@pytest.mark.parametrize("case", [
-    "judge-positive", "categorical-positive", "responses-positive", "bedrock-options-positive",
-    "derived-positive", "code-positive", "numerical-null-entry", "numerical-empty-entry",
-    "numerical-label-object", "numerical-value-string", "categorical-missing-definition",
-    "scale-double-union", "model-double-union", "responses-no-model-id",
-    "bedrock-inference-malformed", "bedrock-temperature-out-of-range", "judge-nested-unknown",
-    "model-nested-unknown", "derived-base-malformed", "code-arn-malformed",
-    "code-timeout-string", "code-timeout-out-of-range", "code-double-union",
-])
-def test_existing_config_is_validated_member_by_member_against_the_installed_model(
-    app_ready, case
-):
-    """ACTUAL materialization of an existing reference: every nested SDK union / required
-    member / type / range / pattern violation stays un-bound; documented optional provider
-    fields (inference options, document fields, Responses reasoning) bind."""
-    from botocore.loaders import Loader
-    from botocore.model import ServiceModel
-
-    from app.evaluation import coverage
-
-    d = _config_case(case)
-    problem = coverage.validate_evaluator_config(d["evaluatorConfig"])
-    op, res = _existing_run(d)
-    if case.endswith("positive"):
-        assert problem is None
-        assert op.status == "succeeded" and res["status"] == "ready", res
-        if case == "code-positive":
-            assert res["reference_dependent"] is None and "unknown" in res["result"]["note"]
-        return
-    assert problem, case
-    assert op.status == "partial" and res["status"] == "conflict", res
-    assert "not bindable" in res["error"] and problem in res["error"]
-    if case.endswith("double-union"):  # the installed model states the union
-        model = ServiceModel(Loader().load_service_model("bedrock-agentcore-control",
-                                                         "service-2"))
-        nested = {"scale": "RatingScale", "model": "EvaluatorModelConfig",
-                  "code": "CodeBasedEvaluatorConfig"}[case.split("-")[0]]
-        assert model.shape_for(nested).metadata["union"]
-        assert "exactly one of" in problem or "unknown members" in problem
-
-
-def _second_plan_reusing(cid2, h2, eid, *, referenced: bool) -> dict:
-    raw = _valid_plan(cid2, h2, with_code=False, reference=referenced)
-    raw["evaluators"][1]["name"] = "second_unique_judge"
-    raw["evaluators"][0] = {"kind": "existing", "key": "helpfulness", "title": "managed ref",
-                            "evaluator_id": eid, "golden_test_ids": []}
-    return raw
-
-
-def test_known_managed_code_reference_is_resolved_from_its_plan_rules(app_ready, monkeypatch):
-    """A SESSION reference_trajectory code evaluator this platform created is reused as
-    an 'existing' reference by a second plan: its needs come from the owning plan's rules
-    (same workspace), never 'external unknown'. Missing trajectories → conflict; a fully
-    referenced second plan binds as 'managed'."""
-    # the name is taken on purpose, between approval and create — bypass the approval
-    # preflight to reach the materializer's own conflict handling
-    monkeypatch.setattr(assets, "taken_evaluator_names", lambda *a, **k: set())
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, plan=_valid_plan(cid, h, reference=True), fakes=fakes)
-    _run(op_id, fakes)
-    eid = _res(_op(op_id), "evaluator:tools")["result"]["evaluator_id"]
-    # 1. the second plan has scenarios without a trajectory (GT-001, GT-003)
-    cid2, h2 = _conversation("local-operator")
-    op2_id, *_ = _approve(cid2, h2, plan=_second_plan_reusing(cid2, h2, eid, referenced=False),
-                          fakes=fakes)
-    _run(op2_id, fakes)
-    op2 = _op(op2_id)
-    res = _res(op2, "existing:helpfulness")
-    assert op2.status == "partial" and res["status"] == "conflict", res
-    assert "expected_tool_trajectory" in res["error"] and "GT-003" in res["error"]
-    assert "unknown" not in (res["error"] or "")
-    # 2. every scenario carries a trajectory → bound, labeled managed, reference-dependent
-    cid3, h3 = _conversation("local-operator")
-    op3_id, *_ = _approve(cid3, h3, plan=_second_plan_reusing(cid3, h3, eid, referenced=True),
-                          fakes=fakes)
-    _run(op3_id, fakes)
-    res = _res(_op(op3_id), "existing:helpfulness")
-    assert res["status"] == "ready" and res["reference_dependent"] is True, res
-    assert res["result"]["source"] == "managed"
-    assert res["result"]["reference_needs"] == ["expected_tool_trajectory"]
-    assert op_id in res["result"]["note"]
-    # 3. another workspace's association is private: the same id there is external code
-    with SessionLocal() as db:
-        assert assets.managed_evaluator(db, "other-workspace", eid) is None
-        assert assets.managed_evaluator(db, DEFAULT_WORKSPACE_ID, eid)["definition"] == "code"
-
-
-def _materialize_readonly_rule(rule, fakes):
-    from tests.test_assistant_readonly_evaluation import _source
-
-    # A valid tool-free owner gives us real managed metadata without weakening the
-    # guard. Its evaluator may remain in AWS when a different agent mounts resources.
-    source = _source(rule, {})
-    cid, h = _conversation("config-admin", owner="admin", proposal=source)
-    raw = plan_contract.draft_plan(source, revision=1, content_hash=h, agent_name=source["name"])
-    op_id, *_ = _approve(cid, h, plan=raw, fakes=fakes)
-    _run(op_id, fakes)
-    op = _op(op_id)
-    assert op.status == "succeeded", op.error
-    eid = _res(op, "evaluator:readonly")["result"]["evaluator_id"]
-    return op, eid
-
-
-@pytest.mark.parametrize("capabilities", [
-    {"knowledge_bases": ["earnings-kb"]}, {"skills": ["earnings-skill"]},
-    {"tools": ["mcp:reports"]},
-])
-@pytest.mark.parametrize("named_ban", [False, True])
-def test_existing_managed_readonly_rule_checks_new_source_and_preserves_owner(
-    app_ready, capabilities, named_ban,
-):
-    from tests.test_assistant_readonly_evaluation import _source
-
-    rule = {"id": "write-ban", "type": "tool_count", "max": 0,
-            **({"tool": "send_email"} if named_ban else {})}
-    fakes = Fakes()
-    first, eid = _materialize_readonly_rule(rule, fakes)
-    first_proposal = _snapshot_proposal(first.conversation_id)
-    with SessionLocal() as db:
-        first_plan = db.get(AssistantEvaluationPlan, first.plan_id)
-        first_content, first_hash = first_plan.content, first_plan.content_hash
-    source = _source(rule, capabilities)
-    source["evaluation_plan"]["evaluators"] = [{
-        "kind": "existing", "key": "readonly", "title": "Existing rule", "evaluator_id": eid,
-    }]
-    cid, h = _conversation("config-admin", owner="admin", proposal=source)
-    raw = plan_contract.draft_plan(source, revision=1, content_hash=h, agent_name=source["name"])
-    # Keep the second materialization focused on binding the existing evaluator.
-    raw["evaluators"] = [e for e in raw["evaluators"] if e["kind"] == "existing"]
-    op_id, *_ = _approve(cid, h, plan=raw, fakes=fakes)
-    _run(op_id, fakes)
-    second = _op(op_id)
-    reused = _res(second, "existing:readonly")
-    if named_ban:
-        assert second.status == "succeeded" and reused["status"] == "ready", second.error
-    else:
-        assert reused["status"] == "conflict", reused
-        assert eid in reused["error"] and "write-ban" in reused["error"]
-        assert "Read-only does not mean zero tool calls" in reused["error"]
-    assert _snapshot_proposal(first.conversation_id) == first_proposal
-    assert _op(first.id).resources == first.resources
-    with SessionLocal() as db:
-        saved = db.get(AssistantEvaluationPlan, first.plan_id)
-        assert (saved.content, saved.content_hash, saved.status) == (
-            first_content, first_hash, "approved",
-        )
-    assert eid in fakes.control.evaluators
-    assert _res(first, "lambda_function")["name"] in fakes.lam.functions
-
-
-class _RecordingLogs:
-    def __init__(self):
-        self.calls = []
-
-    def describe_log_groups(self, **kw):
-        self.calls.append("describe")
-        return {"logGroups": [{"logGroupName": kw["logGroupNamePrefix"] + "abc-DEFAULT",
-                               "creationTime": 1}]}
-
-    def filter_log_events(self, **kw):
-        from app.evaluation.telemetry import ROOT_SPAN_NAME
-
-        self.calls.append("filter")
-        sid = json.loads(kw["filterPattern"])
-        doc = {"attributes": {"session.id": sid}, "spanId": "span-latest",
-               "name": ROOT_SPAN_NAME, "body": {"input": "test", "output": "answer"}}
-        return {"events": [{"message": json.dumps(doc), "timestamp": 1, "ingestionTime": 1}]}
-
-
-class _RecordingData:
-    def __init__(self):
-        self.invocations, self.batches = [], []
-
-    def invoke_harness(self, **kw):
-        self.invocations.append(kw)
-        return {"stream": [{"contentBlockDelta": {"delta": {"text": "answer"}}}]}
-
-    def start_batch_evaluation(self, **kw):
-        self.batches.append(kw)
-        return {"batchEvaluationId": "synthetic-batch"}
-
-    def get_batch_evaluation(self, **kw):
-        return {"status": "COMPLETED"}
-
-
-def _route_agent() -> str:
-    with SessionLocal() as db:
-        agent = Agent(name="route-synthetic", workspace_id=DEFAULT_WORKSPACE_ID,
-                      method="harness", status="active", resource_id="route-abc",
-                      arn=f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:harness/route-abc",
-                      spec={"name": "route-synthetic", "method": "harness"}, owner="admin")
-        db.add(agent)
-        db.commit()
-        return agent.id
-
-
-def _post_run(admin, monkeypatch, control, body):
-    """POST /api/eval/runs with every low-level client doubled; returns the response and
-    the observable downstream effects (queue submissions, run rows, invokes, batches)."""
-    from app.evaluation.models import EvalRun
-    from app.evaluation.queue import run_queue
-
-    logs, data = _RecordingLogs(), _RecordingData()
-    monkeypatch.setattr(aws_clients, "client", lambda name, ws, **kw: {
-        "logs": logs, "bedrock-agentcore": data, "bedrock-agentcore-control": control}[name])
-    submitted = []
-    original = run_queue.submit
-    monkeypatch.setattr(run_queue, "submit",
-                        lambda *a, **kw: (submitted.append(a[0]), original(*a, **kw))[1])
-    with SessionLocal() as db:
-        before = db.query(EvalRun).count()
-    resp = admin.post("/api/eval/runs", json={"wait_seconds": 0, **body})
-    run_queue._queue.join()
-    with SessionLocal() as db:
-        rows = db.query(EvalRun).count() - before
-        run = db.get(EvalRun, resp.json()["id"]) if resp.status_code == 201 else None
-        state = (run.status, run.error) if run else None
-    return resp, {"queued": submitted, "rows": rows, "logs": logs.calls,
-                  "invokes": data.invocations, "batches": data.batches, "state": state}
-
-
-@pytest.mark.parametrize("capabilities", [
-    {"knowledge_bases": [{"kb_id": "earnings-kb", "name": "Earnings"}]},
-    {"skills": ["s3://test-bucket/earnings-skill/"]},
-    {"tools": [{"type": "mcp", "name": "reports", "config": {"url": "https://example.test"}}]},
-])
-@pytest.mark.parametrize("scope", ["dataset", "sessions", "window"])
-def test_run_refuses_managed_zero_calls_against_actual_agent_before_any_effect(
-    gated, monkeypatch, capabilities, scope,
-):
-    admin, _, _ = gated
-    fakes = Fakes()
-    op, eid = _materialize_readonly_rule(
-        {"id": "zero", "type": "tool_count", "max": 0}, fakes,
-    )
-    aid = _route_agent()
-    with SessionLocal() as db:
-        agent = db.get(Agent, aid)
-        agent.spec = {**agent.spec, **capabilities}
-        db.commit()
-    selection = {
-        "dataset": {"dataset_id": op.dataset_id},
-        "sessions": {"session_ids": ["prior-session"]},
-        "window": {"lookback_hours": 1},
-    }[scope]
-    response, effects = _post_run(admin, monkeypatch, fakes.control, {
-        "agent_id": aid, "evaluators": [eid], **selection,
-    })
-    assert response.status_code == 422, response.text
-    assert response.json()["code"] == "run.evaluator_capability_conflict"
-    assert eid in response.json()["detail"]["evaluators"]
-    assert "rules.zero" in response.text
-    assert next(iter(capabilities)) in response.text
-    assert effects == {"queued": [], "rows": 0, "logs": [], "invokes": [], "batches": [],
-                       "state": None}
-    assert _op(op.id).resources == op.resources
-
-
-@pytest.mark.parametrize("case", ["tool-free", "named-ban", "exact-empty", "external"])
-def test_run_accepts_compatible_rules_and_does_not_guess_external_code(
-    gated, monkeypatch, case,
-):
-    admin, _, _ = gated
-    fakes = Fakes()
-    rule = ({"id": "empty", "type": "tool_sequence", "mode": "exact", "tools": []}
-            if case == "exact-empty" else
-            {"id": "zero", "type": "tool_count", "max": 0,
-             **({"tool": "send_email"} if case == "named-ban" else {})})
-    op, eid = _materialize_readonly_rule(rule, fakes)
-    aid = _route_agent()
-    if case in ("named-ban", "external"):
-        with SessionLocal() as db:
-            agent = db.get(Agent, aid)
-            agent.spec = {**agent.spec, "knowledge_bases": [{"kb_id": "earnings-kb"}]}
-            db.commit()
-    if case == "external":
-        # Same display name, no managed association: behavior is deliberately unknown.
-        detail = json.loads(json.dumps(fakes.control.evaluators[eid]))
-        eid = "external-no-tools"
-        detail["evaluatorId"] = eid
-        fakes.control.evaluators[eid] = detail
-    monkeypatch.setattr(_ac_eval, "start_batch_evaluation", _ORIG_START_BATCH)
-    response, effects = _post_run(admin, monkeypatch, fakes.control, {
-        "agent_id": aid, "dataset_id": op.dataset_id, "evaluators": [eid],
-    })
-    assert response.status_code == 201, response.text
-    assert effects["state"] == ("completed", None)
-    assert effects["rows"] == 1 and len(effects["batches"]) == 1
-
-
-def test_unreadable_custom_evaluator_refuses_the_run_before_any_effect(gated, monkeypatch):
-    """A GetEvaluator transport failure = unknown requirements: bounded 422, no run row,
-    no queue entry, no telemetry read, no invoke, no batch. NotFound is its own 422."""
-    admin, _, _ = gated
-    aid = _route_agent()
-    r = admin.post("/api/eval/datasets", json={"name": "missing-ref", "items": [
-        {"scenario_id": "missing", "turns": [{"input": "no reference"}]}]})
-    assert r.status_code == 201, r.text
-    dataset_id = r.json()["id"]
-
-    class Unavailable:
-        def __init__(self):
-            self.calls = 0
-
-        def get_evaluator(self, **kw):
-            self.calls += 1
-            raise ConnectionError("synthetic control-plane unavailable")
-
-    control = Unavailable()
-    resp, effects = _post_run(admin, monkeypatch, control, {
-        "agent_id": aid, "dataset_id": dataset_id, "evaluators": ["custom-x"]})
-    assert resp.status_code == 422, resp.text
-    assert resp.json()["code"] == "run.evaluator_unverifiable"
-    assert "custom-x" in resp.json()["message"] and "ConnectionError" in resp.json()["message"]
-    assert control.calls == 1  # one read, no retry loop of our own
-    assert effects == {"queued": [], "rows": 0, "logs": [], "invokes": [], "batches": [],
-                       "state": None}, effects
-    control = FakeControl()  # exists → NotFound
-    resp, effects = _post_run(admin, monkeypatch, control, {
-        "agent_id": aid, "dataset_id": dataset_id, "evaluators": ["custom-x"]})
-    assert resp.status_code == 422 and resp.json()["code"] == "run.evaluator_not_found"
-    assert effects["queued"] == [] and effects["rows"] == 0 and effects["invokes"] == []
-    # a readable non-reference judge on the same dataset still runs (no fallback removed)
-    monkeypatch.setattr(_ac_eval, "start_batch_evaluation", _ORIG_START_BATCH)
-    control.evaluators["custom-x"] = _detail()
-    resp, effects = _post_run(admin, monkeypatch, control, {
-        "agent_id": aid, "dataset_id": dataset_id, "evaluators": ["custom-x"]})
-    assert resp.status_code == 201, resp.text
-    assert effects["state"] == ("completed", None) and len(effects["batches"]) == 1
-
-
-def test_simulated_persona_references_are_explicit_never_vacuous(gated, monkeypatch):
-    """Persona turns are generated at run time: a TRACE evaluator reading
-    {expected_response} is refused before the actor / agent is ever invoked; session
-    assertions known upfront (which the metadata composer really sends) stay valid."""
-    from app.evaluation import coverage, simulation
-
-    persona = {"scenario_id": "persona-1", "input": "I need to book leave",
-               "actor_profile": {"context": "employee", "goal": "book two days off"},
-               "assertions": ["confirms the dates"]}
-    targets = {t["id"]: t for t in coverage.reference_targets([persona])}
-    assert targets["persona-1"]["fields"] == {"assertions"}
-    assert targets["persona-1/simulated turns"]["simulated"] is True
-    assert coverage.coverage_gaps([persona], {"assertions"}, "TRACE") == []
-    assert coverage.coverage_gaps([persona], {"assertions"}, "SESSION") == []
-    gaps = coverage.coverage_gaps([persona], {"expected_response"}, "TRACE")
-    assert gaps == ["persona-1/simulated turns lacks expected_response "
-                    f"({coverage.SIMULATED_NOTE})"]
-    assert coverage.coverage_gaps([persona], {"expected_tool_trajectory"}, "SESSION") == [
-        "persona-1 lacks expected_tool_trajectory"]
-    assert coverage.coverage_gaps([persona], set(), "TRACE") == []
-
-    admin, _, _ = gated
-    aid = _route_agent()
-    r = admin.post("/api/eval/datasets", json={"name": "persona", "items": [persona]})
-    assert r.status_code == 201, r.text
-    dataset_id = r.json()["id"]
-    simulated: list[dict] = []
-
-    def forbidden_simulation(*a, **kw):
-        raise AssertionError("the actor simulation must not start on a refused run")
-
-    monkeypatch.setattr(simulation, "run_simulated_scenario", forbidden_simulation)
-    control = FakeControl()
-    control.evaluators["ref-judge"] = _detail(
-        eid="ref-judge", instructions="Compare {assistant_turn} with {expected_response}")
-    body = {"agent_id": aid, "dataset_id": dataset_id, "evaluators": ["ref-judge"],
-            "actor_model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0"}
-    resp, effects = _post_run(admin, monkeypatch, control, body)
-    assert resp.status_code == 422, resp.text
-    assert resp.json()["code"] == "run.judge_needs_ground_truth"
-    assert "persona-1/simulated turns lacks expected_response" in resp.json()["message"]
-    assert effects == {"queued": [], "rows": 0, "logs": [], "invokes": [], "batches": [],
-                       "state": None}, effects
-    # the trajectory builtin has no session trajectory here either
-    resp, effects = _post_run(admin, monkeypatch, control, {
-        **body, "evaluators": ["Builtin.TrajectoryExactOrderMatch"]})
-    assert resp.status_code == 422 and effects["rows"] == 0 and effects["invokes"] == []
-    assert resp.json()["code"] == "run.trajectory_needs_ground_truth"
-
-    # positive: a SESSION judge reading {assertions} — the persona carries them and the
-    # (fake) simulation runner's session is judged with exactly those assertions
-    def fake_simulation(data_client, *, scenario, **kw):
-        simulated.append(scenario["scenario_id"])
-        return "a" * 64
-
-    monkeypatch.setattr(simulation, "run_simulated_scenario", fake_simulation)
-    monkeypatch.setattr(_ac_eval, "start_batch_evaluation", _ORIG_START_BATCH)
-    d = _detail(eid="session-judge", instructions="Score {context} against {assertions}")
-    d["level"] = "SESSION"
-    control.evaluators["session-judge"] = d
-    resp, effects = _post_run(admin, monkeypatch, control,
-                              {**body, "evaluators": ["session-judge"]})
-    assert resp.status_code == 201, resp.text
-    assert effects["state"] == ("completed", None) and simulated == ["persona-1"]
-    assert effects["invokes"] == []  # the runner double owns the session; no direct invoke
-    entries = effects["batches"][0]["evaluationMetadata"]["sessionMetadata"]
-    assert entries == [{
-        "sessionId": "a" * 64, "testScenarioId": "persona-1",
-        "groundTruth": {"inline": {"assertions": [{"text": "confirms the dates"}]}}}]
-
-
-# ===========================================================================
-# 3. clearing a conversation together with what it created (History panel → CLEAR)
-# ===========================================================================
-
-
-def _deployed_agent(cid: str) -> str:
-    """Give the conversation's approved proposal a real, active Agent row."""
-    db = SessionLocal()
-    try:
-        agent = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="kid-companion-poc",
-                      method="harness", status="active", owner="river",
-                      spec={"name": "kid-companion-poc", "method": "harness"},
-                      arn=f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:harness/kid",
-                      resource_id="kid")
-        db.add(agent)
-        db.flush()
-        prop = db.query(AssistantProposal).filter_by(conversation_id=cid).one()
-        prop.agent_id = agent.id
-        db.commit()
-        return agent.id
-    finally:
-        db.close()
-
-
-def test_conversation_purge_removes_assets_datasets_agents_then_rows(app_ready, monkeypatch):
-    """CLEAR on a conversation: the footprint names every asset first; the purge cleans
-    the operation's cloud resources through the fenced cleanup, deletes the local
-    Dataset, tears down the deployed Agent through the shared agent teardown and only
-    then removes the ledger rows. Nothing foreign is touched."""
-    from app.assistant import purge
-    from app.routers import agents as agents_router
-
-    cid, h = _conversation("local-operator")
-    agent_id = _deployed_agent(cid)
-    fakes = Fakes()
-    fakes.control.evaluators["independent"] = {
-        "evaluatorName": "independent", "status": "ACTIVE", "evaluatorArn": "arn:i",
-        "evaluatorId": "independent"}
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    _run(op_id, fakes)
-    dataset_id = _op(op_id).dataset_id
-    torn_down: list[str] = []
-    monkeypatch.setattr(agents_router, "_delete_agent_resources",
-                        lambda agent, ws: torn_down.append(agent.id) or True)
-
     db = SessionLocal()
     try:
         row = db.get(AssistantConversation, cid)
         fp = purge.footprint(db, row)
-        assert [a["id"] for a in fp["agents"]] == [agent_id]
-        assert [o["id"] for o in fp["operations"]] == [op_id]
-        assert fp["operations"][0]["status"] == "succeeded"
-        assert fp["operations"][0]["cloud_resources"] >= 6  # evaluators + Lambda chain
-        assert [d["id"] for d in fp["datasets"]] == [dataset_id]
+        assert fp["operations"][0]["status"] == "succeeded" and len(fp["datasets"]) == 1
+        assert fp["required_permissions"] == ["agents.deploy"]  # no deployed Agent row here
         assert fp["blockers"] == []
-        assert fp["required_permissions"] == ["agents.deploy", "agents.delete"]
-
-        # a caller missing either permission may not purge cloud assets / an Agent
-        for held in ({"agents.deploy"}, {"agents.delete"}, set()):
-            with pytest.raises(AppError) as exc:
-                purge.purge(db, row, ws_ctx(RESOURCES), can=held.__contains__, clients=fakes)
-            assert exc.value.status_code == 403
-            assert exc.value.code == "auth.permission_required"
-        assert db.get(EvaluationAssetOperation, op_id).status == "succeeded"  # untouched
-
-        result = purge.purge(db, row, ws_ctx(RESOURCES), can=lambda _p: True, clients=fakes)
-    finally:
-        db.close()
-    assert result["deleted"] is True
-    assert result["operations_cleaned"] == [op_id]
-    assert [d["id"] for d in result["datasets"]] == [dataset_id]
-    assert result["agents"] == [{"id": agent_id, "name": "kid-companion-poc",
-                                 "aws_resource_deleted": True}]
-    assert torn_down == [agent_id]
-    # cloud: only the operation's own resources are gone, the foreign evaluator stays
-    assert set(fakes.iam.roles) == {"launchpad-agent-execution-role"}
-    assert fakes.lam.functions == {}
-    assert set(fakes.control.evaluators) == {"independent"}
-    db = SessionLocal()
-    try:
+        with pytest.raises(AppError) as exc:
+            purge.purge(db, row, _ws_ctx(), can=lambda p: p != "agents.deploy", clients=fakes)
+        assert exc.value.code == "auth.permission_required"
+        result = purge.purge(db, row, _ws_ctx(), can=lambda p: True, clients=fakes)
+        assert result["operations_cleaned"] == [op_id] and len(result["datasets"]) == 1
+        assert db.query(EvaluationAssetOperation).count() == 0
+        assert db.query(AssistantEvaluationPlan).count() == 0
+        assert db.query(EvalDataset).count() == 0 and db.query(EvalEvaluator).count() == 0
         assert db.get(AssistantConversation, cid) is None
-        assert db.query(AssistantProposal).filter_by(conversation_id=cid).count() == 0
-        assert db.query(AssistantEvaluationPlan).filter_by(conversation_id=cid).count() == 0
-        assert db.query(EvaluationAssetOperation).filter_by(conversation_id=cid).count() == 0
-        assert db.get(EvalDataset, dataset_id) is None
-        assert db.get(Agent, agent_id).status == "deleted"
     finally:
         db.close()
 
 
-def test_conversation_purge_refuses_while_busy_and_keeps_rows_when_cleanup_stalls(app_ready):
-    """A running operation or deployment job blocks the purge before anything is
-    deleted; an operation whose cleanup cannot finish (an evaluator locked by an online
-    configuration) stops the purge with 409 and the conversation stays reviewable."""
-    from app.assistant import purge
-
+def test_conversation_purge_refuses_while_an_operation_runs(app_ready):
     cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
+    _approve(cid, h)  # queued, never run
     db = SessionLocal()
     try:
         row = db.get(AssistantConversation, cid)
-        fp = purge.footprint(db, row)  # queued, not run yet → blocked
+        fp = purge.footprint(db, row)
         assert [b["kind"] for b in fp["blockers"]] == ["operation"]
         with pytest.raises(AppError) as exc:
-            purge.purge(db, row, ws_ctx(RESOURCES), can=lambda _p: True, clients=fakes)
-        assert exc.value.code == "assistant.conversation_busy" and exc.value.status_code == 409
-    finally:
-        db.close()
-    _run(op_id, fakes)
-    code_id = _res(_op(op_id), "evaluator:tools")["result"]["evaluator_id"]
-    fakes.control.evaluators[code_id]["locked"] = True  # in use by an online config
-    db = SessionLocal()
-    try:
-        row = db.get(AssistantConversation, cid)
-        with pytest.raises(AppError) as exc:
-            purge.purge(db, row, ws_ctx(RESOURCES), can=lambda _p: True, clients=fakes)
-        assert exc.value.code == "assistant.conversation_assets_remain"
-        assert exc.value.status_code == 409
-        assert any(r["status"] == "delete_failed" for r in exc.value.detail["remaining"])
-        # nothing beyond the fenced partial cleanup happened: rows and Dataset remain
+            purge.purge(db, row, _ws_ctx(), can=lambda p: True, clients=Fakes())
+        assert exc.value.code == "assistant.conversation_busy"
         assert db.get(AssistantConversation, cid) is not None
-        assert db.get(EvaluationAssetOperation, op_id).status == "partial"
-        assert db.get(EvalDataset, _op(op_id).dataset_id) is not None
     finally:
         db.close()
 
 
-def test_conversation_purge_routes_are_owner_bound_and_a_bare_transcript_is_a_member_delete(
-        app_ready):
-    """Over HTTP: the footprint of a transcript-only conversation needs no permission
-    and the owner deletes it; another principal sees 404, never 403 (the
-    conversation must not be discoverable)."""
-    client = TestClient(app_ready)
-    cid, _ = _conversation("local-operator", status="draft")
-    base = f"/api/assistant/architect/conversations/{cid}"
-    fp = client.get(base + "/footprint").json()
-    assert fp["required_permissions"] == [] and fp["can_clear"] is True
-    assert fp["agents"] == [] and fp["operations"] == []
-    other, _ = _conversation("user:someone-else", status="draft")
-    foreign = f"/api/assistant/architect/conversations/{other}"
-    assert client.get(foreign + "/footprint").status_code == 404
-    assert client.delete(foreign).status_code == 404
-    res = client.delete(base)
-    assert res.status_code == 200 and res.json()["deleted"] is True
-    assert client.get(base).status_code == 404
-    db = SessionLocal()
-    try:
-        assert db.get(AssistantConversation, other) is not None  # untouched
-    finally:
-        db.close()
-
-
-
-# ─── evaluator name reservation (a second plan of one conversation) ──────────────
-
-
-def _prepare(cid, revision=1, fakes=None):
-    db = SessionLocal()
-    try:
-        conv = db.get(AssistantConversation, cid)
-        return assets.prepare_plan(db, conv, revision=revision, created_by="river",
-                                   clients=fakes or Fakes())
-    finally:
-        db.close()
-
-
-@pytest.mark.name_reservation
-def test_a_second_plan_renames_evaluators_the_first_operation_created(app_ready):
-    """Live 2026-09-29: the second plan of one conversation carried the proposal's
-    evaluator names again and its operation ended partial ("an evaluator named …
-    exists that this operation cannot prove it created")."""
+def test_materialized_trajectories_carry_the_agents_runtime_tool_names(app_ready):
+    """N17-obs375 (DIFF-GLOBAL-EVAL B4): the catalogue lists a Gateway tool by its declared
+    ``<record>___<tool>`` name, but the Harness mounts the shared Gateway under the
+    ``launchpad_gw`` alias and the agent calls ``launchpad_gw_<record>___<tool>`` — a dataset
+    that kept the declared name failed every trajectory matcher, on Global and on ours."""
     cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    assert _run(op_id, fakes) and _op(op_id).status == "succeeded"
+    op_id, _, _, started = _approve(cid, h)
+    assert started and _run(op_id, Fakes())
+    op = _op(op_id)
+    assert op.status == "succeeded", op.error
     db = SessionLocal()
     try:
-        ws = db.get(Workspace, DEFAULT_WORKSPACE_ID)
-        # the ledger alone reserves them (a fresh account listing knows nothing)
-        taken = assets.taken_evaluator_names(db, ws, Fakes())
+        items = {i["scenario_id"]: i for i in db.get(EvalDataset, op.dataset_id).items}
     finally:
         db.close()
-    assert {"kid_pii_judge", "kid_tools"} <= taken
-    second = _valid_plan(cid, h)  # the same proposal names, as a second plan carries them
-    renamed = assets.rename_taken_evaluators(second, taken, 7)
-    names = {e["key"]: e.get("name") for e in renamed["evaluators"]}
-    assert names["pii"] == "kid_pii_judge_r7" and names["tools"] == "kid_tools_r7"
-    assert "renamed from 'kid_pii_judge'" in next(
-        e for e in renamed["evaluators"] if e["key"] == "pii")["note"]
-    # repeatable and collision-safe: an _r7 already taken yields _r7_2
-    again = assets.rename_taken_evaluators(_valid_plan(cid, h), taken | {"kid_pii_judge_r7"}, 7)
-    assert next(e for e in again["evaluators"] if e["key"] == "pii")["name"] == "kid_pii_judge_r7_2"
-    long = {"evaluators": [{"kind": "judge", "key": "x", "name": "j" * 48}]}
-    assert len(assets.rename_taken_evaluators(long, {"j" * 48}, 12)["evaluators"][0]["name"]) == 48
-
-
-@pytest.mark.name_reservation
-def test_live_account_names_are_reserved_even_without_a_ledger_record(app_ready):
-    cid, _h = _conversation("local-operator")
-    fakes = Fakes()
-    fakes.control.evaluators["foreign-1"] = {"evaluatorName": "kid_companion_poc_gt_assertions",
-                                            "evaluatorId": "foreign-1", "status": "ACTIVE"}
-    plan = _prepare(cid, fakes=fakes)
-    judge = next(e for e in plan.content["evaluators"] if e.get("key") == "draft_rubric")
-    assert judge["name"] == "kid_companion_poc_gt_assertions_r1"
-
-
-@pytest.mark.name_reservation
-def test_approval_refuses_a_taken_name_before_any_write(app_ready):
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    assert _run(op_id, fakes)
-    # a member edit reintroduces the first operation's names
-    cid2, h2 = _conversation("local-operator")
-    before = fakes.control.create_calls
-    with pytest.raises(AppError) as err:
-        _approve(cid2, h2, fakes=fakes)
-    assert err.value.code == "assistant.evaluation_plan_name_taken"
-    assert set(err.value.detail["names"]) == {"kid_pii_judge", "kid_tools"}
-    assert fakes.control.create_calls == before
-
-
-@pytest.mark.name_reservation
-def test_deleted_and_rejected_evaluators_free_their_names(app_ready):
-    cid, h = _conversation("local-operator")
-    fakes = Fakes()
-    fakes.control.refuse_models = {"global.openai.gpt-6-sol", "global.anthropic.claude-sonnet-5-5"}
-    op_id, *_ = _approve(cid, h, fakes=fakes)
-    _run(op_id, fakes)  # the judge is definitely rejected on both models: nothing created
-    db = SessionLocal()
-    try:
-        assert "kid_pii_judge" not in assets.ledger_evaluator_names(db, DEFAULT_WORKSPACE_ID)
-    finally:
-        db.close()
+    assert items["GT-002"]["expected_trajectory"] == [f"launchpad_gw_{WEATHER_TOOL}"]

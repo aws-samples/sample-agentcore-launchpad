@@ -14,10 +14,12 @@ Vendored subset of https://github.com/xiehust/SkillEvalOpt_Studio
 ## Subset (what was copied)
 
 `scripts/{evaluate_skill,train,generate_tasks}.py`, `configs/{_base_,skilleval}/`,
-`deploy/agentcore/{Dockerfile,codex-config.toml}`, and the `skillopt/` package minus: all benchmark
+`deploy/agentcore/Dockerfile`, and the `skillopt/` package minus: all benchmark
 envs (`envs/*` except `base.py`, `__init__.py`, `skilleval/`), `scheduler/`
 (unused placeholder), `engine/plugin_trainer.py`, `evaluation/plugin_gate.py`,
-`model/{codex_backend,router}.py` (unreferenced by the vendored entry points).
+`model/{codex_backend,router}.py` (unreferenced by the vendored entry points), and —
+since patch 7 (D16) — `model/claude_backend.py` plus upstream's `deploy/agentcore/
+codex-config.toml` (the Claude Code / Codex executors are gone from this tree).
 Also copied (2026-08-18): `data/skilleval_demo/` — the self-authored demo
 skills (`logtriage_skill`, `logtriage_skill_v2`, `report_skill/initial.md`) and
 demo task sets (`logtriage_tasks/`, `report_tasks/`, `xlsx_tasks.json`), seeded
@@ -41,30 +43,32 @@ zero-key: default credential chain (instance role), no endpoint/bearer/CLI.
 Wired in `model/__init__.py` (imports, four chat dispatch branches, token-summary
 merge, reset/effort/deployment fan-outs), `model/backend_config.py` (optimizer +
 target allow-lists), `model/common.py` (aliases `bedrock`/`bedrock_chat`, default
-model `global.anthropic.claude-opus-5`). All edits carry a `# LAUNCHPAD PATCH`
+model `global.zai.glm-5.3` since D10/D16 — the CN judge/optimizer default).
+Since D16 the client pins `signature_version="bearer"` whenever
+`AWS_BEARER_TOKEN_BEDROCK` is present: the CN host and worker reach Global Bedrock
+with an API key, never a SigV4 identity (docs/cn/interfaces/model-credential.md). All edits carry a `# LAUNCHPAD PATCH`
 marker. `tools`/`tool_choice`/`return_message` raise `NotImplementedError`
 (no optimizer-role caller in this subset passes them).
 
-### 2. `deploy/agentcore/Dockerfile` rework
+### 2. `deploy/agentcore/Dockerfile` rework (D16: OpenCode worker image)
 
-Upstream copied host `claude`/`codex` binaries into the image. This variant
-installs pinned CLIs inside the image (reproducible, host-independent): claude
-via the official installer (`ARG CLAUDE_CLI_VERSION=2.1.283`) and codex via the
-official standalone GitHub release binary (`ARG CODEX_CLI_VERSION=0.155.1`,
-asset `codex-aarch64-unknown-linux-musl.tar.gz`). The image is built by
-Launchpad's CodeBuild ARM64 pipeline from a context assembled in
-`backend/app/skill_lab/worker_build.py` (upstream's `build_and_push.sh` and
-`scripts/agentcore/setup_infra.py` are not vendored).
-
-`codex-home/` is staged by the assembler, not committed wholesale:
-`deploy/agentcore/codex-config.toml` (this tree, Launchpad variant — same
-`amazon-bedrock-runtime` provider with a `global.openai.gpt-6-sol` default — upstream uses the Mantle `amazon-bedrock` provider with `openai.gpt-5.6-sol`; the runtime provider needs codex >= 0.155) plus
-`model-catalogs/bedrock-models.json` read from the backend host's
-`~/.codex/model-catalogs/` at context-assembly time, with upstream's `{}`
-fallback when absent. The catalog is deliberately never committed: it embeds
-OpenAI-proprietary `base_instructions` prompt text, which must not enter this
-public repository. Both blobs are part of the content-addressed image tag, so a
-host catalog change rolls the worker.
+Upstream copied host `claude`/`codex` binaries into the image; the first Launchpad
+variant installed pinned Claude Code / Codex CLIs. Since D16 the image carries ONE
+exec agent: the OpenCode CLI, installed as the single arm64 binary inside the npm
+platform package `opencode-linux-arm64` (`ARG OPENCODE_VERSION=1.18.35`, the version
+the N13 spike validated in an arm64 container; the tarball's sha256 is pinned beside it
+and checked at build time) fetched from the China npm mirror — no Node runtime, no
+npm. Base image, apt mirror, pip index and npm registry are build args rendered by
+`backend/app/skill_lab/worker_build.py` from Settings (`base_image_mirror_*`,
+`apt_mirror`, `pip_index_url`, `npm_registry`), so a China build never leaves the
+mirrors; nothing is pulled from `claude.ai`, GitHub, Docker Hub or `public.ecr.aws`. No model
+region, credential or key is baked in: the runtime env carries `AWS_REGION`,
+`SKILLOPT_OPENCODE_BASE_URL` (Bedrock's OpenAI-compatible root, built with the
+partition helper) and `LAUNCHPAD_MODEL_CREDENTIAL`; the worker exchanges its
+Runtime-injected workload token for the Global Bedrock API key per session (patch 9).
+Built by Launchpad's CodeBuild ARM64 pipeline from the assembled context (upstream's
+`build_and_push.sh` / `scripts/agentcore/setup_infra.py` are not vendored); the
+codex-home staging of the first variant is gone with the executor.
 
 ### 3. `requirements-launchpad.txt` (authored, replaces upstream `requirements.txt`)
 
@@ -88,27 +92,16 @@ verdicts are identical either way (checked against the real venv interpreter).
 That is what lets hermetic backend tests run this validator with a bare
 interpreter instead of requiring the provisioned venv.
 
-### 5. `skillopt/model/codex_harness.py` — judge CODEX_HOME seeding
+### 5. `skillopt/model/codex_harness.py` — reduced to the backend-agnostic harness (D16)
 
-`_run_codex_judge_cli` runs codex with an isolated, initially-empty
-`CODEX_HOME` — fail-closed against user config/rules/session leakage, but it
-also pins the judge client to codex's default `openai` provider (needs
-`OPENAI_API_KEY`). The patch copies top-level files from the directory named
-by `SKILLOPT_JUDGE_CODEX_HOME` (when set) into the fresh home before launch,
-so a Bedrock-only deployment can seed `config.toml` (amazon-bedrock-runtime provider,
-us-east-1, web_search disabled, multi_agent_v2 off) plus the model catalog.
-Isolation is otherwise unchanged; the env var unset = upstream behavior. The
-seed is materialized per job submit by the launchpad runner
-(`ensure_judge_codex_home`), never committed (the catalog embeds proprietary
-model instructions).
-
-Second part of the same patch: the judge's Artifact MCP server is registered
-with `default_tools_approval_mode="approve"`. codex >= 0.147 gates MCP tool
-calls behind an approval prompt unless the tool is annotated read-only, and
-the judge's `approval_policy="never"` cancels every prompt — verdicts then
-report "Artifact MCP inventory 调用被取消" with zero evidence (live-reproduced
-2026-08-19). "approve" is codex's pre-approved mode; the server is required,
-networkless and bwrap-sandboxed, so the prompt protects nothing here.
+The first Launchpad variant patched this module's Codex judge transport (seeded
+`CODEX_HOME`, pre-approved MCP tools). Since D16 the Claude Code / Codex executors —
+CLI and SDK paths, both judge transports, structured-output plumbing, trace parsers
+— are deleted, not flagged. What remains is everything that is not about a
+particular CLI: `prepare_workspace` / `render_skill_md`, the prompt wrappers,
+`_persist_artifacts`, `extract_exec_usage` (now fed by the OpenCode usage line) and
+`extract_exec_failure`; `run_target_exec` dispatches to the OpenCode backend
+(patch 7). The module keeps its historical name so the import graph stays diffable.
 
 ### 6. `skillopt/envs/skilleval/evaluator.py` — text-judge output evidence
 
@@ -121,6 +114,65 @@ This lets ordinary reports include their findings and next actions beyond the
 old 2,000-character preview. Scoring instructions and verdict parsing are unchanged.
 Markdown task outputs should use chat/auto judging; the binary artifact inspector
 does not support reading Markdown bodies.
+
+### 7. `skillopt/model/opencode_backend.py` (new) — the one exec backend (D16 / N13)
+
+The single module that knows OpenCode: `ExecutorBackend` protocol + `BACKEND`,
+`run_opencode_exec` (same keyword surface as the executor it replaces, so
+`envs/skilleval/rollout.py`, `judge_worker.py`, `scripts/generate_tasks.py` and
+`model/agentcore_worker.py` call it unchanged), the headless command
+(`opencode run --format json --model bedrock-openai/<id> [--agent skillopt-judge]`),
+the per-run `opencode.json` (custom `@ai-sdk/openai-compatible` provider at
+`$SKILLOPT_OPENCODE_BASE_URL`, API key referenced as
+`{env:AWS_BEARER_TOKEN_BEDROCK}` — never written to disk; permission block
+`edit allow|deny / bash allow / webfetch deny`), the restricted judge agent (every
+built-in tool off, exactly one required stdio MCP server, only its allowlisted tools
+on, no project instructions, trusted system prompt as a primary agent), and the
+tolerant `--format json` event-stream parser (`text`, `tool_use`/`tool`,
+`step_start`/`step_finish` tokens, `error`) producing the transcript the pipelines
+read (final message, tool calls, usage). The persisted raw carries one
+claude-key-shaped usage line so `extract_exec_usage` is unchanged. Wiring:
+`backend_config.py` (exec set `{opencode_exec}`, re-exports), `common.py` (aliases
+`opencode`/`opencode_exec`, default `global.moonshotai.kimi-k3`), `model/__init__.py`
+(legacy `set_backend("opencode")`), `agentic_judge.py` (`_SUPPORTED_BACKENDS`,
+`JUDGE_ALLOWED_TOOLS` as `<server>_<tool>`, the preflight probes the opencode
+binary), `adapter.py` / `configs/*.yaml` / `scripts/*.py` / `config.py` /
+`engine/trainer.py` (`opencode_exec_path|effort` replace the codex/claude knobs),
+`gradient/reflect.py` (the codex-only trace blocks are gone). Exact CLI flags, the
+event schema and the version pin are what the N13 spike confirms
+(`docs/cn/reports/n13-opencode-spike.md`); the hermetic fixtures under
+`backend/tests/fixtures/opencode/` are replaced by its captures.
+`run_opencode_exec(home=…)` → `write_opencode_config` / `subprocess_env` / `job_home`
+accept an explicit per-job home (N10v4-bug1): the AgentCore worker puts the OpenCode XDG
+dirs on local container disk instead of beside a work_dir on the session-storage mount,
+where sqlite locking fails; host-side callers pass nothing and keep `.opencode-home`.
+
+### 8. `skillopt/model/agentcore_runner.py` — runtimeUserId + cancel marker (D16)
+
+Every `InvokeAgentRuntime` carries `runtimeUserId` (`SKILLOPT_AGENTCORE_RUNTIME_USER_ID`,
+default `skill-lab`) so the Runtime injects the workload access token the worker
+needs for the model credential; the remote-exec config no longer strips
+`use_sdk`/`profile` (gone); an interrupted wait writes `<job_prefix>/cancel` and
+stops the session (cheap alignment with the N12 evaluation-worker protocol).
+
+### 9. `skillopt/model/agentcore_worker.py` — Identity-resolved key + job markers (D16)
+
+`resolve_model_api_key()` mirrors the runtime template's `_resolve_bedrock_api_key()`
+(workload token → `GetResourceApiKey` on `LAUNCHPAD_MODEL_CREDENTIAL`) and the key
+is exported as `AWS_BEARER_TOKEN_BEDROCK` for the CLI child only. The worker writes
+`status.json` on start and `done.json` beside `result.json` at the end, and honours a
+`cancel` marker before launching the CLI. Ping reports the OpenCode version and
+whether the base URL / credential env are set.
+
+### 10. Infrastructure vs exec failure classification (N10v3-bug3)
+
+`agentcore_worker` tags `result.json` / `done.json` with `error_kind: infrastructure|exec`
+(set-up / model-key failures vs the CLI raising); `agentcore_runner._raise_for_remote_error`
+turns the former into `AgentCoreRunnerError` and `envs/skilleval/rollout.py::_rollout_one`
+catches it as an **invalid row** (`score_valid=False`, `error_type="infrastructure"`) instead
+of the scored `artifact_failure` zero; exec failures keep upstream semantics. The worker's
+background job also runs under `contextvars.copy_context()` (N10v3-bug2). Upstream has no
+remote worker, so there is nothing to converge with.
 
 ## Known v1 limitations (deliberate)
 
@@ -137,9 +189,12 @@ does not support reading Markdown bodies.
 - Worker image has no ECR scan gate (unlike the agent-container deploy path):
   it is platform-owned bootstrap infrastructure, and a base-image CVE finding
   would otherwise block `make bootstrap`. Revisit if the posture changes.
-- Runtime env deliberately omits upstream's `ANTHROPIC_SMALL_FAST_MODEL` pin:
-  the claude CLI version is pinned in the image, so its default small-fast
-  model is stable, and the live smoke passes without the extra pin.
+- The agentic judge on the HOST shells out to `opencode` as well (routed by
+  `backend/app/skill_lab/runner.py`); the host must have the CLI on PATH (the
+  status endpoint reports `judge_opencode_ready`). OpenCode has no structured-output
+  flag: the verdict schema is requested in the prompt and parsed by `verdict.py`.
+- `opencode.json` is written into each per-task work_dir (it is the CLI's project
+  config) and is therefore part of the rollout manifest diff baseline like task.md.
 
 ## Binary task assets
 

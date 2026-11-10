@@ -1,0 +1,3435 @@
+{
+ "_provenance": "N17-obs439: real aws/spans records (filter-log-events export, research17, 2026-10-23) of two traces — a Kimi K3 trace whose Strands wrapper chat spans carry cache reads AND writes, and a GLM-5.3 trace with cache reads; the aws.bedrock provider spans carry input/output only. Trimmed to the span skeleton and the gen_ai / session / openinference attributes.",
+ "traces": {
+  "kimi": [
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "db7ecb9b7354492e",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.ListObjectsV2",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574801822497045,
+    "endTimeUnixNano": 1792574801871042911,
+    "durationNano": 48545866,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "2469dcc435c952ce",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574801872282192,
+    "endTimeUnixNano": 1792574801893198036,
+    "durationNano": 20915844,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "8ceecd7afe0fee56",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574801893797029,
+    "endTimeUnixNano": 1792574801918635777,
+    "durationNano": 24838748,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "358d9383e09f40df",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574801920257496,
+    "endTimeUnixNano": 1792574801931312806,
+    "durationNano": 11055310,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "b754dbad7d02dfc7",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574801931922466,
+    "endTimeUnixNano": 1792574801957400297,
+    "durationNano": 25477831,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "9ecc0609e51b2e8e",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574801958865020,
+    "endTimeUnixNano": 1792574801970112353,
+    "durationNano": 11247333,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "f1b6b441cdee0de2",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574801970520981,
+    "endTimeUnixNano": 1792574801999777570,
+    "durationNano": 29256589,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "385a59d51193d1d7",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.ListObjectsV2",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802008445936,
+    "endTimeUnixNano": 1792574802060948610,
+    "durationNano": 52502674,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "b7dfb2e612d9f7ce",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802062052680,
+    "endTimeUnixNano": 1792574802083378234,
+    "durationNano": 21325554,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "59eadf04ed9c6e87",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802084215452,
+    "endTimeUnixNano": 1792574802108323296,
+    "durationNano": 24107844,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "3ebe8798b0e40d50",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802109873351,
+    "endTimeUnixNano": 1792574802123806745,
+    "durationNano": 13933394,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "2cec715382df703a",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802124265792,
+    "endTimeUnixNano": 1792574802151776907,
+    "durationNano": 27511115,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "0a72bf0350104c45",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802153225696,
+    "endTimeUnixNano": 1792574802166598176,
+    "durationNano": 13372480,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "14d0b24d35e3b7b0",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802167060859,
+    "endTimeUnixNano": 1792574802189020343,
+    "durationNano": 21959484,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "0d6dfa0075401642",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802190522908,
+    "endTimeUnixNano": 1792574802201907717,
+    "durationNano": 11384809,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "b745f64da73be766",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802202366264,
+    "endTimeUnixNano": 1792574802229862461,
+    "durationNano": 27496197,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "fbdd615f1525027e",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802231294660,
+    "endTimeUnixNano": 1792574802242205791,
+    "durationNano": 10911131,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "c43844dce9b73aef",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802242669393,
+    "endTimeUnixNano": 1792574802269166791,
+    "durationNano": 26497398,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "89bd43ad3051e8e3",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802270679505,
+    "endTimeUnixNano": 1792574802282985281,
+    "durationNano": 12305776,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "25bcbdd056b823a4",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802283438576,
+    "endTimeUnixNano": 1792574802306719409,
+    "durationNano": 23280833,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "3574185d2ae0b1ba",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.ListObjectsV2",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802316321574,
+    "endTimeUnixNano": 1792574802357992615,
+    "durationNano": 41671041,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "e3f148500370ada6",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802358952309,
+    "endTimeUnixNano": 1792574802378625196,
+    "durationNano": 19672887,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "12bc0bb85b3d24ff",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802379118869,
+    "endTimeUnixNano": 1792574802404536073,
+    "durationNano": 25417204,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "c57792046213271c",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802406049682,
+    "endTimeUnixNano": 1792574802417723800,
+    "durationNano": 11674118,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "22e55cfa86d44745",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802418198536,
+    "endTimeUnixNano": 1792574802445484988,
+    "durationNano": 27286452,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "ff5c38e77f0a5a3f",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802447042108,
+    "endTimeUnixNano": 1792574802458357174,
+    "durationNano": 11315066,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "6b26d6d63c2550a4",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802458840648,
+    "endTimeUnixNano": 1792574802486434954,
+    "durationNano": 27594306,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "336e3f7ee916a185",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.ListObjectsV2",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802495847016,
+    "endTimeUnixNano": 1792574802541523127,
+    "durationNano": 45676111,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "71f542fe53726215",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802542465862,
+    "endTimeUnixNano": 1792574802564749141,
+    "durationNano": 22283279,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "e2cebfec12454214",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802565247237,
+    "endTimeUnixNano": 1792574802591123152,
+    "durationNano": 25875915,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "b460e7c4eb450658",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802592586349,
+    "endTimeUnixNano": 1792574802615411063,
+    "durationNano": 22824714,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "45544929d99ab8fd",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802615857401,
+    "endTimeUnixNano": 1792574802658077286,
+    "durationNano": 42219885,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "a27c8f7dcc597f42",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802659657520,
+    "endTimeUnixNano": 1792574802670976089,
+    "durationNano": 11318569,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "2245100efdedd6fe",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802671442546,
+    "endTimeUnixNano": 1792574802696962017,
+    "durationNano": 25519471,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "5d3892bda37ce2fe",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802698417108,
+    "endTimeUnixNano": 1792574802709059697,
+    "durationNano": 10642589,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "a692f7bdf00598be",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802709492800,
+    "endTimeUnixNano": 1792574802733453535,
+    "durationNano": 23960735,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "c3bd787909e97d24",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802734861586,
+    "endTimeUnixNano": 1792574802744212225,
+    "durationNano": 9350639,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "32922b6e3cfce5a1",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802744640520,
+    "endTimeUnixNano": 1792574802770878745,
+    "durationNano": 26238225,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "10c1787224da0fe7",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "Bedrock AgentCore.GetResourceApiKey",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574802823044373,
+    "endTimeUnixNano": 1792574802914826252,
+    "durationNano": 91781879,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "45dff64d62b9eb8e",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574803071332676,
+    "endTimeUnixNano": 1792574803127024896,
+    "durationNano": 55692220,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "message": "NoSuchKey: An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.",
+     "code": "ERROR"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "facfc16d96a88524",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.HeadObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574803127315462,
+    "endTimeUnixNano": 1792574803142638018,
+    "durationNano": 15322556,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "message": "ClientError: An error occurred (404) when calling the HeadObject operation: Not Found",
+     "code": "ERROR"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "5b9d3f46e257eef8",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574803142877531,
+    "endTimeUnixNano": 1792574803210152893,
+    "durationNano": 67275362,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "833f8713ffc855db",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "mcp tools/list",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574803405515667,
+    "endTimeUnixNano": 1792574803499698260,
+    "durationNano": 94182593,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "e0d8f9ecbaee6da1",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574803504793887,
+    "endTimeUnixNano": 1792574803531961965,
+    "durationNano": 27168078,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "99c36e6854769a51",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "text_completion amazon.titan-embed-text-v2:0",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574803555590650,
+    "endTimeUnixNano": 1792574804854051595,
+    "durationNano": 1298460945,
+    "attributes": {
+     "gen_ai.provider.name": "aws.bedrock",
+     "gen_ai.request.model": "amazon.titan-embed-text-v2:0",
+     "gen_ai.system": "aws.bedrock",
+     "gen_ai.operation.name": "text_completion",
+     "gen_ai.usage.input_tokens": 18,
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "faa91a9582735620",
+    "parentSpanId": "e9f867eddc4a417d",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574804992644310,
+    "endTimeUnixNano": 1792574805020316613,
+    "durationNano": 27672303,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "d9c5a1943a79133e",
+    "parentSpanId": "e9f867eddc4a417d",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574805020626173,
+    "endTimeUnixNano": 1792574805043857512,
+    "durationNano": 23231339,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "c09c340e5be904d4",
+    "parentSpanId": "e9f867eddc4a417d",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574805044648618,
+    "endTimeUnixNano": 1792574805070972939,
+    "durationNano": 26324321,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "7cca612d341e95f1",
+    "parentSpanId": "d429ee99dffb3929",
+    "name": "chat global.moonshotai.kimi-k3",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574805073708549,
+    "endTimeUnixNano": 1792574815578251836,
+    "durationNano": 10504543287,
+    "attributes": {
+     "gen_ai.provider.name": "aws.bedrock",
+     "gen_ai.request.max_tokens": 16384,
+     "gen_ai.response.finish_reasons": [
+      "tool_use"
+     ],
+     "gen_ai.request.model": "global.moonshotai.kimi-k3",
+     "gen_ai.system": "aws.bedrock",
+     "gen_ai.usage.output_tokens": 556,
+     "gen_ai.operation.name": "chat",
+     "gen_ai.usage.input_tokens": 7,
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "d429ee99dffb3929",
+    "parentSpanId": "711b5710d6178a65",
+    "name": "chat",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792574805073072461,
+    "endTimeUnixNano": 1792574815578989896,
+    "durationNano": 10505917435,
+    "attributes": {
+     "gen_ai.usage.prompt_tokens": 7,
+     "gen_ai.usage.output_tokens": 556,
+     "gen_ai.server.request.duration": 9605,
+     "gen_ai.usage.cache_write_input_tokens": 19,
+     "gen_ai.usage.total_tokens": 5674,
+     "gen_ai.usage.completion_tokens": 556,
+     "gen_ai.event.start_time": "2026-10-21T09:26:45.073091+00:00",
+     "gen_ai.server.time_to_first_token": 5255,
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.event.end_time": "2026-10-21T09:26:55.578947+00:00",
+     "gen_ai.usage.input_tokens": 7,
+     "gen_ai.request.model": "global.moonshotai.kimi-k3",
+     "gen_ai.usage.cache_read_input_tokens": 5092,
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "a6c0819352a3ed5b",
+    "parentSpanId": "711b5710d6178a65",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574815579481575,
+    "endTimeUnixNano": 1792574815657535056,
+    "durationNano": 78053481,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "9640a0305fbefaa0",
+    "parentSpanId": "711b5710d6178a65",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574815657819861,
+    "endTimeUnixNano": 1792574815683798503,
+    "durationNano": 25978642,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "38e79d0f50531cf5",
+    "parentSpanId": "711b5710d6178a65",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574815684569933,
+    "endTimeUnixNano": 1792574815716754189,
+    "durationNano": 32184256,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "3047f378cf6b5cd6",
+    "parentSpanId": "b8985d0f5b9b9083",
+    "name": "mcp tools/call paipai___paipai-data___run_sql",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574815718736700,
+    "endTimeUnixNano": 1792574819994194742,
+    "durationNano": 4275458042,
+    "attributes": {
+     "gen_ai.operation.name": "execute_tool",
+     "gen_ai.tool.name": "paipai___paipai-data___run_sql",
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390",
+     "gen_ai.tool.call.result": "meta=None content=[TextContent(type='text', text='{\"result\":\"查询无结果。\"}', annotations=None, meta=None)] structuredContent=None isError=False"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "b8985d0f5b9b9083",
+    "parentSpanId": "711b5710d6178a65",
+    "name": "execute_tool launchpad_gw_paipai___paipai-data___run_sql",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792574815717563100,
+    "endTimeUnixNano": 1792574819994951173,
+    "durationNano": 4277388073,
+    "attributes": {
+     "gen_ai.tool.status": "success",
+     "gen_ai.tool.call.id": "call_852faad06d5a583a9113d321b4965315",
+     "gen_ai.tool.json_schema": "{\"type\": \"object\", \"properties\": {\"stationScope\": {\"description\": \"可选: 逗号分隔的电站 ID, 只能在服务端授权范围内进一步收窄\", \"type\": \"string\"}, \"sql\": {\"description\": \"只读 SQL\", \"type\": \"string\"}}, \"required\": [\"sql\"]}",
+     "gen_ai.event.start_time": "2026-10-21T09:26:55.717590+00:00",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "execute_tool",
+     "gen_ai.event.end_time": "2026-10-21T09:26:59.994922+00:00",
+     "gen_ai.tool.name": "launchpad_gw_paipai___paipai-data___run_sql",
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "575b72915e57a5a0",
+    "parentSpanId": "711b5710d6178a65",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574819995353080,
+    "endTimeUnixNano": 1792574820023780354,
+    "durationNano": 28427274,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "1b396128e04ef692",
+    "parentSpanId": "711b5710d6178a65",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574820024032150,
+    "endTimeUnixNano": 1792574820051473275,
+    "durationNano": 27441125,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "711b5710d6178a65",
+    "parentSpanId": "e9f867eddc4a417d",
+    "name": "execute_event_loop_cycle",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792574805071846882,
+    "endTimeUnixNano": 1792574820082383190,
+    "durationNano": 15010536308,
+    "attributes": {
+     "gen_ai.operation.name": "execute_event_loop_cycle",
+     "gen_ai.event.end_time": "2026-10-21T09:27:00.082362+00:00",
+     "gen_ai.event.start_time": "2026-10-21T09:26:45.071875+00:00",
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390",
+     "gen_ai.system": "strands-agents",
+     "gen_ai.provider.name": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "293a35b843d7a731",
+    "parentSpanId": "711b5710d6178a65",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574820052250334,
+    "endTimeUnixNano": 1792574820082095931,
+    "durationNano": 29845597,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "55b7c398948c0bef",
+    "parentSpanId": "4ec60feda348737b",
+    "name": "chat global.moonshotai.kimi-k3",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574820084817232,
+    "endTimeUnixNano": 1792574833508748978,
+    "durationNano": 13423931746,
+    "attributes": {
+     "gen_ai.provider.name": "aws.bedrock",
+     "gen_ai.request.max_tokens": 16384,
+     "gen_ai.response.finish_reasons": [
+      "tool_use"
+     ],
+     "gen_ai.request.model": "global.moonshotai.kimi-k3",
+     "gen_ai.system": "aws.bedrock",
+     "gen_ai.usage.output_tokens": 87,
+     "gen_ai.operation.name": "chat",
+     "gen_ai.usage.input_tokens": 7,
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "4ec60feda348737b",
+    "parentSpanId": "91247a45efbfde5b",
+    "name": "chat",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792574820083712095,
+    "endTimeUnixNano": 1792574833509479514,
+    "durationNano": 13425767419,
+    "attributes": {
+     "gen_ai.usage.prompt_tokens": 7,
+     "gen_ai.usage.output_tokens": 87,
+     "gen_ai.server.request.duration": 13201,
+     "gen_ai.usage.cache_write_input_tokens": 605,
+     "gen_ai.usage.total_tokens": 5810,
+     "gen_ai.usage.completion_tokens": 87,
+     "gen_ai.event.start_time": "2026-10-21T09:27:00.083730+00:00",
+     "gen_ai.server.time_to_first_token": 12748,
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.event.end_time": "2026-10-21T09:27:13.509441+00:00",
+     "gen_ai.usage.input_tokens": 7,
+     "gen_ai.request.model": "global.moonshotai.kimi-k3",
+     "gen_ai.usage.cache_read_input_tokens": 5111,
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "ac15e76e58453cce",
+    "parentSpanId": "91247a45efbfde5b",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574833510066289,
+    "endTimeUnixNano": 1792574833586194169,
+    "durationNano": 76127880,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "f86c72038bd1ddbf",
+    "parentSpanId": "91247a45efbfde5b",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574833586463910,
+    "endTimeUnixNano": 1792574833614274632,
+    "durationNano": 27810722,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "fcc3dd4e9295b308",
+    "parentSpanId": "91247a45efbfde5b",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574833615030751,
+    "endTimeUnixNano": 1792574833643764795,
+    "durationNano": 28734044,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "8132630510385dc2",
+    "parentSpanId": "9f16f2f08ae0ca55",
+    "name": "mcp tools/call paipai___paipai-data___list_stations",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574833645204451,
+    "endTimeUnixNano": 1792574836723085266,
+    "durationNano": 3077880815,
+    "attributes": {
+     "gen_ai.operation.name": "execute_tool",
+     "gen_ai.tool.name": "paipai___paipai-data___list_stations",
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "9f16f2f08ae0ca55",
+    "parentSpanId": "91247a45efbfde5b",
+    "name": "execute_tool launchpad_gw_paipai___paipai-data___list_stations",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792574833644286545,
+    "endTimeUnixNano": 1792574836723820552,
+    "durationNano": 3079534007,
+    "attributes": {
+     "gen_ai.tool.status": "success",
+     "gen_ai.tool.call.id": "call_b684b76ecead5a899598b673d20942c3",
+     "gen_ai.tool.description": "列出当前可访问的电站 (ID/名称/型号/系列/容量/位置/投运日期)。不确定电站 ID 时先调用。",
+     "gen_ai.tool.json_schema": "{\"type\": \"object\", \"properties\": {\"stationScope\": {\"description\": \"可选: 逗号分隔的电站 ID, 只能在服务端授权范围内进一步收窄\", \"type\": \"string\"}}}",
+     "gen_ai.event.start_time": "2026-10-21T09:27:13.644312+00:00",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "execute_tool",
+     "gen_ai.event.end_time": "2026-10-21T09:27:16.723793+00:00",
+     "gen_ai.tool.name": "launchpad_gw_paipai___paipai-data___list_stations",
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "e519c30f7cc4e98d",
+    "parentSpanId": "91247a45efbfde5b",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574836724215830,
+    "endTimeUnixNano": 1792574836756525910,
+    "durationNano": 32310080,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "57288482440f4290",
+    "parentSpanId": "91247a45efbfde5b",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574836756780800,
+    "endTimeUnixNano": 1792574836783310641,
+    "durationNano": 26529841,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "e3b0a5de98757a76",
+    "parentSpanId": "91247a45efbfde5b",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574836784072422,
+    "endTimeUnixNano": 1792574836813829133,
+    "durationNano": 29756711,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "91247a45efbfde5b",
+    "parentSpanId": "e9f867eddc4a417d",
+    "name": "execute_event_loop_cycle",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792574820082753729,
+    "endTimeUnixNano": 1792574836814284735,
+    "durationNano": 16731531006,
+    "attributes": {
+     "gen_ai.operation.name": "execute_event_loop_cycle",
+     "gen_ai.event.end_time": "2026-10-21T09:27:16.814266+00:00",
+     "gen_ai.event.start_time": "2026-10-21T09:27:00.082779+00:00",
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390",
+     "gen_ai.system": "strands-agents",
+     "gen_ai.provider.name": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "4442eccba1f896c7",
+    "parentSpanId": "a76d38cff1cb589f",
+    "name": "chat global.moonshotai.kimi-k3",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574836816771691,
+    "endTimeUnixNano": 1792574855288637475,
+    "durationNano": 18471865784,
+    "attributes": {
+     "gen_ai.provider.name": "aws.bedrock",
+     "gen_ai.request.max_tokens": 16384,
+     "gen_ai.response.finish_reasons": [
+      "end_turn"
+     ],
+     "gen_ai.request.model": "global.moonshotai.kimi-k3",
+     "gen_ai.system": "aws.bedrock",
+     "gen_ai.usage.output_tokens": 467,
+     "gen_ai.operation.name": "chat",
+     "gen_ai.usage.input_tokens": 7,
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "a76d38cff1cb589f",
+    "parentSpanId": "f9a4a4836dd69a88",
+    "name": "chat",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792574836815645106,
+    "endTimeUnixNano": 1792574855289300681,
+    "durationNano": 18473655575,
+    "attributes": {
+     "gen_ai.usage.prompt_tokens": 7,
+     "gen_ai.usage.output_tokens": 467,
+     "gen_ai.server.request.duration": 18246,
+     "gen_ai.usage.cache_write_input_tokens": 650,
+     "gen_ai.usage.total_tokens": 6840,
+     "gen_ai.usage.completion_tokens": 467,
+     "gen_ai.event.start_time": "2026-10-21T09:27:16.815665+00:00",
+     "gen_ai.server.time_to_first_token": 14729,
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.event.end_time": "2026-10-21T09:27:35.289261+00:00",
+     "gen_ai.usage.input_tokens": 7,
+     "gen_ai.request.model": "global.moonshotai.kimi-k3",
+     "gen_ai.usage.cache_read_input_tokens": 5716,
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "aa83645d705856f5",
+    "parentSpanId": "f9a4a4836dd69a88",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574855289749193,
+    "endTimeUnixNano": 1792574855360441848,
+    "durationNano": 70692655,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "9a15a653d6f10ce1",
+    "parentSpanId": "f9a4a4836dd69a88",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574855360735555,
+    "endTimeUnixNano": 1792574855389149939,
+    "durationNano": 28414384,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "f9a4a4836dd69a88",
+    "parentSpanId": "e9f867eddc4a417d",
+    "name": "execute_event_loop_cycle",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792574836814575587,
+    "endTimeUnixNano": 1792574855419790079,
+    "durationNano": 18605214492,
+    "attributes": {
+     "gen_ai.operation.name": "execute_event_loop_cycle",
+     "gen_ai.event.end_time": "2026-10-21T09:27:35.419765+00:00",
+     "gen_ai.event.start_time": "2026-10-21T09:27:16.814600+00:00",
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390",
+     "gen_ai.system": "strands-agents",
+     "gen_ai.provider.name": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "e5dbdd155d0e3191",
+    "parentSpanId": "f9a4a4836dd69a88",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574855389925118,
+    "endTimeUnixNano": 1792574855419316870,
+    "durationNano": 29391752,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "969eb594ce416e94",
+    "parentSpanId": "e9f867eddc4a417d",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574855426870793,
+    "endTimeUnixNano": 1792574855492221949,
+    "durationNano": 65351156,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "e9f867eddc4a417d",
+    "parentSpanId": "12cb2f2677a26679",
+    "name": "invoke_agent Strands Agents",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792574804992013859,
+    "endTimeUnixNano": 1792574855555729883,
+    "durationNano": 50563716024,
+    "attributes": {
+     "gen_ai.usage.prompt_tokens": 21,
+     "gen_ai.usage.output_tokens": 1110,
+     "gen_ai.usage.cache_write_input_tokens": 1274,
+     "gen_ai.agent.name": "Strands Agents",
+     "gen_ai.usage.total_tokens": 18324,
+     "gen_ai.usage.completion_tokens": 1110,
+     "gen_ai.event.start_time": "2026-10-21T09:26:44.992052+00:00",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "invoke_agent",
+     "gen_ai.event.end_time": "2026-10-21T09:27:35.555699+00:00",
+     "gen_ai.usage.input_tokens": 21,
+     "gen_ai.request.model": "global.moonshotai.kimi-k3",
+     "gen_ai.usage.cache_read_input_tokens": 15919,
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "a16d8b284290ccb4",
+    "parentSpanId": "f8f97526985ebd90",
+    "name": "SQS.SendMessage",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792574855531863990,
+    "endTimeUnixNano": 1792574855555507411,
+    "durationNano": 23643421,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "f8f97526985ebd90",
+    "parentSpanId": "e9f867eddc4a417d",
+    "name": "launchpad-memory-extract-cn-northwest-1 send",
+    "kind": "PRODUCER",
+    "startTimeUnixNano": 1792574855531504904,
+    "endTimeUnixNano": 1792574855555550184,
+    "durationNano": 24045280,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad8854f68ca803d69edef5350e6a4b6",
+    "spanId": "12cb2f2677a26679",
+    "parentSpanId": "c28ebc53f91ac63e",
+    "name": "POST /invocations",
+    "kind": "SERVER",
+    "startTimeUnixNano": 1792574801641857177,
+    "endTimeUnixNano": 1792574855556173923,
+    "durationNano": 53914316746,
+    "attributes": {
+     "session.id": "3cdd382481814268964985c93d250ccfe958cfbcfeb04790bf31b14ed81a0390"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "paipai_energy_agent_7b9c98.DEFAULT"
+     }
+    }
+   }
+  ],
+  "glm": [
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "ad324b56bad33458",
+    "parentSpanId": "87af77b911171a97",
+    "name": "Bedrock AgentCore.GetResourceApiKey",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514112110745248,
+    "endTimeUnixNano": 1792514112253197250,
+    "durationNano": 142452002,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "43cf095b36223d4b",
+    "parentSpanId": "87af77b911171a97",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514112443833903,
+    "endTimeUnixNano": 1792514112517520813,
+    "durationNano": 73686910,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "afa5c730c218b9b3",
+    "parentSpanId": "87af77b911171a97",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514112519181215,
+    "endTimeUnixNano": 1792514112543071235,
+    "durationNano": 23890020,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "4df9a92ce781d82d",
+    "parentSpanId": "87af77b911171a97",
+    "name": "S3.ListObjectsV2",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514112554174783,
+    "endTimeUnixNano": 1792514112573016604,
+    "durationNano": 18841821,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "5e985a3e72ff088c",
+    "parentSpanId": "87af77b911171a97",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514112573515022,
+    "endTimeUnixNano": 1792514112596563329,
+    "durationNano": 23048307,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "fcfc38f7624e898e",
+    "parentSpanId": "87af77b911171a97",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514112575135605,
+    "endTimeUnixNano": 1792514112629334293,
+    "durationNano": 54198688,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "e11aeaedb0cee5d1",
+    "parentSpanId": "87af77b911171a97",
+    "name": "text_completion amazon.titan-embed-text-v2:0",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514112675279707,
+    "endTimeUnixNano": 1792514114099671722,
+    "durationNano": 1424392015,
+    "attributes": {
+     "gen_ai.provider.name": "aws.bedrock",
+     "gen_ai.request.model": "amazon.titan-embed-text-v2:0",
+     "gen_ai.system": "aws.bedrock",
+     "gen_ai.operation.name": "text_completion",
+     "gen_ai.usage.input_tokens": 1189,
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "a9fcf3c6c40aa7b2",
+    "parentSpanId": "e81d95de180349c9",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514114897047951,
+    "endTimeUnixNano": 1792514114931393181,
+    "durationNano": 34345230,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "97a5879560876556",
+    "parentSpanId": "e81d95de180349c9",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514114931651112,
+    "endTimeUnixNano": 1792514114957795580,
+    "durationNano": 26144468,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "3c62ac3a045364a1",
+    "parentSpanId": "e81d95de180349c9",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514114958512889,
+    "endTimeUnixNano": 1792514114986985675,
+    "durationNano": 28472786,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "9cb894acb72878de",
+    "parentSpanId": "66b03bbc492e2780",
+    "name": "chat global.zai.glm-5.3",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514114989204309,
+    "endTimeUnixNano": 1792514224174930502,
+    "durationNano": 109185726193,
+    "attributes": {
+     "gen_ai.provider.name": "aws.bedrock",
+     "gen_ai.request.max_tokens": 16384,
+     "gen_ai.response.finish_reasons": [
+      "max_tokens"
+     ],
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "gen_ai.system": "aws.bedrock",
+     "gen_ai.usage.output_tokens": 16384,
+     "gen_ai.operation.name": "chat",
+     "gen_ai.usage.input_tokens": 6085,
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "66b03bbc492e2780",
+    "parentSpanId": "4f9a2b9e1101748d",
+    "name": "chat",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514114988589291,
+    "endTimeUnixNano": 1792514224176164805,
+    "durationNano": 109187575514,
+    "attributes": {
+     "gen_ai.usage.prompt_tokens": 6085,
+     "gen_ai.usage.output_tokens": 16384,
+     "gen_ai.server.request.duration": 108401,
+     "gen_ai.usage.total_tokens": 22469,
+     "gen_ai.usage.completion_tokens": 16384,
+     "gen_ai.event.start_time": "2026-10-20T16:35:14.988606+00:00",
+     "gen_ai.server.time_to_first_token": 1515,
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.event.end_time": "2026-10-20T16:37:04.176105+00:00",
+     "gen_ai.usage.input_tokens": 6085,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "47679d8012da2d3f",
+    "parentSpanId": "4f9a2b9e1101748d",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514224177626492,
+    "endTimeUnixNano": 1792514224843600188,
+    "durationNano": 665973696,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "f500066f6183aa82",
+    "parentSpanId": "4f9a2b9e1101748d",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514224843949235,
+    "endTimeUnixNano": 1792514224874014625,
+    "durationNano": 30065390,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "ff9a5e0c3e330e25",
+    "parentSpanId": "4f9a2b9e1101748d",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514224874773829,
+    "endTimeUnixNano": 1792514224903004840,
+    "durationNano": 28231011,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "4f9a2b9e1101748d",
+    "parentSpanId": "e81d95de180349c9",
+    "name": "execute_event_loop_cycle",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514114987757391,
+    "endTimeUnixNano": 1792514224963894775,
+    "durationNano": 109976137384,
+    "attributes": {
+     "gen_ai.operation.name": "execute_event_loop_cycle",
+     "gen_ai.event.end_time": "2026-10-20T16:37:04.903394+00:00",
+     "gen_ai.event.start_time": "2026-10-20T16:35:14.987782+00:00",
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents",
+     "gen_ai.provider.name": "strands-agents"
+    },
+    "status": {
+     "message": "Model stopped generating due to maximum token limit. The partial message has been added to the conversation history. You can continue by calling the agent again. For more information see: https://strandsagents.com/docs/user-guide/concepts/agents/agent-loop/#maxtokensreachedexception",
+     "code": "ERROR"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "9b77104ca69d62ba",
+    "parentSpanId": "e81d95de180349c9",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514224996350710,
+    "endTimeUnixNano": 1792514225061477441,
+    "durationNano": 65126731,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "efd103ccdafbf69f",
+    "parentSpanId": "a7705c7c2fce4522",
+    "name": "SQS.SendMessage",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514225068821680,
+    "endTimeUnixNano": 1792514225098629960,
+    "durationNano": 29808280,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "a7705c7c2fce4522",
+    "parentSpanId": "e81d95de180349c9",
+    "name": "launchpad-memory-extract-cn-northwest-1 send",
+    "kind": "PRODUCER",
+    "startTimeUnixNano": 1792514225068459604,
+    "endTimeUnixNano": 1792514225098677516,
+    "durationNano": 30217912,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "e81d95de180349c9",
+    "parentSpanId": "87af77b911171a97",
+    "name": "invoke_agent Strands Agents",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514114896523549,
+    "endTimeUnixNano": 1792514225158646783,
+    "durationNano": 110262123234,
+    "attributes": {
+     "gen_ai.agent.name": "Strands Agents",
+     "gen_ai.event.start_time": "2026-10-20T16:35:14.896563+00:00",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "invoke_agent",
+     "gen_ai.event.end_time": "2026-10-20T16:37:05.098758+00:00",
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "message": "Model stopped generating due to maximum token limit. The partial message has been added to the conversation history. You can continue by calling the agent again. For more information see: https://strandsagents.com/docs/user-guide/concepts/agents/agent-loop/#maxtokensreachedexception",
+     "code": "ERROR"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "9403ff1509f8712f",
+    "parentSpanId": "97f133b9b9358983",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514225159858514,
+    "endTimeUnixNano": 1792514225189332910,
+    "durationNano": 29474396,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "3cb0ca92ee5eb721",
+    "parentSpanId": "ecb0b94332123953",
+    "name": "chat global.zai.glm-5.3",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514225192407189,
+    "endTimeUnixNano": 1792514255944011738,
+    "durationNano": 30751604549,
+    "attributes": {
+     "gen_ai.provider.name": "aws.bedrock",
+     "gen_ai.request.max_tokens": 16384,
+     "gen_ai.response.finish_reasons": [
+      "tool_use"
+     ],
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "gen_ai.system": "aws.bedrock",
+     "gen_ai.usage.output_tokens": 5090,
+     "gen_ai.operation.name": "chat",
+     "gen_ai.usage.input_tokens": 16407,
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "ecb0b94332123953",
+    "parentSpanId": "58bf4b541b984a30",
+    "name": "chat",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514225191116247,
+    "endTimeUnixNano": 1792514255945066042,
+    "durationNano": 30753949795,
+    "attributes": {
+     "gen_ai.usage.prompt_tokens": 16407,
+     "gen_ai.usage.output_tokens": 5090,
+     "gen_ai.server.request.duration": 30349,
+     "gen_ai.usage.cache_write_input_tokens": 0,
+     "gen_ai.usage.total_tokens": 27580,
+     "gen_ai.usage.completion_tokens": 5090,
+     "gen_ai.event.start_time": "2026-10-20T16:37:05.191139+00:00",
+     "gen_ai.server.time_to_first_token": 1828,
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.event.end_time": "2026-10-20T16:37:35.945026+00:00",
+     "gen_ai.usage.input_tokens": 16407,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "gen_ai.usage.cache_read_input_tokens": 6083,
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "e44b32b1fd0a0b6c",
+    "parentSpanId": "58bf4b541b984a30",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514255945639749,
+    "endTimeUnixNano": 1792514256010978704,
+    "durationNano": 65338955,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "94bd0abab3f251ed",
+    "parentSpanId": "58bf4b541b984a30",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514256011268651,
+    "endTimeUnixNano": 1792514256034148043,
+    "durationNano": 22879392,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "802d7e9048693ee5",
+    "parentSpanId": "58bf4b541b984a30",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514256034956272,
+    "endTimeUnixNano": 1792514256059513265,
+    "durationNano": 24556993,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "197281e7b6888b93",
+    "parentSpanId": "175c6c3945245e80",
+    "name": "Bedrock AgentCore.StartCodeInterpreterSession",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514256415471551,
+    "endTimeUnixNano": 1792514257209020527,
+    "durationNano": 793548976,
+    "attributes": {
+     "gen_ai.code_interpreter.id": "aws.codeinterpreter.v1",
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "a442276d0573489a",
+    "parentSpanId": "175c6c3945245e80",
+    "name": "Bedrock AgentCore.InvokeCodeInterpreter",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514257209909542,
+    "endTimeUnixNano": 1792514257401760965,
+    "durationNano": 191851423,
+    "attributes": {
+     "gen_ai.code_interpreter.id": "aws.codeinterpreter.v1",
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "175c6c3945245e80",
+    "parentSpanId": "58bf4b541b984a30",
+    "name": "execute_tool code_interpreter",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514256060241167,
+    "endTimeUnixNano": 1792514257402809681,
+    "durationNano": 1342568514,
+    "attributes": {
+     "gen_ai.tool.status": "success",
+     "gen_ai.tool.call.id": "call_0b14486264605c68adec48444e2f52c2",
+     "gen_ai.event.start_time": "2026-10-20T16:37:36.060267+00:00",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "execute_tool",
+     "gen_ai.event.end_time": "2026-10-20T16:37:37.402779+00:00",
+     "gen_ai.tool.name": "code_interpreter",
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "640e019ef84d8b13",
+    "parentSpanId": "58bf4b541b984a30",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514257403182276,
+    "endTimeUnixNano": 1792514257430511732,
+    "durationNano": 27329456,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "33f82cadb4585e18",
+    "parentSpanId": "58bf4b541b984a30",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514257430744301,
+    "endTimeUnixNano": 1792514257455221452,
+    "durationNano": 24477151,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "58bf4b541b984a30",
+    "parentSpanId": "97f133b9b9358983",
+    "name": "execute_event_loop_cycle",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514225189674671,
+    "endTimeUnixNano": 1792514257483603726,
+    "durationNano": 32293929055,
+    "attributes": {
+     "gen_ai.operation.name": "execute_event_loop_cycle",
+     "gen_ai.event.end_time": "2026-10-20T16:37:37.483584+00:00",
+     "gen_ai.event.start_time": "2026-10-20T16:37:05.189704+00:00",
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents",
+     "gen_ai.provider.name": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "0a854a79ac6efb19",
+    "parentSpanId": "58bf4b541b984a30",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514257455991889,
+    "endTimeUnixNano": 1792514257483225396,
+    "durationNano": 27233507,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "1ee395117d0bbc43",
+    "parentSpanId": "447c5245da3af154",
+    "name": "chat global.zai.glm-5.3",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514257487008643,
+    "endTimeUnixNano": 1792514261894613633,
+    "durationNano": 4407604990,
+    "attributes": {
+     "gen_ai.provider.name": "aws.bedrock",
+     "gen_ai.request.max_tokens": 16384,
+     "gen_ai.response.finish_reasons": [
+      "tool_use"
+     ],
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "gen_ai.system": "aws.bedrock",
+     "gen_ai.usage.output_tokens": 1570,
+     "gen_ai.operation.name": "chat",
+     "gen_ai.usage.input_tokens": 5112,
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "447c5245da3af154",
+    "parentSpanId": "ecd62d1e441ef832",
+    "name": "chat",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514257485554446,
+    "endTimeUnixNano": 1792514261895216648,
+    "durationNano": 4409662202,
+    "attributes": {
+     "gen_ai.usage.prompt_tokens": 5112,
+     "gen_ai.usage.output_tokens": 1570,
+     "gen_ai.server.request.duration": 4214,
+     "gen_ai.usage.cache_write_input_tokens": 0,
+     "gen_ai.usage.total_tokens": 29170,
+     "gen_ai.usage.completion_tokens": 1570,
+     "gen_ai.event.start_time": "2026-10-20T16:37:37.485574+00:00",
+     "gen_ai.server.time_to_first_token": 1107,
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.event.end_time": "2026-10-20T16:37:41.895180+00:00",
+     "gen_ai.usage.input_tokens": 5112,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "gen_ai.usage.cache_read_input_tokens": 22488,
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "c05be08aab0e1a3f",
+    "parentSpanId": "ecd62d1e441ef832",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514261895692175,
+    "endTimeUnixNano": 1792514261928075086,
+    "durationNano": 32382911,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "51acf036af39f606",
+    "parentSpanId": "ecd62d1e441ef832",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514261928323360,
+    "endTimeUnixNano": 1792514261954055795,
+    "durationNano": 25732435,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "4e20b31207e63045",
+    "parentSpanId": "ecd62d1e441ef832",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514261954824484,
+    "endTimeUnixNano": 1792514261984564046,
+    "durationNano": 29739562,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "f6a825272345a02f",
+    "parentSpanId": "d1ada619b9fd9cbe",
+    "name": "Bedrock AgentCore.InvokeCodeInterpreter",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514261987311139,
+    "endTimeUnixNano": 1792514262084333886,
+    "durationNano": 97022747,
+    "attributes": {
+     "gen_ai.code_interpreter.id": "aws.codeinterpreter.v1",
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "d1ada619b9fd9cbe",
+    "parentSpanId": "ecd62d1e441ef832",
+    "name": "execute_tool code_interpreter",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514261985511489,
+    "endTimeUnixNano": 1792514262085041506,
+    "durationNano": 99530017,
+    "attributes": {
+     "gen_ai.tool.status": "success",
+     "gen_ai.tool.call.id": "call_11842197b751599fb7d027c46c6022c5",
+     "gen_ai.event.start_time": "2026-10-20T16:37:41.985536+00:00",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "execute_tool",
+     "gen_ai.event.end_time": "2026-10-20T16:37:42.085014+00:00",
+     "gen_ai.tool.name": "code_interpreter",
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "5fdba43c42e7356b",
+    "parentSpanId": "ecd62d1e441ef832",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514262085354566,
+    "endTimeUnixNano": 1792514262116600639,
+    "durationNano": 31246073,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "697abb7b809179c7",
+    "parentSpanId": "ecd62d1e441ef832",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514262116841644,
+    "endTimeUnixNano": 1792514262139779356,
+    "durationNano": 22937712,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "ecd62d1e441ef832",
+    "parentSpanId": "97f133b9b9358983",
+    "name": "execute_event_loop_cycle",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514257483952970,
+    "endTimeUnixNano": 1792514262166583916,
+    "durationNano": 4682630946,
+    "attributes": {
+     "gen_ai.operation.name": "execute_event_loop_cycle",
+     "gen_ai.event.end_time": "2026-10-20T16:37:42.166565+00:00",
+     "gen_ai.event.start_time": "2026-10-20T16:37:37.483977+00:00",
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents",
+     "gen_ai.provider.name": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "74e79a7252bfe4dc",
+    "parentSpanId": "ecd62d1e441ef832",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514262140516982,
+    "endTimeUnixNano": 1792514262166296997,
+    "durationNano": 25780015,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "3184c03cbe999a71",
+    "parentSpanId": "9b5fccf5945cdd26",
+    "name": "chat global.zai.glm-5.3",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514262170204377,
+    "endTimeUnixNano": 1792514266061407459,
+    "durationNano": 3891203082,
+    "attributes": {
+     "gen_ai.provider.name": "aws.bedrock",
+     "gen_ai.request.max_tokens": 16384,
+     "gen_ai.response.finish_reasons": [
+      "tool_use"
+     ],
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "gen_ai.system": "aws.bedrock",
+     "gen_ai.usage.output_tokens": 718,
+     "gen_ai.operation.name": "chat",
+     "gen_ai.usage.input_tokens": 1595,
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "9b5fccf5945cdd26",
+    "parentSpanId": "6979e0d49c5e9f19",
+    "name": "chat",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514262168650719,
+    "endTimeUnixNano": 1792514266062549687,
+    "durationNano": 3893898968,
+    "attributes": {
+     "gen_ai.usage.prompt_tokens": 1595,
+     "gen_ai.usage.output_tokens": 718,
+     "gen_ai.server.request.duration": 3696,
+     "gen_ai.usage.cache_write_input_tokens": 0,
+     "gen_ai.usage.total_tokens": 29911,
+     "gen_ai.usage.completion_tokens": 718,
+     "gen_ai.event.start_time": "2026-10-20T16:37:42.168672+00:00",
+     "gen_ai.server.time_to_first_token": 3890,
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.event.end_time": "2026-10-20T16:37:46.062512+00:00",
+     "gen_ai.usage.input_tokens": 1595,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "gen_ai.usage.cache_read_input_tokens": 27598,
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "c4ed362a69abd5bb",
+    "parentSpanId": "6979e0d49c5e9f19",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514266063021759,
+    "endTimeUnixNano": 1792514266089052042,
+    "durationNano": 26030283,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "77b8c0d22c67e96a",
+    "parentSpanId": "6979e0d49c5e9f19",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514266089305420,
+    "endTimeUnixNano": 1792514266113796387,
+    "durationNano": 24490967,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "8108801c2d483920",
+    "parentSpanId": "6979e0d49c5e9f19",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514266114561951,
+    "endTimeUnixNano": 1792514266141920780,
+    "durationNano": 27358829,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "b84377915ca98f1b",
+    "parentSpanId": "8804afe054bcd184",
+    "name": "Bedrock AgentCore.InvokeCodeInterpreter",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514266143742394,
+    "endTimeUnixNano": 1792514266325875337,
+    "durationNano": 182132943,
+    "attributes": {
+     "gen_ai.code_interpreter.id": "aws.codeinterpreter.v1",
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "8804afe054bcd184",
+    "parentSpanId": "6979e0d49c5e9f19",
+    "name": "execute_tool code_interpreter",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514266142589525,
+    "endTimeUnixNano": 1792514266326673367,
+    "durationNano": 184083842,
+    "attributes": {
+     "gen_ai.tool.status": "success",
+     "gen_ai.tool.call.id": "call_d36674dce4a4509da2669015f6292e72",
+     "gen_ai.event.start_time": "2026-10-20T16:37:46.142615+00:00",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "execute_tool",
+     "gen_ai.event.end_time": "2026-10-20T16:37:46.326643+00:00",
+     "gen_ai.tool.name": "code_interpreter",
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "6035260c3f5a12db",
+    "parentSpanId": "6979e0d49c5e9f19",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514266327055406,
+    "endTimeUnixNano": 1792514266354483190,
+    "durationNano": 27427784,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "9b6fc02f9df5da2c",
+    "parentSpanId": "6979e0d49c5e9f19",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514266354718278,
+    "endTimeUnixNano": 1792514266378514943,
+    "durationNano": 23796665,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "6979e0d49c5e9f19",
+    "parentSpanId": "97f133b9b9358983",
+    "name": "execute_event_loop_cycle",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514262166923724,
+    "endTimeUnixNano": 1792514266405466527,
+    "durationNano": 4238542803,
+    "attributes": {
+     "gen_ai.operation.name": "execute_event_loop_cycle",
+     "gen_ai.event.end_time": "2026-10-20T16:37:46.405447+00:00",
+     "gen_ai.event.start_time": "2026-10-20T16:37:42.166948+00:00",
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents",
+     "gen_ai.provider.name": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "b605f0c0f30cdc48",
+    "parentSpanId": "6979e0d49c5e9f19",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514266379248047,
+    "endTimeUnixNano": 1792514266405114724,
+    "durationNano": 25866677,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "c12cf6f22641661b",
+    "parentSpanId": "f4f4ad0735514670",
+    "name": "chat global.zai.glm-5.3",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514266409490065,
+    "endTimeUnixNano": 1792514277255403310,
+    "durationNano": 10845913245,
+    "attributes": {
+     "gen_ai.provider.name": "aws.bedrock",
+     "gen_ai.request.max_tokens": 16384,
+     "gen_ai.response.finish_reasons": [
+      "end_turn"
+     ],
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "gen_ai.system": "aws.bedrock",
+     "gen_ai.usage.output_tokens": 1510,
+     "gen_ai.operation.name": "chat",
+     "gen_ai.usage.input_tokens": 1045,
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "f4f4ad0735514670",
+    "parentSpanId": "3ae18faaed5b8d6c",
+    "name": "chat",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514266407603409,
+    "endTimeUnixNano": 1792514277256350400,
+    "durationNano": 10848746991,
+    "attributes": {
+     "gen_ai.usage.prompt_tokens": 1045,
+     "gen_ai.usage.output_tokens": 1510,
+     "gen_ai.server.request.duration": 10566,
+     "gen_ai.usage.cache_write_input_tokens": 0,
+     "gen_ai.usage.total_tokens": 31746,
+     "gen_ai.usage.completion_tokens": 1510,
+     "gen_ai.event.start_time": "2026-10-20T16:37:46.407624+00:00",
+     "gen_ai.server.time_to_first_token": 1273,
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.event.end_time": "2026-10-20T16:37:57.256313+00:00",
+     "gen_ai.usage.input_tokens": 1045,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "gen_ai.usage.cache_read_input_tokens": 29191,
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "890911f2a44f41e9",
+    "parentSpanId": "3ae18faaed5b8d6c",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514277256885831,
+    "endTimeUnixNano": 1792514277329270257,
+    "durationNano": 72384426,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "32e38e553d25aedd",
+    "parentSpanId": "3ae18faaed5b8d6c",
+    "name": "S3.GetObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514277329545476,
+    "endTimeUnixNano": 1792514277355619015,
+    "durationNano": 26073539,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "6c8523b65ffa4776",
+    "parentSpanId": "3ae18faaed5b8d6c",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514277356442940,
+    "endTimeUnixNano": 1792514277385533802,
+    "durationNano": 29090862,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "3ae18faaed5b8d6c",
+    "parentSpanId": "97f133b9b9358983",
+    "name": "execute_event_loop_cycle",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514266405758156,
+    "endTimeUnixNano": 1792514277386031572,
+    "durationNano": 10980273416,
+    "attributes": {
+     "gen_ai.operation.name": "execute_event_loop_cycle",
+     "gen_ai.event.end_time": "2026-10-20T16:37:57.386008+00:00",
+     "gen_ai.event.start_time": "2026-10-20T16:37:46.405781+00:00",
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents",
+     "gen_ai.provider.name": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "2d21feda9d2e6682",
+    "parentSpanId": "97f133b9b9358983",
+    "name": "S3.PutObject",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514277386485216,
+    "endTimeUnixNano": 1792514277462226207,
+    "durationNano": 75740991,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "97f133b9b9358983",
+    "parentSpanId": "87af77b911171a97",
+    "name": "invoke_agent Strands Agents",
+    "kind": "INTERNAL",
+    "startTimeUnixNano": 1792514225159422249,
+    "endTimeUnixNano": 1792514277470745674,
+    "durationNano": 52311323425,
+    "attributes": {
+     "gen_ai.usage.prompt_tokens": 30244,
+     "gen_ai.usage.output_tokens": 25272,
+     "gen_ai.usage.cache_write_input_tokens": 0,
+     "gen_ai.agent.name": "Strands Agents",
+     "gen_ai.usage.total_tokens": 140876,
+     "gen_ai.usage.completion_tokens": 25272,
+     "gen_ai.event.start_time": "2026-10-20T16:37:05.159454+00:00",
+     "gen_ai.provider.name": "strands-agents",
+     "gen_ai.operation.name": "invoke_agent",
+     "gen_ai.event.end_time": "2026-10-20T16:37:57.470717+00:00",
+     "gen_ai.usage.input_tokens": 30244,
+     "gen_ai.request.model": "global.zai.glm-5.3",
+     "gen_ai.usage.cache_read_input_tokens": 85360,
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51",
+     "gen_ai.system": "strands-agents"
+    },
+    "status": {
+     "code": "OK"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "349978a16c291d0a",
+    "parentSpanId": "c7d00f3b3ce53e86",
+    "name": "SQS.SendMessage",
+    "kind": "CLIENT",
+    "startTimeUnixNano": 1792514277462624549,
+    "endTimeUnixNano": 1792514277470534929,
+    "durationNano": 7910380,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "c7d00f3b3ce53e86",
+    "parentSpanId": "97f133b9b9358983",
+    "name": "launchpad-memory-extract-cn-northwest-1 send",
+    "kind": "PRODUCER",
+    "startTimeUnixNano": 1792514277462354705,
+    "endTimeUnixNano": 1792514277470573870,
+    "durationNano": 8219165,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   },
+   {
+    "traceId": "6ad7983d630d4fc329761f0265c1c712",
+    "spanId": "87af77b911171a97",
+    "parentSpanId": "d98a326e20d5dfa7",
+    "name": "POST /invocations",
+    "kind": "SERVER",
+    "startTimeUnixNano": 1792514111941232892,
+    "endTimeUnixNano": 1792514277471204158,
+    "durationNano": 165529971266,
+    "attributes": {
+     "session.id": "d38bac2b014e4c47af6c3b74966273c2465532fa3e6b46d6ba6f8e496e243c51"
+    },
+    "status": {
+     "code": "UNSET"
+    },
+    "resource": {
+     "attributes": {
+      "service.name": "drama_content_copilot_090801.DEFAULT"
+     }
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,212 @@
+{
+ "session_id": "sess-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+ "log_group": "/aws/bedrock-agentcore/runtimes/eval-fixture-DEFAULT",
+ "records": [
+  {
+   "traceId": "dddddddddddddddddddddddddddddddd",
+   "spanId": "root",
+   "name": "POST /invocations",
+   "kind": "SERVER",
+   "startTimeUnixNano": 1760000000000000000,
+   "endTimeUnixNano": 1760000000010000000,
+   "durationNano": 10000000,
+   "attributes": {
+    "session.id": "sess-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "status": {
+    "code": "OK"
+   },
+   "scope": {
+    "name": "strands.telemetry.tracer"
+   },
+   "resource": {
+    "attributes": {
+     "aws.log.group.names": "/aws/bedrock-agentcore/runtimes/eval-fixture-DEFAULT"
+    }
+   }
+  },
+  {
+   "traceId": "dddddddddddddddddddddddddddddddd",
+   "spanId": "agent",
+   "parentSpanId": "root",
+   "name": "invoke_agent Strands Agents",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1760000000001000000,
+   "endTimeUnixNano": 1760000000009000000,
+   "durationNano": 8000000,
+   "attributes": {
+    "session.id": "sess-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "gen_ai.operation.name": "invoke_agent"
+   },
+   "status": {
+    "code": "OK"
+   },
+   "scope": {
+    "name": "strands.telemetry.tracer"
+   },
+   "resource": {
+    "attributes": {
+     "aws.log.group.names": "/aws/bedrock-agentcore/runtimes/eval-fixture-DEFAULT"
+    }
+   }
+  },
+  {
+   "traceId": "dddddddddddddddddddddddddddddddd",
+   "spanId": "llm1",
+   "parentSpanId": "agent",
+   "name": "chat global.zai.glm-5.3",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1760000000002000000,
+   "endTimeUnixNano": 1760000000004000000,
+   "durationNano": 2000000,
+   "attributes": {
+    "session.id": "sess-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "gen_ai.operation.name": "chat",
+    "gen_ai.request.model": "global.zai.glm-5.3"
+   },
+   "status": {
+    "code": "OK"
+   },
+   "scope": {
+    "name": "strands.telemetry.tracer"
+   },
+   "resource": {
+    "attributes": {
+     "aws.log.group.names": "/aws/bedrock-agentcore/runtimes/eval-fixture-DEFAULT"
+    }
+   }
+  },
+  {
+   "traceId": "dddddddddddddddddddddddddddddddd",
+   "spanId": "tool1",
+   "parentSpanId": "agent",
+   "name": "execute_tool hr_lookup",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1760000000004000000,
+   "endTimeUnixNano": 1760000000006000000,
+   "durationNano": 2000000,
+   "attributes": {
+    "session.id": "sess-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "gen_ai.operation.name": "execute_tool",
+    "gen_ai.tool.name": "hr_lookup"
+   },
+   "status": {
+    "code": "OK"
+   },
+   "scope": {
+    "name": "strands.telemetry.tracer"
+   },
+   "resource": {
+    "attributes": {
+     "aws.log.group.names": "/aws/bedrock-agentcore/runtimes/eval-fixture-DEFAULT"
+    }
+   }
+  },
+  {
+   "traceId": "dddddddddddddddddddddddddddddddd",
+   "spanId": "llm2",
+   "parentSpanId": "agent",
+   "name": "chat global.zai.glm-5.3",
+   "kind": "INTERNAL",
+   "startTimeUnixNano": 1760000000006000000,
+   "endTimeUnixNano": 1760000000008000000,
+   "durationNano": 2000000,
+   "attributes": {
+    "session.id": "sess-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "gen_ai.operation.name": "chat",
+    "gen_ai.request.model": "global.zai.glm-5.3"
+   },
+   "status": {
+    "code": "OK"
+   },
+   "scope": {
+    "name": "strands.telemetry.tracer"
+   },
+   "resource": {
+    "attributes": {
+     "aws.log.group.names": "/aws/bedrock-agentcore/runtimes/eval-fixture-DEFAULT"
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "strands.telemetry.tracer"
+   },
+   "traceId": "dddddddddddddddddddddddddddddddd",
+   "spanId": "llm1",
+   "timeUnixNano": 1760000000005000000,
+   "attributes": {
+    "session.id": "sess-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": {
+        "content": "[{\"text\": \"How many vacation days does Ada have?\"}]"
+       }
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": {
+        "message": "[{\"toolUse\": {\"toolUseId\": \"tu-1\", \"name\": \"hr_lookup\", \"input\": {\"employee\": \"ada\"}}}]",
+        "finish_reason": "tool_use"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "scope": {
+    "name": "strands.telemetry.tracer"
+   },
+   "traceId": "dddddddddddddddddddddddddddddddd",
+   "spanId": "llm2",
+   "timeUnixNano": 1760000000005000000,
+   "attributes": {
+    "session.id": "sess-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "body": {
+    "input": {
+     "messages": [
+      {
+       "role": "user",
+       "content": {
+        "content": "[{\"text\": \"How many vacation days does Ada have?\"}]"
+       }
+      },
+      {
+       "role": "assistant",
+       "content": {
+        "content": "[{\"toolUse\": {\"toolUseId\": \"tu-1\", \"name\": \"hr_lookup\", \"input\": {\"employee\": \"ada\"}}}]"
+       }
+      },
+      {
+       "role": "user",
+       "content": {
+        "content": "[{\"toolResult\": {\"toolUseId\": \"tu-1\", \"status\": \"success\", \"content\": [{\"text\": \"Ada has 12 vacation days left.\"}]}}]"
+       }
+      }
+     ]
+    },
+    "output": {
+     "messages": [
+      {
+       "role": "assistant",
+       "content": {
+        "message": "[{\"text\": \"Ada has 12 vacation days left.\"}]",
+        "finish_reason": "end_turn"
+       }
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

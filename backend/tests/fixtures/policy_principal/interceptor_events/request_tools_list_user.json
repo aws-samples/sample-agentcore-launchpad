@@ -1,0 +1,38 @@
+{
+ "recorded": "P0 probe 2026-10-26 (cn-northwest-1), anonymised; header secrets were redacted at source",
+ "phase": "REQUEST",
+ "client_context": {
+  "custom": {
+   "GATEWAY_ARN": "arn:aws-cn:bedrock-agentcore:cn-northwest-1:123456789012:gateway/launchpad-gw-exampleid0",
+   "GATEWAY_ACCOUNT_ID": "123456789012",
+   "REQUEST_ID": "312f6c4d-f973-4da5-a16c-3891ebe38697",
+   "SOURCE_IP": "198.51.100.7"
+  },
+  "env": null
+ },
+ "event": {
+  "interceptorInputVersion": "1.0",
+  "mcp": {
+   "gatewayRequest": {
+    "path": "/mcp",
+    "httpMethod": "POST",
+    "headers": {},
+    "body": {
+     "id": "c2cd35ca",
+     "jsonrpc": "2.0",
+     "method": "tools/list",
+     "params": {}
+    },
+    "context": {
+     "identity": {
+      "awsPrincipalArn": "arn:aws-cn:iam::123456789012:user/example-operator"
+     }
+    }
+   },
+   "gatewayResponse": null,
+   "rawGatewayRequest": {
+    "body": "{\"jsonrpc\": \"2.0\", \"id\": \"c2cd35ca\", \"method\": \"tools/list\", \"params\": {}}"
+   }
+  }
+ }
+}

@@ -20,23 +20,35 @@ import {
   type AssistantLiveMessage,
   isAssistantUnauthorized,
   openAssistantTurn,
+  openAssistantTurnStream,
   proposalContentFromDraft,
   proposalEditErrors,
   proposalEditStart,
   type ProposalEditDraft,
-  sseEvents,
   toLiveMessages,
 } from "../../../lib/assistant";
+import {
+  applyTurnEvent,
+  domWait,
+  giveUpMessages,
+  markReconnecting,
+  reattachPlan,
+  runTurnLink,
+  type TurnOutcome,
+} from "../../../lib/assistant-turn";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Confirm, FlowHeader, Spin, Tag } from "../../ui";
-import { PROPOSAL_TONE, SECTION_IDS, shortId, useApiMessage } from "./common";
+import { PROPOSAL_TONE, ReadOnlyContext, SECTION_IDS, shortId, useApiMessage } from "./common";
 import { COMPOSER_ID, DiscussionCard } from "./Discussion";
 import { EvalAssetsCard } from "./EvalAssets";
+import { NameConflictAlert } from "./NameConflict";
+import { nameConflictReason } from "./nameConflictReason";
 import { PreparationCard } from "./Preparation";
 import { AdlcCard, CreationProgressCard } from "./Progress";
 import { Outcome, ProposalEditor, ProposalView } from "./Proposal";
 import { useClearConversation } from "./useClearConversation";
+import { awsStatusLabel } from "../../awsStatus";
 
 /** What the approve dialog was opened on — submitted verbatim, never "the latest". */
 interface PinnedApproval {
@@ -65,7 +77,7 @@ export function AssistantDetail({
   const toast = useV2Toast();
   const apiMessage = useApiMessage();
   const [, setParams] = useSearchParams();
-  const { can, isAdmin } = useAuth();
+  const { can, isAdmin, username } = useAuth();
 
   const [conversation, setConversation] = useState<AssistantConversationDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -113,6 +125,10 @@ export function AssistantDetail({
         if (!live || !alive.current) return;
         setConversation(detail);
         setMessages(toLiveMessages(detail.messages));
+        // N-ARCH-obs15: a turn still generating server-side is reattached to; a
+        // read-only viewer (admin on an unshared conversation) only WATCHES it
+        const plan = reattachPlan(detail, username, { watchReadOnly: true });
+        if (plan) void attachLiveRef.current(detail.id, plan.turn, plan.messages, plan.watch);
       },
       (err: unknown) => {
         if (!live || !alive.current) return;
@@ -125,7 +141,7 @@ export function AssistantDetail({
       },
     );
     return () => { live = false; };
-  }, [id, workspaceId, nonce, apiMessage, back, toast]);
+  }, [id, workspaceId, nonce, apiMessage, back, toast, username]);
 
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
@@ -227,6 +243,74 @@ export function AssistantDetail({
         ? t("assistantEval.repairBusy")
         : undefined;
 
+  /**
+   * N-ARCH-obs15: consume one turn's stream to its terminal event, reattaching across
+   * connection losses. `open` is the `POST …/turns` response (a new turn) or the
+   * reattach itself (a page load with `live_turn`). The turn keeps running server-side
+   * whatever happens here; an unmount aborts only this subscription.
+   */
+  const consumeTurn = async (
+    conversationId: string,
+    controller: AbortController,
+    open: (signal: AbortSignal) => Promise<Response>,
+    knownTurn: number | null,
+  ): Promise<TurnOutcome> => {
+    const translateError = (code: string | null, message: string) =>
+      code ? tRef.current(`apiErrors.${code}`, message) : message;
+    const outcome = await runTurnLink({
+      open,
+      reattach: (turn, from, signal) =>
+        openAssistantTurnStream(conversationId, turn, from, workspaceId, signal),
+      signal: controller.signal,
+      turn: knownTurn,
+      onEvent: (evt) => {
+        if (alive.current) setMessages((m) => applyTurnEvent(m, evt, translateError));
+      },
+      onStatus: (status) => {
+        if (!alive.current) return;
+        setMessages((m) => markReconnecting(m, status === "reconnecting"));
+        if (status === "reattached") toast("success", tRef.current("assistantPage.turnReattached"));
+      },
+      wait: domWait,
+    });
+    if (outcome.kind === "gave_up" && alive.current) setMessages((m) => giveUpMessages(m));
+    return outcome;
+  };
+
+  // A page load found a turn still generating: show the transcript up to its user
+  // row, replay the turn from seq 0 and tail it. Same busy/abort ownership as `send`.
+  // `watch`: another member's turn tailed by a read-only viewer — the page is not
+  // busy with it (nothing here could send anyway) and never becomes its sender.
+  const attachLive = async (
+    conversationId: string, turn: number, initial: AssistantLiveMessage[], watch = false,
+  ) => {
+    if (abortRef.current || !alive.current) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    if (!watch) setBusy(true);
+    setMessages(initial);
+    try {
+      const outcome = await consumeTurn(
+        conversationId, controller,
+        (signal) => openAssistantTurnStream(conversationId, turn, 0, workspaceId, signal),
+        turn,
+      );
+      if (!alive.current || outcome.kind === "aborted") return;
+      setMessages((m) => m.map((x) => ({ ...x, streaming: false, reconnecting: false })));
+      await reload(conversationId);
+    } catch (err) {
+      if (!alive.current || controller.signal.aborted) return;
+      // another member's turn (409) or a vanished turn: the transcript reload is the truth
+      if (!(err instanceof ApiError && err.code === "assistant.turn_not_yours")) toast("error", apiMessage(err));
+      await reload(conversationId).catch(() => null);
+    } finally {
+      if (alive.current && !watch) setBusy(false);
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  };
+  const attachLiveRef = useRef(attachLive);
+  attachLiveRef.current = attachLive;
+
   // Both the composer and evaluation repair own the same stream. The controller is
   // also a synchronous claim, before React renders `busy`.
   const send = async (request: AssistantTurnRequest): Promise<AssistantProposal | null> => {
@@ -245,74 +329,15 @@ export function AssistantDetail({
     setMessages((m) => [...m, { role: "user", text: prompt }, { role: "assistant", text: "", streaming: true }]);
     const controller = new AbortController();
     abortRef.current = controller;
-    const append = (text: string) =>
-      setMessages((m) => {
-        const copy = [...m];
-        const last = copy[copy.length - 1];
-        if (last?.role === "assistant" && last.streaming) copy[copy.length - 1] = { ...last, text: last.text + text };
-        return copy;
-      });
     try {
-      const res = await openAssistantTurn(conversationId, request, workspaceId, controller.signal);
-      let proposal: AssistantProposal | null = null;
-      let completed = false;
-      let turnError: ApiError | null = null;
-      for await (const evt of sseEvents(res)) {
-        if (!alive.current) return null;
-        const data = evt.data as Record<string, unknown>;
-        if (evt.event === "delta") append(String(data.text ?? ""));
-        else if (evt.event === "tool") {
-          setMessages((m) => {
-            const copy = [...m];
-            const last = copy[copy.length - 1];
-            if (last?.role === "assistant" && last.streaming) copy.pop();
-            copy.push({ role: "tool", text: "", name: String(data.name ?? "") });
-            copy.push(last?.role === "assistant" && last.streaming ? last : { role: "assistant", text: "", streaming: true });
-            return copy;
-          });
-        } else if (evt.event === "retry") {
-          // the server replays the turn in a fresh session after a transient upstream
-          // failure: drop what the failed attempt streamed (text and tool cards)
-          setMessages((m) => {
-            let k = m.length - 1;
-            while (k >= 0 && m[k].role !== "user") k--;
-            return [...m.slice(0, k + 1), { role: "assistant", text: "", streaming: true }];
-          });
-        } else if (evt.event === "tool_input") {
-          // fills the arguments of the most recent tool card still waiting for them
-          const toolInput = String(data.input ?? "");
-          if (toolInput)
-            setMessages((m) => {
-              const copy = [...m];
-              for (let k = copy.length - 1; k >= 0; k--) {
-                if (copy[k].role === "tool" && !copy[k].text) {
-                  copy[k] = { ...copy[k], text: toolInput };
-                  break;
-                }
-              }
-              return copy;
-            });
-        } else if (evt.event === "proposal") {
-          proposal = data as unknown as AssistantProposal;
-          if (proposal.status === "invalid") {
-            // mirrors the transcript row the backend stored for this rejection
-            const errs = proposal.validation_errors.map((e) => `- ${e}`).join("\n");
-            setMessages((m) => [...m, { role: "error", name: "proposal_rejected", text: errs }]);
-          }
-        } else if (evt.event === "error") {
-          const code = typeof data.code === "string" ? data.code : null;
-          turnError = new ApiError(code ?? "assistant.turn_failed", String(data.message ?? t("assistantEval.repairFailed")), null);
-          setMessages((m) => [
-            ...m.filter((x) => !(x.role === "assistant" && x.streaming && !x.text)),
-            {
-              role: "error",
-              text: code ? tRef.current(`apiErrors.${code}`, String(data.message ?? "")) : String(data.message ?? ""),
-            },
-          ]);
-        } else if (evt.event === "done") completed = true;
-      }
-      if (!alive.current) return null;
-      setMessages((m) => m.map((x) => ({ ...x, streaming: false })));
+      const outcome = await consumeTurn(
+        conversationId, controller,
+        (signal) => openAssistantTurn(conversationId, request, workspaceId, signal),
+        null,
+      );
+      if (!alive.current || outcome.kind === "aborted") return null;
+      const { proposal, completed, error: turnError } = outcome;
+      setMessages((m) => m.map((x) => ({ ...x, streaming: false, reconnecting: false })));
       // re-read the server's transcript + proposals: the ledger is the truth
       const detail = await reload(conversationId);
       if (!detail || !alive.current) return null;
@@ -454,13 +479,20 @@ export function AssistantDetail({
   }
 
   const title = conversation.title || conversation.id.slice(0, 8);
+  // An administrator reading another member's unshared conversation: every panel
+  // shows its state (a live turn is tailed), none offers a write; sharing it turns it
+  // into a collaboration.
+  const readOnly = conversation.read_only;
   // Another member's conversation an admin shared: every panel works as for the
   // owner; only CLEAR (deleting the conversation) stays with the owner.
-  const collaborating = !conversation.mine;
-  const approveDisabled = !canDeploy || approving || busy || preparing || resourcesDirty;
-  const approveReason = resourcesDirty ? t("assistantProgress.hints.unsaved") : deployReason;
+  const collaborating = !conversation.mine && !readOnly;
+  // N17-obs469: a name a live agent holds is said up front — approval would only answer 409
+  const nameReason = nameConflictReason(t, latest);
+  const approveDisabled = !canDeploy || approving || busy || preparing || resourcesDirty || !!nameReason;
+  const approveReason = nameReason ?? (resourcesDirty ? t("assistantProgress.hints.unsaved") : deployReason);
 
   return (
+    <ReadOnlyContext.Provider value={readOnly}>
     <div data-testid="v2-assistant-detail" data-conversation={conversation.id}>
       <FlowHeader
         title={
@@ -488,12 +520,12 @@ export function AssistantDetail({
         onBack={back}
         end={
           <>
-            {isAdmin && (
+            {(isAdmin || conversation.mine) && (
               <Button disabled={sharing} onClick={() => void toggleShare()} testId="v2-assistant-share">
                 {t(conversation.shared ? "v2.assistant.unshare" : "v2.assistant.share")}
               </Button>
             )}
-            {!collaborating && (
+            {conversation.mine && (
               <Button kind="danger" disabled={busy || clear.busy} title={t("assistantPage.clear.action")}
                 onClick={() => void clear.ask(conversation)} testId="v2-assistant-clear">
                 {t("v2.assistant.clear")}
@@ -509,6 +541,11 @@ export function AssistantDetail({
       {collaborating && (
         <div style={{ marginBottom: 12 }} data-testid="v2-assistant-collaborating">
           <Alert>{t("v2.assistant.collaborating", { owner: conversation.owner })}</Alert>
+        </div>
+      )}
+      {readOnly && (
+        <div style={{ marginBottom: 12 }} data-testid="v2-assistant-read-only">
+          <Alert>{t("v2.assistant.readOnlyNotice", { owner: conversation.owner })}</Alert>
         </div>
       )}
       <CreationProgressCard latest={latest} deployed={deployed} resourcesDirty={resourcesDirty} editing={editing !== null} />
@@ -543,7 +580,17 @@ export function AssistantDetail({
           key={`prep:${workspaceId}:${conversation.id}`}
           conversation={conversation}
           workspaceId={workspaceId}
-          disabled={busy || approving || editing !== null || conversation.turn_in_progress !== null}
+          capabilities={status.capabilities}
+          disabled={readOnly || busy || approving || editing !== null || conversation.turn_in_progress !== null}
+          disabledReason={
+            // N-ARCH-obs8: the panel's SAVE names why it is read-only
+            readOnly ? t("v2.assistant.readOnlyTip")
+              : conversation.turn_in_progress !== null ? t("assistantPreparation.waitForTurn")
+              : editing !== null ? t("assistantPreparation.closeEditFirst")
+              : approving ? t("assistantPreparation.approvingWait")
+              : busy ? t("assistantPreparation.busyWait")
+              : undefined
+          }
           onWorking={setPreparing}
           locked={resourcesLocked}
           onDirty={setResourcesDirty}
@@ -595,11 +642,12 @@ export function AssistantDetail({
               <>
                 <div style={{ marginTop: 16 }}>
                   <Alert>{t(resourcesLocked ? "assistantPreparation.reviewOnly" : "assistantPage.supportedHere")}</Alert>
-                  {latest.status === "draft" && !resourcesLocked && (
+                  {latest.status === "draft" && !resourcesLocked && !readOnly && (
                     <Alert tone="warn">{t("assistantPage.billable", { account: status.account_id, region: status.region })}</Alert>
                   )}
+                  {!resourcesLocked && <NameConflictAlert proposal={latest} />}
                 </div>
-                <div className="v2-assistant-actions">
+                {!readOnly && <div className="v2-assistant-actions">
                   {editing ? (
                     <>
                       <Button onClick={() => setEditing(null)}>{t("assistantPage.cancelEdit")}</Button>
@@ -622,6 +670,16 @@ export function AssistantDetail({
                         </>
                       )}
                       <span className="spacer" />
+                      {latest.status === "draft" && resourcesLocked && (
+                        // N16-obs40: one Agent per conversation — the server refuses a second
+                        // creation approval (409 assistant.already_approved); say so instead of
+                        // offering a button that cannot succeed
+                        <span className="v2-muted" style={{ fontSize: 12.5 }} data-testid="v2-assistant-already-approved">
+                          {t("assistantPage.alreadyApprovedHint", {
+                            n: approvedRevisions[approvedRevisions.length - 1]?.revision ?? 0,
+                          })}
+                        </span>
+                      )}
                       {latest.status === "draft" && !resourcesLocked && (
                         <>
                           {approveDisabled && approveReason && (
@@ -648,7 +706,7 @@ export function AssistantDetail({
                       )}
                     </>
                   )}
-                </div>
+                </div>}
               </>
             )}
             {approval && shownApproved && (
@@ -666,8 +724,10 @@ export function AssistantDetail({
                   {olderApprovals.map((p) => (
                     <li key={p.id}>
                       {t("assistantPage.revision", { n: p.revision })} · {p.approval?.agent_name} ·{" "}
-                      {String(p.approval?.agent_status ?? "").toUpperCase()} · job {shortId(p.approval?.job_id)} ·{" "}
-                      {String(p.approval?.job_status ?? "").toUpperCase()}
+                      {p.approval?.agent_status
+                        ? t(`status.${p.approval.agent_status}`, { defaultValue: p.approval.agent_status })
+                        : "—"}{" "}
+                      · job {shortId(p.approval?.job_id)} · {awsStatusLabel(t, p.approval?.job_status)}
                     </li>
                   ))}
                 </ul>
@@ -684,7 +744,7 @@ export function AssistantDetail({
           key={`eval:${workspaceId}:${conversation.id}`}
           conversationId={conversation.id}
           proposals={conversation.proposals}
-          canMaterialize={status.can_materialize_evaluation_assets}
+          canMaterialize={status.can_materialize_evaluation_assets && !readOnly}
           workspaceId={workspaceId}
           apiMessage={apiMessage}
           onError={(m) => toast("error", m)}
@@ -723,5 +783,6 @@ export function AssistantDetail({
       />
       {clear.dialog}
     </div>
+    </ReadOnlyContext.Provider>
   );
 }

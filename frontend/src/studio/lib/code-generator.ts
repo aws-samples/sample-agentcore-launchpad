@@ -1,11 +1,11 @@
 import { type Node, type Edge } from '@xyflow/react';
-import { generateGraphCode, MANTLE_ATTACHMENT_ADAPTER } from './graph-code-generator';
+import { generateGraphCode } from './graph-code-generator';
 import {
+  catalogModelLabel,
   DEFAULT_MODEL_ID,
   gptBedrockModelConfig,
+  isAnthropicModel,
   isBedrockOpenAiGpt,
-  MANTLE_PROVIDER,
-  mantleModelArgs,
 } from './models';
 
 interface CodeGenerationResult {
@@ -76,13 +76,6 @@ export function generateStrandsAgentCode(
     if (hasOpenAIProvider) {
       imports.add('from strands.models.openai import OpenAIModel');
     }
-    // Amazon Bedrock (Mantle) uses the OpenAI Responses API
-    const hasMantleProvider = allAgentNodes.some(node => node.data?.modelProvider === MANTLE_PROVIDER);
-    if (hasMantleProvider) {
-      imports.add('from strands.models.openai_responses import OpenAIResponsesModel');
-      code += MANTLE_ATTACHMENT_ADAPTER;
-    }
-
     // Validate mandatory nodes
     if (agentNodes.length === 0 && orchestratorNodes.length === 0 && swarmNodes.length === 0) {
       errors.push('No agent nodes found. At least one agent, orchestrator agent, or swarm is required.');
@@ -275,12 +268,9 @@ function generateAgentModelOnly(
     label = `Agent${index + 1}`,
     modelProvider = 'AWS Bedrock',
     modelId = DEFAULT_MODEL_ID,
-    modelName = 'Claude 3.7 Sonnet',
+    modelName = catalogModelLabel(modelId as string),
     maxTokens = 32000, // launchpad extension: default max output tokens 32000
     baseUrl = '',
-    // Mantle auth: empty ⇒ IAM (bedrock_mantle_config); set ⇒ keyed client_args
-    apiKey = '',
-    region = '',
     thinkingEnabled = false,
     reasoningEffort = 'medium',
     cacheMessages = false,
@@ -295,7 +285,7 @@ function generateAgentModelOnly(
   const agentVarName = sanitizePythonVariableName(label as string);
 
   // Generate model configuration based on provider
-  const modelConfig = generateModelConfigForCode(agentVarName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean, apiKey as string, region as string);
+  const modelConfig = generateModelConfigForCode(agentVarName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean);
 
   return `# ${label} Configuration
 ${modelConfig}`;
@@ -312,13 +302,10 @@ function generateAgentCode(
     label = `Agent${index + 1}`,
     modelProvider = 'AWS Bedrock',
     modelId = DEFAULT_MODEL_ID,
-    modelName = 'Claude 3.7 Sonnet',
+    modelName = catalogModelLabel(modelId as string),
     systemPrompt = 'You are a helpful AI assistant.',
     maxTokens = 32000, // launchpad extension: default max output tokens 32000
     baseUrl = '',
-    // Mantle auth: empty ⇒ IAM (bedrock_mantle_config); set ⇒ keyed client_args
-    apiKey = '',
-    region = '',
     thinkingEnabled = false,
     reasoningEffort = 'medium',
     cacheMessages = false,
@@ -345,7 +332,7 @@ function generateAgentCode(
   const systemPromptValue = String(systemPrompt || 'You are a helpful AI assistant.');
 
   // Generate model configuration based on provider
-  const modelConfig = generateModelConfigForCode(agentVarName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean, apiKey as string, region as string);
+  const modelConfig = generateModelConfigForCode(agentVarName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean);
 
   return `# ${label} Configuration
 ${modelConfig}
@@ -368,13 +355,10 @@ function generateSwarmAgentCode(
     label = `Agent${index + 1}`,
     modelProvider = 'AWS Bedrock',
     modelId = DEFAULT_MODEL_ID,
-    modelName = 'Claude 3.7 Sonnet',
+    modelName = catalogModelLabel(modelId as string),
     systemPrompt = 'You are a helpful AI assistant.',
     maxTokens = 32000, // launchpad extension: default max output tokens 32000
     baseUrl = '',
-    // Mantle auth: empty ⇒ IAM (bedrock_mantle_config); set ⇒ keyed client_args
-    apiKey = '',
-    region = '',
     thinkingEnabled = false,
     reasoningEffort = 'medium',
     cacheMessages = false,
@@ -401,7 +385,7 @@ function generateSwarmAgentCode(
   const systemPromptValue = String(systemPrompt || 'You are a helpful AI assistant.');
 
   // Generate model configuration based on provider
-  const modelConfig = generateModelConfigForCode(agentVarName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean, apiKey as string, region as string);
+  const modelConfig = generateModelConfigForCode(agentVarName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean);
 
   return `# ${label} Configuration
 ${modelConfig}
@@ -1097,13 +1081,10 @@ function generateAgentAsToolCode(
     label = `Agent${index + 1}`,
     modelProvider = 'AWS Bedrock',
     modelId = DEFAULT_MODEL_ID,
-    modelName = 'Claude 3.7 Sonnet',
+    modelName = catalogModelLabel(modelId as string),
     systemPrompt = 'You are a helpful AI assistant.',
     maxTokens = 32000, // launchpad extension: default max output tokens 32000
     baseUrl = '',
-    // Mantle auth: empty ⇒ IAM (bedrock_mantle_config); set ⇒ keyed client_args
-    apiKey = '',
-    region = '',
     thinkingEnabled = false,
     reasoningEffort = 'medium',
     cacheMessages = false,
@@ -1147,7 +1128,7 @@ def ${functionName}(user_input: str) -> str:
         ${mcpClientVars.map(clientVar => `mcp_tools.extend(${clientVar}.list_tools_sync())`).join('\n        ')}
         
         # Create model for ${label}
-        ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean, apiKey as string, region as string)}
+        ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean)}
 
         # Create agent with MCP tools
         agent = Agent(
@@ -1171,7 +1152,7 @@ def ${functionName}(user_input: str) -> str:
     """${label} - ${(systemPrompt as string).substring(0, 100)}${(systemPrompt as string).length > 100 ? '...' : ''}"""
 
     # Create model for ${label}
-    ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean, apiKey as string, region as string)}
+    ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean)}
 
     # Create agent
     agent = Agent(
@@ -1200,14 +1181,11 @@ function generateOrchestratorAsToolCode(
     label = `OrchestratorAgent${index + 1}`,
     modelProvider = 'AWS Bedrock',
     modelId = DEFAULT_MODEL_ID,
-    modelName = 'Claude 3.7 Sonnet',
+    modelName = catalogModelLabel(modelId as string),
     systemPrompt = 'You are an orchestrator agent that coordinates multiple specialized agents.',
     maxTokens = 32000, // launchpad extension: default max output tokens 32000
     coordinationPrompt = '',
     baseUrl = '',
-    // Mantle auth: empty ⇒ IAM (bedrock_mantle_config); set ⇒ keyed client_args
-    apiKey = '',
-    region = '',
     thinkingEnabled = false,
     reasoningEffort = 'medium',
     cacheMessages = false,
@@ -1270,7 +1248,7 @@ def ${functionName}(user_input: str) -> str:
         ${mcpClientVars.map(clientVar => `mcp_tools.extend(${clientVar}.list_tools_sync())`).join('\n        ')}
         
         # Create model for ${label}
-        ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean, apiKey as string, region as string)}
+        ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean)}
 
         # Create orchestrator agent with MCP tools
         agent = Agent(
@@ -1294,7 +1272,7 @@ def ${functionName}(user_input: str) -> str:
     """${label} - ${(systemPrompt as string).substring(0, 100)}${(systemPrompt as string).length > 100 ? '...' : ''}"""
 
     # Create model for ${label}
-    ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean, apiKey as string, region as string)}
+    ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean)}
 
     # Create orchestrator agent
     agent = Agent(
@@ -1320,12 +1298,9 @@ function generateOrchestratorModelOnly(
     label = `OrchestratorAgent${index + 1}`,
     modelProvider = 'AWS Bedrock',
     modelId = DEFAULT_MODEL_ID,
-    modelName = 'Claude 3.7 Sonnet',
+    modelName = catalogModelLabel(modelId as string),
     maxTokens = 32000, // launchpad extension: default max output tokens 32000
     baseUrl = '',
-    // Mantle auth: empty ⇒ IAM (bedrock_mantle_config); set ⇒ keyed client_args
-    apiKey = '',
-    region = '',
     thinkingEnabled = false,
     reasoningEffort = 'medium',
     cacheMessages = false,
@@ -1338,7 +1313,7 @@ function generateOrchestratorModelOnly(
   const orchestratorName = sanitizePythonVariableName(label as string);
 
   // Generate model configuration based on provider
-  const modelConfig = generateModelConfigForCode(orchestratorName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean, apiKey as string, region as string);
+  const modelConfig = generateModelConfigForCode(orchestratorName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean);
 
   return `# ${label} Configuration
 ${modelConfig}`;
@@ -1355,14 +1330,11 @@ function generateOrchestratorCode(
     label = `OrchestratorAgent${index + 1}`,
     modelProvider = 'AWS Bedrock',
     modelId = DEFAULT_MODEL_ID,
-    modelName = 'Claude 3.7 Sonnet',
+    modelName = catalogModelLabel(modelId as string),
     systemPrompt = 'You are an orchestrator agent that coordinates multiple specialized agents.',
     maxTokens = 32000, // launchpad extension: default max output tokens 32000
     coordinationPrompt = '',
     baseUrl = '',
-    // Mantle auth: empty ⇒ IAM (bedrock_mantle_config); set ⇒ keyed client_args
-    apiKey = '',
-    region = '',
     thinkingEnabled = false,
     reasoningEffort = 'medium',
     cacheMessages = false,
@@ -1423,7 +1395,7 @@ function generateOrchestratorCode(
 
   if (hasMCPTools) {
     // When MCP tools are present, only define the model - agent creation happens in main()
-    const modelConfig = generateModelConfigForCode(orchestratorName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean, apiKey as string, region as string);
+    const modelConfig = generateModelConfigForCode(orchestratorName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean);
     return `# ${label} Configuration
 ${modelConfig}
 
@@ -1431,7 +1403,7 @@ ${modelConfig}
   } else {
     // Regular orchestrator without MCP tools
     const skillsCode = buildSkillsPluginArg(findConnectedSkills(orchestratorNode, allNodes, edges), '    ');
-    const modelConfig = generateModelConfigForCode(orchestratorName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean, apiKey as string, region as string);
+    const modelConfig = generateModelConfigForCode(orchestratorName, modelProvider as string, modelIdentifier as string, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean);
     return `# ${label} Configuration
 ${modelConfig}
 
@@ -1453,33 +1425,12 @@ function generateModelConfigForCode(
   reasoningEffort?: string,
   cacheMessages?: boolean,
   cacheTools?: boolean,
-  cacheSystem?: boolean, // launchpad extension: system-prompt caching
-  apiKey?: string,
-  region?: string
+  cacheSystem?: boolean // launchpad extension: system-prompt caching
 ): string {
   // Legacy projects may still carry 'minimal' (removed from the effort scale)
   if (reasoningEffort === 'minimal') reasoningEffort = 'low';
 
-  if (modelProvider === MANTLE_PROVIDER) {
-    // Amazon Bedrock (Mantle): OpenAI-compatible endpoint via the Responses API.
-    // Auth is IAM unless the node carries an explicit key — see mantleModelArgs.
-    // gpt/grok reasoning models take reasoning={"effort": ...}. Sampling params
-    // (temperature/top_p) are never emitted — the SDK defaults apply.
-    const clientArgsStr = mantleModelArgs(
-      { apiKey, region, modelId: modelIdentifier },
-      '    ',
-    );
-    const params = [`"max_output_tokens": ${maxTokens}`];
-    if (thinkingEnabled && reasoningEffort) {
-      params.push(`"reasoning": {"effort": "${reasoningEffort}"}`);
-    }
-    return `${varName}_model = LaunchpadOpenAIResponsesModel(${clientArgsStr}
-    model_id="${modelIdentifier}",
-    params={
-        ${params.join(',\n        ')},
-    }
-)`;
-  } else if (modelProvider === 'OpenAI') {
+  if (modelProvider === 'OpenAI') {
     const clientArgs = [];
     // Always use environment variable for API key for security - never hardcode
     clientArgs.push(`"api_key": os.environ.get("OPENAI_API_KEY")`);
@@ -1501,22 +1452,25 @@ function generateModelConfigForCode(
     }
 )`;
   } else {
-    // Default to Bedrock. Claude 4.6+ uses adaptive thinking (budget_tokens is
-    // rejected on Sonnet 5 / Opus 4.8). Sampling params (temperature/top_p) are
-    // never emitted — newer Claude models reject them and the SDK defaults apply.
-    // launchpad extension: clamp max_tokens to per-model caps (Nova Pro 10000, Nova Premier 32000)
-    let effectiveMaxTokens = maxTokens;
-    if (modelIdentifier.includes('nova-premier')) effectiveMaxTokens = Math.min(maxTokens, 32000);
-    else if (modelIdentifier.includes('nova-pro')) effectiveMaxTokens = Math.min(maxTokens, 10000);
+    // Default to Bedrock. Anthropic models use adaptive thinking (budget_tokens is
+    // rejected on current-generation Anthropic models). Sampling params (temperature/
+    // top_p) are never emitted — newer Anthropic models reject them and the SDK
+    // defaults apply.
+    // launchpad-cn: GLM 5.3 reasons before it answers; a ceiling under ~200 tokens
+    // returns an empty text block, so never below 256 (spec C3).
+    const effectiveMaxTokens = Math.max(maxTokens, 256);
     if (isBedrockOpenAiGpt(modelIdentifier)) {
       return gptBedrockModelConfig(varName, modelIdentifier, effectiveMaxTokens, thinkingEnabled, reasoningEffort, '');
     }
 
     let bedrockCode = `${varName}_model = BedrockModel(
     model_id="${modelIdentifier}",
+    # region-boundary: global-bedrock
+    region_name=os.environ.get("LAUNCHPAD_MODEL_REGION", "us-west-2"),
     max_tokens=${effectiveMaxTokens}`;
 
-    if (thinkingEnabled) {
+    // launchpad-cn (R17): Anthropic-only request shape — GLM 5.3 / Kimi K3 reject it, so the block is skipped for them.
+    if (thinkingEnabled && isAnthropicModel(modelIdentifier)) {
       // launchpad extension: emit output_config.effort alongside adaptive thinking (probe-verified
       // shape); clamp xhigh->high for models that reject it (only Sonnet 5 / Opus 4.8 accept xhigh)
       let effortTier = reasoningEffort;
@@ -1537,7 +1491,7 @@ function generateModelConfigForCode(
     }`;
     }
 
-    // Bedrock prompt caching (Claude): auto message caching / tool caching
+    // Bedrock prompt caching (Anthropic): auto message caching / tool caching
     if (cacheMessages) {
       bedrockCode += `,
     cache_config=CacheConfig(strategy="auto")`;
@@ -1567,30 +1521,12 @@ function generateModelConfigForTool(
   reasoningEffort?: string,
   cacheMessages?: boolean,
   cacheTools?: boolean,
-  cacheSystem?: boolean, // launchpad extension: system-prompt caching
-  apiKey?: string,
-  region?: string
+  cacheSystem?: boolean // launchpad extension: system-prompt caching
 ): string {
   // Legacy projects may still carry 'minimal' (removed from the effort scale)
   if (reasoningEffort === 'minimal') reasoningEffort = 'low';
 
-  if (modelProvider === MANTLE_PROVIDER) {
-    // Amazon Bedrock (Mantle): OpenAI-compatible endpoint via the Responses API
-    const clientArgsStr = mantleModelArgs(
-      { apiKey, region, modelId: modelIdentifier },
-      '            ',
-    );
-    const params = [`"max_output_tokens": ${maxTokens}`];
-    if (thinkingEnabled && reasoningEffort) {
-      params.push(`"reasoning": {"effort": "${reasoningEffort}"}`);
-    }
-    return `${varName}_model = LaunchpadOpenAIResponsesModel(${clientArgsStr}
-            model_id="${modelIdentifier}",
-            params={
-                ${params.join(',\n                ')},
-            }
-        )`;
-  } else if (modelProvider === 'OpenAI') {
+  if (modelProvider === 'OpenAI') {
     const clientArgs = [];
     // Always use environment variable for API key for security - never hardcode
     clientArgs.push(`\"api_key\": os.environ.get(\"OPENAI_API_KEY\")`);
@@ -1613,19 +1549,21 @@ function generateModelConfigForTool(
         )`;
   } else {
     // Default to Bedrock — adaptive thinking (see generateModelConfigForCode)
-    // launchpad extension: clamp max_tokens to per-model caps (Nova Pro 10000, Nova Premier 32000)
-    let effectiveMaxTokens = maxTokens;
-    if (modelIdentifier.includes('nova-premier')) effectiveMaxTokens = Math.min(maxTokens, 32000);
-    else if (modelIdentifier.includes('nova-pro')) effectiveMaxTokens = Math.min(maxTokens, 10000);
+    // launchpad-cn: GLM 5.3 reasons before it answers; a ceiling under ~200 tokens
+    // returns an empty text block, so never below 256 (spec C3).
+    const effectiveMaxTokens = Math.max(maxTokens, 256);
     if (isBedrockOpenAiGpt(modelIdentifier)) {
       return gptBedrockModelConfig(varName, modelIdentifier, effectiveMaxTokens, thinkingEnabled, reasoningEffort, '        ');
     }
 
     let bedrockCode = `${varName}_model = BedrockModel(
             model_id="${modelIdentifier}",
+            # region-boundary: global-bedrock
+            region_name=os.environ.get("LAUNCHPAD_MODEL_REGION", "us-west-2"),
             max_tokens=${effectiveMaxTokens}`;
 
-    if (thinkingEnabled) {
+    // launchpad-cn (R17): Anthropic-only request shape — GLM 5.3 / Kimi K3 reject it, so the block is skipped for them.
+    if (thinkingEnabled && isAnthropicModel(modelIdentifier)) {
       // launchpad extension: emit output_config.effort alongside adaptive thinking (probe-verified
       // shape); clamp xhigh->high for models that reject it (only Sonnet 5 / Opus 4.8 accept xhigh)
       let effortTier = reasoningEffort;
@@ -1646,7 +1584,7 @@ function generateModelConfigForTool(
             }`;
     }
 
-    // Bedrock prompt caching (Claude): auto message caching / tool caching
+    // Bedrock prompt caching (Anthropic): auto message caching / tool caching
     if (cacheMessages) {
       bedrockCode += `,
             cache_config=CacheConfig(strategy="auto")`;

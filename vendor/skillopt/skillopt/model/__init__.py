@@ -6,15 +6,12 @@ from typing import Any
 
 from skillopt.model import azure_openai as _openai
 from skillopt.model import bedrock_chat as _bedrock  # LAUNCHPAD PATCH
-from skillopt.model import claude_backend as _claude
 from skillopt.model import mantle_openai as _mantle
 from skillopt.model import minimax_backend as _minimax
 from skillopt.model import qwen_backend as _qwen
 from skillopt.model.backend_config import (  # noqa: F401
-    configure_claude_code_exec,
-    configure_codex_exec,
-    get_claude_code_exec_config,
-    get_codex_exec_config,
+    configure_opencode_exec,
+    get_opencode_exec_config,
     get_target_backend,
     get_optimizer_backend,
     is_target_chat_backend,
@@ -43,18 +40,10 @@ def set_backend(name: str | None) -> str:
         set_optimizer_backend("openai_chat")
         set_target_backend("openai_chat")
         return "azure_openai"
-    if normalized in {"claude", "claude_chat", "anthropic"}:
-        set_optimizer_backend("claude_chat")
-        set_target_backend("claude_chat")
-        return "claude_chat"
-    if normalized == "codex":
-        set_optimizer_backend("openai_chat")
-        set_target_backend("codex_exec")
-        return "codex"
-    if normalized in {"codex_exec", "claude_code_exec"}:
-        set_optimizer_backend("openai_chat")
-        set_target_backend(normalized)
-        return normalized
+    if normalized in {"opencode", "opencode_exec"}:  # LAUNCHPAD PATCH (D16)
+        set_optimizer_backend("bedrock_chat")
+        set_target_backend("opencode_exec")
+        return "opencode_exec"
     if normalized in {"qwen", "qwen_chat"}:
         set_optimizer_backend("openai_chat")
         set_target_backend("qwen_chat")
@@ -70,14 +59,12 @@ def get_backend_name() -> str:
     """Best-effort backward-compatible backend summary."""
     optimizer = get_optimizer_backend()
     target = get_target_backend()
-    if optimizer == "claude_chat" and target == "claude_chat":
-        return "claude_chat"
     if optimizer == "qwen_chat" and target == "qwen_chat":
         return "qwen_chat"
     if optimizer == "openai_chat" and target == "openai_chat":
         return "azure_openai"
-    if optimizer == "openai_chat" and target == "codex_exec":
-        return "codex"
+    if optimizer == "bedrock_chat" and target == "opencode_exec":  # LAUNCHPAD PATCH (D16)
+        return "opencode_exec"
     if optimizer == "openai_chat" and target == "qwen_chat":
         return "qwen_chat"
     if optimizer == "openai_chat" and target == "minimax_chat":
@@ -94,15 +81,6 @@ def chat_optimizer(
     reasoning_effort: str | None = None,
     timeout: int | None = None,
 ) -> tuple[str, dict]:
-    if get_optimizer_backend() == "claude_chat":
-        return _claude.chat_optimizer(
-            system=system,
-            user=user,
-            max_completion_tokens=max_completion_tokens,
-            retries=retries,
-            stage=stage,
-            timeout=timeout,
-        )
     if get_optimizer_backend() == "qwen_chat":
         return _qwen.chat_optimizer(
             system=system,
@@ -143,15 +121,6 @@ def chat_target(
     reasoning_effort: str | None = None,
     timeout: int | None = None,
 ) -> tuple[str, dict]:
-    if get_target_backend() == "claude_chat":
-        return _claude.chat_target(
-            system=system,
-            user=user,
-            max_completion_tokens=max_completion_tokens,
-            retries=retries,
-            stage=stage,
-            timeout=timeout,
-        )
     if get_target_backend() == "qwen_chat":
         return _qwen.chat_target(
             system=system,
@@ -183,7 +152,7 @@ def chat_target(
         )
     if not is_target_chat_backend():
         raise NotImplementedError(
-            "chat_target is only supported with target_backend=openai_chat, claude_chat, qwen_chat, or minimax_chat. "
+            "chat_target is only supported with target_backend=openai_chat, qwen_chat, minimax_chat, or bedrock_chat. "
             "Exec backends are handled in environment-specific rollout code."
         )
     return _openai_module("target").chat_target(
@@ -209,17 +178,6 @@ def chat_optimizer_messages(
     return_message: bool = False,
     timeout: int | None = None,
 ) -> tuple[Any, dict]:
-    if get_optimizer_backend() == "claude_chat":
-        return _claude.chat_optimizer_messages(
-            messages=messages,
-            max_completion_tokens=max_completion_tokens,
-            retries=retries,
-            stage=stage,
-            tools=tools,
-            tool_choice=tool_choice,
-            return_message=return_message,
-            timeout=timeout,
-        )
     if get_optimizer_backend() == "qwen_chat":
         return _qwen.chat_optimizer_messages(
             messages=messages,
@@ -269,17 +227,6 @@ def chat_target_messages(
     return_message: bool = False,
     timeout: int | None = None,
 ) -> tuple[Any, dict]:
-    if get_target_backend() == "claude_chat":
-        return _claude.chat_target_messages(
-            messages=messages,
-            max_completion_tokens=max_completion_tokens,
-            retries=retries,
-            stage=stage,
-            tools=tools,
-            tool_choice=tool_choice,
-            return_message=return_message,
-            timeout=timeout,
-        )
     if get_target_backend() == "qwen_chat":
         return _qwen.chat_target_messages(
             messages=messages,
@@ -305,7 +252,7 @@ def chat_target_messages(
         )
     if not is_target_chat_backend():
         raise NotImplementedError(
-            "chat_target_messages is only supported with target_backend=openai_chat, claude_chat, qwen_chat, or minimax_chat. "
+            "chat_target_messages is only supported with target_backend=openai_chat, qwen_chat, minimax_chat, or bedrock_chat. "
             "Exec backends are handled in environment-specific rollout code."
         )
     if get_target_backend() == "bedrock_chat":  # LAUNCHPAD PATCH
@@ -384,17 +331,6 @@ def chat_with_deployment(
 
 def get_token_summary() -> dict:
     summary = _openai.get_token_summary()
-    claude_summary = _claude.get_token_summary()
-    for stage, values in claude_summary.items():
-        if stage == "_total":
-            continue
-        if stage not in summary:
-            summary[stage] = values
-            continue
-        summary[stage]["calls"] += values["calls"]
-        summary[stage]["prompt_tokens"] += values["prompt_tokens"]
-        summary[stage]["completion_tokens"] += values["completion_tokens"]
-        summary[stage]["total_tokens"] += values["total_tokens"]
     qwen_summary = _qwen.get_token_summary()
     for stage, values in qwen_summary.items():
         if stage == "_total":
@@ -447,7 +383,6 @@ def get_token_summary() -> dict:
 
 def reset_token_tracker() -> None:
     _openai.reset_token_tracker()
-    _claude.reset_token_tracker()
     _qwen.reset_token_tracker()
     _minimax.reset_token_tracker()
     _bedrock.reset_token_tracker()  # LAUNCHPAD PATCH
@@ -560,7 +495,6 @@ def configure_minimax_chat(
 
 def set_reasoning_effort(effort: str | None) -> None:
     _openai.set_reasoning_effort(effort)
-    _claude.set_reasoning_effort(effort)
     _qwen.set_reasoning_effort(effort)
     _minimax.set_reasoning_effort(effort)
     _bedrock.set_reasoning_effort(effort)  # LAUNCHPAD PATCH
@@ -568,7 +502,6 @@ def set_reasoning_effort(effort: str | None) -> None:
 
 def set_target_deployment(deployment: str) -> None:
     _openai.set_target_deployment(deployment)
-    _claude.set_target_deployment(deployment)
     _qwen.set_target_deployment(deployment)
     _minimax.set_target_deployment(deployment)
     _bedrock.set_target_deployment(deployment)  # LAUNCHPAD PATCH
@@ -576,6 +509,5 @@ def set_target_deployment(deployment: str) -> None:
 
 def set_optimizer_deployment(deployment: str) -> None:
     _openai.set_optimizer_deployment(deployment)
-    _claude.set_optimizer_deployment(deployment)
     _bedrock.set_optimizer_deployment(deployment)  # LAUNCHPAD PATCH
     _qwen.set_optimizer_deployment(deployment)

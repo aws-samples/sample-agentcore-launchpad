@@ -1,0 +1,53 @@
+version: 0.2
+
+# Env expected via start_build environmentVariablesOverride:
+#   AWS_REGION, ECR_REGISTRY, ECR_REPO, IMAGE_TAG
+#   optional (N17-obs465, the aws-cn trace exporter layer for a Node agent):
+#     LAUNCHPAD_CN_TRACE_LAYER=1  build the platform layer (Dockerfile.launchpad-adot-cn) FROM
+#                                 the member's image and push it as IMAGE_TAG; the member's own
+#                                 image is pushed as IMAGE_TAG-member
+#     LAUNCHPAD_MEMBER_IMAGE      an existing private-ECR image (container_image): pulled
+#                                 instead of building the member's Dockerfile
+# Env expected via the CodeBuild *project*'s environment (set once at
+# project-creation time by base_stack.py / workspace_bootstrap.py, not per
+# build): PIP_INDEX_URL, UV_INDEX_URL, NPM_CONFIG_REGISTRY and, only when
+# Settings.base_image_mirror_enabled is on, BASE_IMAGE.
+phases:
+  pre_build:
+    commands:
+      - echo "logging in to $ECR_REGISTRY"
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+  build:
+    commands:
+      - echo "building $ECR_REPO:$IMAGE_TAG (linux/arm64)"
+      - |
+        MEMBER_REF="$ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG"
+        if [ "${LAUNCHPAD_CN_TRACE_LAYER:-}" = "1" ]; then MEMBER_REF="$ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG-member"; fi
+        if [ -n "${LAUNCHPAD_MEMBER_IMAGE:-}" ]; then
+          docker pull --platform linux/arm64 "$LAUNCHPAD_MEMBER_IMAGE"
+          MEMBER_REF="$LAUNCHPAD_MEMBER_IMAGE"
+        elif [ -n "${BASE_IMAGE:-}" ]; then
+          docker build --platform linux/arm64 \
+            --build-arg BASE_IMAGE="$BASE_IMAGE" \
+            --build-arg PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.org/simple}" \
+            -t "$MEMBER_REF" .
+        else
+          docker build --platform linux/arm64 \
+            --build-arg PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.org/simple}" \
+            -t "$MEMBER_REF" .
+        fi
+        echo "member image: $MEMBER_REF"
+        if [ "${LAUNCHPAD_CN_TRACE_LAYER:-}" = "1" ]; then
+          docker build --platform linux/arm64 -f Dockerfile.launchpad-adot-cn \
+            --build-arg LAUNCHPAD_MEMBER_IMAGE="$MEMBER_REF" \
+            -t $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG .
+          echo "aws-cn trace exporter layer: $ECR_REPO:$IMAGE_TAG FROM $MEMBER_REF"
+        fi
+  post_build:
+    commands:
+      - |
+        if [ "${LAUNCHPAD_CN_TRACE_LAYER:-}" = "1" ] && [ -z "${LAUNCHPAD_MEMBER_IMAGE:-}" ]; then
+          docker push $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG-member
+        fi
+      - docker push $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG
+      - echo "pushed $ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG"

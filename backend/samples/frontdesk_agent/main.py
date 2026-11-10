@@ -1,5 +1,11 @@
 """front-desk — Registry-driven A2A routing agent (Launchpad demo).
 
+GLOBAL-REGION SAMPLE — not deployable in aws-cn. It persists sessions through AgentCore
+Memory (`AgentCoreMemorySessionManager`, default region us-west-2), which the CN build
+replaces with the self-hosted memory library (docs/cn/interfaces/memory-runtime.md).
+Kept as-is for reference; no verify-gate test deploys or runs it (tests/test_a2a_demo.py
+only exercises its pure helpers with the SDK manager stubbed).
+
 Knows no business domain itself. For every question it:
 1. DISCOVERs specialists via Registry semantic search (APPROVED A2A cards),
 2. SELECTs one by the cards' skills/descriptions,

@@ -1,0 +1,7 @@
+[
+ {"step": "s01", "outcome": "expected", "duration_s": 10.0},
+ {"step": "s02", "outcome": "expected", "duration_s": 5.0},
+ {"step": "s03", "outcome": "flaky", "duration_s": 5.0},
+ {"step": "s05b", "outcome": "unexpected", "duration_s": 24.0},
+ {"step": "s05c", "outcome": "skipped", "duration_s": 0.0}
+]

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import {
   type AgentForm,
+  type AttachableAgent,
   type AttachableKb,
   type AttachableMcp,
   type AttachableSkill,
@@ -13,15 +14,20 @@ import {
   toggle,
 } from "../../../lib/agent-spec";
 import { api, type ByocUploadInfo, errorMessage, type InspectedSkill, type MemoryResourceRow } from "../../../lib/api";
+import { type MethodCapabilities } from "../../../lib/capabilities";
 import {
   CUSTOM_MODEL_OPTION,
   type ModelSource,
+  modelOptionLabel,
   modelOptionsFor,
+  modelUnavailableReason,
+  providerBadgeKey,
   REASONING_EFFORTS,
   supportsReasoningEffort,
 } from "../../../lib/models";
 import { EFFORT_NONE, type EffortChoice } from "../../../pages/create/presetSettings";
 import { useV2Toast } from "../../hooks";
+import { awsStatusLabel } from "../../awsStatus";
 import { Alert, Button, Card, Field, Segmented, Select, Spin } from "../../ui";
 
 /** The live catalogs the configure step offers (a failed read leaves one empty). */
@@ -29,9 +35,14 @@ export interface WizardCatalogs {
   loading: boolean;
   gatewayTargets: AttachableMcp[];
   remoteMcp: AttachableMcp[];
+  /** APPROVED A2A records — other Launchpad agents mountable as ask_<agent> tools */
+  agents: AttachableAgent[];
   skills: AttachableSkill[];
   kbCatalog: AttachableKb[];
   memories: MemoryResourceRow[];
+  /** per deploy method, the creation-time option domain (`GET /api/capabilities.methods`);
+   *  null while unknown — then everything is offered and the server's 422 decides */
+  methodCaps: MethodCapabilities | null;
 }
 
 /** Wizard state that is not part of the spec but must survive a step change. */
@@ -115,7 +126,6 @@ export function ModelCard({
   applySource,
   showSource,
   sourceNote,
-  claudeOnly = false,
   knobs = false,
   locked = false,
 }: Omit<SectionProps, "cat"> & {
@@ -125,13 +135,19 @@ export function ModelCard({
   showSource: boolean;
   /** why the source is pinned when the control is hidden */
   sourceNote?: string;
-  claudeOnly?: boolean;
   knobs?: boolean;
   /** read-only (a converted agent's exported code bakes its model) */
   locked?: boolean;
 }) {
   const { t } = useTranslation();
-  const options = modelOptionsFor(form.modelSource, claudeOnly);
+  const options = modelOptionsFor(form.modelSource);
+  // N-R6-obs1: a row whose provider has no key here is listed disabled with the SSM
+  // parameter to create; a stored unavailable id shows the same text as the hint
+  const unavailable = modelUnavailableReason(form.modelId);
+  const unavailableTitle = (id: string) => {
+    const reason = modelUnavailableReason(id);
+    return reason ? t("models.unavailable", reason) : undefined;
+  };
   const effortAllowed = supportsReasoningEffort(form.modelId.trim(), form.modelSource);
   return (
     <Card title={t("v2.agents.model")}>
@@ -140,12 +156,12 @@ export function ModelCard({
           <Field
             label={t("v2.agents.wizard.modelSource")}
             full
-            hint={t(form.modelSource === "mantle" ? "create.configure.modelSourceMantleDesc" : "create.configure.modelSourceBedrockDesc")}
+            hint={t("create.configure.modelSourceBedrockDesc")}
           >
             <div className="v2-row">
 <Segmented
               value={form.modelSource}
-              options={(["bedrock", "mantle"] as ModelSource[]).map((s) => ({ value: s, label: t(`v2.agents.wizard.source.${s}`) }))}
+              options={(["bedrock"] as ModelSource[]).map((s) => ({ value: s, label: t(`v2.agents.wizard.source.${s}`) }))}
               // a benign re-click keeps a custom id; a real switch re-seeds
               onChange={(s) => s !== form.modelSource && applySource(s)}
             />
@@ -158,7 +174,12 @@ export function ModelCard({
             </Field>
           )
         )}
-        <Field label={t("v2.agents.model")} required error={err("model")}>
+        <Field
+          label={t("v2.agents.model")}
+          required
+          error={err("model")}
+          hint={custom ? undefined : unavailable ? t("models.unavailable", unavailable) : t("models.badge", { provider: t(providerBadgeKey(form.modelId)) })}
+        >
           <Select
             value={custom ? CUSTOM_MODEL_OPTION : form.modelId}
             disabled={locked}
@@ -171,7 +192,12 @@ export function ModelCard({
             }}
             testId="v2-agent-model"
             options={[
-              ...options.map((o) => ({ value: o.model_id, label: o.label })),
+              ...options.map((o) => ({
+                value: o.model_id,
+                label: modelOptionLabel(o, t("models.unavailableShort")),
+                disabled: !o.available,
+                title: unavailableTitle(o.model_id),
+              })),
               { value: CUSTOM_MODEL_OPTION, label: t("v2.agents.wizard.customModel") },
             ]}
           />
@@ -450,7 +476,8 @@ export function MemoryCard({ form, set, cat, err, loop, note }: SectionProps & {
             options={[
               ...options.map((m) => ({
                 value: m.id ?? "",
-                label: `${m.name ?? m.id ?? ""}${m.status !== "ACTIVE" ? ` (${m.status ?? "?"})` : ""}`,
+                // N17-obs456: a memory that is not ACTIVE names its status in the console language
+                label: `${m.name ?? m.id ?? ""}${m.status !== "ACTIVE" ? ` (${awsStatusLabel(t, m.status)})` : ""}`,
                 disabled: m.status !== "ACTIVE",
               })),
               /* a pin the list no longer carries stays selectable; an unmanaged

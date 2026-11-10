@@ -1,0 +1,24 @@
+{
+  "now": 1793022100,
+  "verify_as": {"workspace_id": "default", "env": "", "agent_id": "ag_hrhelp01"},
+  "base": "user_member_chat",
+  "note": "patch values replace top-level claims (p replaces the whole principal); '$delete' removes the claim. Header / signature / kid cases are built in the test itself.",
+  "cases": [
+    {"name": "expired", "patch": {"iat": 1793020000, "exp": 1793020900}, "expect": "expired"},
+    {"name": "not_yet_valid", "patch": {"iat": 1793030000, "exp": 1793030900}, "expect": "not_yet_valid"},
+    {"name": "ttl_too_long", "patch": {"iat": 1793022000, "exp": 1793024000}, "expect": "ttl_too_long"},
+    {"name": "wrong_workspace", "patch": {"ws": "ws_other01"}, "expect": "wrong_workspace"},
+    {"name": "wrong_env", "patch": {"env": "t1"}, "expect": "wrong_env"},
+    {"name": "agent_not_in_audience", "patch": {"agt": "ag_other001", "aud": ["ag_other001"]}, "expect": "agent_not_in_audience"},
+    {"name": "agt_not_in_aud", "patch": {"agt": "ag_other001"}, "expect": "bad_claims"},
+    {"name": "bad_version", "patch": {"v": 2}, "expect": "unsupported_version"},
+    {"name": "bad_issuer", "patch": {"iss": "someone-else"}, "expect": "bad_claims"},
+    {"name": "psid_underscore", "patch": {"psid": "has_underscore"}, "expect": "bad_claims"},
+    {"name": "unknown_channel", "patch": {"ch": "a2a"}, "expect": "bad_claims"},
+    {"name": "user_without_role", "patch": {"p": {"kind": "user", "id": "hr-intern"}}, "expect": "bad_claims"},
+    {"name": "api_key_with_role", "patch": {"p": {"kind": "api_key", "id": "key_demo0001", "role": "admin"}}, "expect": "bad_claims"},
+    {"name": "agent_principal_kind", "patch": {"p": {"kind": "agent", "id": "ag_hrhelp01"}}, "expect": "bad_claims"},
+    {"name": "missing_psid", "patch": {"psid": "$delete"}, "expect": "bad_claims"},
+    {"name": "bool_as_int", "patch": {"tsv": true}, "expect": "bad_claims"}
+  ]
+}

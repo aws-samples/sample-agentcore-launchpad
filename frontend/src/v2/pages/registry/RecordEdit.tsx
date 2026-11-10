@@ -8,7 +8,7 @@ import { parseMcpUrl, parseSkillDefinition, parseSkillMd } from "../../../lib/re
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { Alert, Button, Card, Descriptions, Field, FlowHeader, OptionCard, Spin } from "../../ui";
-import { isStagingExpired, type RegistryRecord } from "./common";
+import { isStagingNotFound, type RegistryRecord } from "./common";
 import { SourceTag, StatusTag, TypeTag } from "./tags";
 
 interface Draft {
@@ -124,7 +124,7 @@ export function RecordEdit({ id }: { id: string }) {
       if (!skill) setError(t("registry.register.zipNoSkill"));
       else setStaged({ stagingId: body.staging_id, skill });
     } catch (err) {
-      setError(isStagingExpired(err) ? t("registry.edit.stagingExpired") : errorMessage(err));
+      setError(isStagingNotFound(err) ? t("registry.edit.stagingExpired") : errorMessage(err));
     } finally {
       setInspecting(false);
     }
@@ -147,7 +147,7 @@ export function RecordEdit({ id }: { id: string }) {
       toast("success", t("registry.edit.saved", { name: record.name }));
       setParams({ view: "detail", id: record.record_id });
     } catch (err) {
-      if (isStagingExpired(err)) {
+      if (isStagingNotFound(err)) {
         clearZip();
         setError(t("registry.edit.stagingExpired"));
       } else {

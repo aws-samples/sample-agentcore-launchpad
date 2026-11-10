@@ -1,0 +1,77 @@
+{
+  "_comment": "D5 tokens.json (I9 v2, amendment 10): ONE hub-signed System::\"eval\" token per job. __TOKEN__ is replaced at test time by a token the ephemeral test key signs from the claims under `claims` (sid = the job id); nothing here is a real token.",
+  "now": 1793022100,
+  "verify_as": {
+    "workspace_id": "default",
+    "env": "",
+    "agent_id": "ag_hrhelp01"
+  },
+  "file": {
+    "schema": "launchpad.policy.eval-tokens/2",
+    "job_id": "evj_0f6c2a1e9b7d",
+    "written_at": "2026-10-26T09:00:00Z",
+    "token": "__TOKEN__"
+  },
+  "claims": {
+    "iss": "launchpad-hub",
+    "v": 1,
+    "ws": "default",
+    "env": "",
+    "agt": "ag_hrhelp01",
+    "aud": [
+      "ag_hrhelp01"
+    ],
+    "sid": "evj_0f6c2a1e9b7d",
+    "psid": "__PSID__",
+    "tsv": 3,
+    "jti": "__JTI__",
+    "iat": 1793022000,
+    "exp": 1793022900,
+    "ch": "eval",
+    "p": {
+      "kind": "system",
+      "id": "eval",
+      "label": "system:eval"
+    }
+  },
+  "invalid": [
+    {
+      "name": "no_token",
+      "patch": {
+        "token": "$delete"
+      }
+    },
+    {
+      "name": "not_a_compact_jws",
+      "patch": {
+        "token": "not a token"
+      }
+    },
+    {
+      "name": "per_session_map_is_v1",
+      "patch": {
+        "tokens": {
+          "lp-eval-x": "__TOKEN__"
+        }
+      }
+    },
+    {
+      "name": "extra_field",
+      "patch": {
+        "expires_at": "2026-10-26T09:15:00Z"
+      }
+    },
+    {
+      "name": "missing_written_at",
+      "patch": {
+        "written_at": "$delete"
+      }
+    },
+    {
+      "name": "wrong_schema_tag",
+      "patch": {
+        "schema": "launchpad.policy.eval-tokens/1"
+      }
+    }
+  ]
+}

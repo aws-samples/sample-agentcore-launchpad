@@ -4,8 +4,8 @@ A *toolkit* is source, not a resource. Selecting one in ``AgentSpec.toolkits``
 inlines its functions and their seed data into the generated ``main.py``; there
 is no ARN, no IAM grant, no gateway, no network call and no extra pip
 requirement. That is the whole point: the emitted code stays platform-generated,
-so ``spec.code``/``spec.code_bundle`` remain ``None`` and the agent keeps its
-config-bundle experiment eligibility (``app/optimization/service.py:253``).
+so ``spec.code``/``spec.code_bundle`` remain ``None`` (platform-generated source stays
+rebuildable from the spec — what a Runtime canary's candidate mint relies on).
 
 Tool names and descriptions are **derived from the toolkit source with ast**, not
 declared a second time. Three consumers need them — the rendered

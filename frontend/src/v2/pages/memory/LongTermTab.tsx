@@ -12,26 +12,52 @@ import {
 } from "../../../lib/api";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
-import { Alert, Button, Card, type Column, Descriptions, Drawer, FilterSelect, LinkButton, Table } from "../../ui";
-import { actorText, fmtRelevance, shortId, type TokenPaged, useTokenPaged } from "./common";
+import { Alert, Button, Card, type Column, Confirm, Descriptions, Drawer, FilterSelect, LinkButton, Table, Tag, type TagTone } from "../../ui";
+import { actorText, fmtRelevance, type RecordState, recordState, shortId, type TokenPaged, useTokenPaged } from "./common";
 import { LoadMore } from "./widgets";
 
 const TOP_K = [3, 5, 10, 20];
+
+const STATE_TONE: Record<RecordState, TagTone> = { active: "green", superseded: "gray", deleted: "red", expired: "orange" };
+
+function StateTag({ record }: { record: MemoryRecord }) {
+  const { t } = useTranslation();
+  const state = recordState(record);
+  return (
+    <Tag tone={STATE_TONE[state]} dot title={record.superseded_by ? `→ ${record.superseded_by}` : undefined}>
+      {t(`v2.memory.state.${state}`)}
+    </Tag>
+  );
+}
+
+function fmtConfidence(value: number | null | undefined): string {
+  return value == null ? "—" : `${Math.round(value * 100)}%`;
+}
 
 function RecordDrawer({
   record,
   strategyName,
   onClose,
+  onDelete,
 }: {
   record: MemoryRecord | null;
   strategyName: (id: string | null) => string;
   onClose: () => void;
+  /** N10v2-bug6: asks for confirmation; absent when the record cannot be addressed (no id) */
+  onDelete?: () => void;
 }) {
   const { t } = useTranslation();
   return (
     <Drawer open={record !== null} title={t("memoryPage.long.detailTitle")} onClose={onClose} testId="v2-memory-record">
       {record && (
         <div className="v2-stack" style={{ gap: 16 }}>
+          {onDelete && (
+            <div className="v2-row" style={{ justifyContent: "flex-end" }}>
+              <Button kind="danger" onClick={onDelete} testId="v2-memory-record-delete">
+                {t("memoryPage.long.delete")}
+              </Button>
+            </div>
+          )}
           <Descriptions
             one
             items={[
@@ -50,7 +76,18 @@ function RecordDrawer({
                 value: <span className="mono">{record.namespaces.join(", ") || "—"}</span>,
               },
               { label: t("v2.memory.colCreated"), value: fmtTime(record.created_at) },
+              { label: t("v2.memory.colUpdated"), value: fmtTime(record.updated_at ?? null) },
+              { label: t("v2.memory.colState"), value: <StateTag record={record} /> },
+              { label: t("v2.memory.confidence"), value: fmtConfidence(record.confidence) },
+              ...(record.last_op ? [{ label: t("v2.memory.lastOp"), value: <span className="mono">{record.last_op}</span> }] : []),
+              ...(record.superseded_by
+                ? [{ label: t("v2.memory.supersededBy"), value: <span className="mono">{record.superseded_by}</span> }]
+                : []),
+              ...(record.supersedes && record.supersedes.length > 0
+                ? [{ label: t("v2.memory.supersedes"), value: <span className="mono">{record.supersedes.join(", ")}</span> }]
+                : []),
               ...(record.score != null ? [{ label: t("v2.memory.colScore"), value: fmtRelevance(record.score) }] : []),
+              ...(record.similarity != null ? [{ label: t("v2.memory.colSimilarity"), value: fmtRelevance(record.similarity) }] : []),
             ]}
           />
           <div>
@@ -116,6 +153,11 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
   const [results, setResults] = useState<MemoryRecord[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [detail, setDetail] = useState<MemoryRecord | null>(null);
+  // N10v2-bug6: the record awaiting delete confirmation, and the one being deleted
+  const [pendingDelete, setPendingDelete] = useState<MemoryRecord | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  // r14-a: superseded / deleted / expired records are hidden unless asked for
+  const [showSuperseded, setShowSuperseded] = useState(false);
 
   useEffect(() => {
     setNamespaces([]);
@@ -136,9 +178,13 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
 
   const records = useTokenPaged<MemoryRecord>(
     actorId && usable
-      ? (token) => api.memoryRecords({ actor_id: actorId, strategy_id: usable.strategy_id ?? undefined }, token)
+      ? (token) =>
+          api.memoryRecords(
+            { actor_id: actorId, strategy_id: usable.strategy_id ?? undefined, include_superseded: showSuperseded },
+            token,
+          )
       : null,
-    `records:${actorId ?? ""}:${usable?.strategy_id ?? ""}`,
+    `records:${actorId ?? ""}:${usable?.strategy_id ?? ""}:${showSuperseded}`,
   );
 
   // Listing and retrieval are different questions; a stale result set next to a
@@ -172,6 +218,27 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
 
   const isSearch = results !== null;
   const rows = results ?? records.items;
+  // the state column appears once any inactive row is on the page (or the toggle is on)
+  const showState = showSuperseded || rows.some((r) => recordState(r) !== "active");
+
+  // N10v2-bug6: delete is actor-scoped on the server; the console passes the actor the
+  // listing was made for, so a stale row can never address another actor's record.
+  const remove = async (record: MemoryRecord) => {
+    if (!actorId || !record.record_id) return;
+    setDeleting(true);
+    try {
+      await api.memoryRecordDelete(record.record_id, actorId);
+      toast("success", t("memoryPage.long.deleted"));
+      setPendingDelete(null);
+      if (detail?.record_id === record.record_id) setDetail(null);
+      if (results) setResults(results.filter((r) => r.record_id !== record.record_id));
+      else records.reload();
+    } catch (err: unknown) {
+      toast("error", t("memoryPage.long.deleteFailed", { msg: errorMessage(err) }));
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const columns: Column<MemoryRecord>[] = [
     {
@@ -202,19 +269,48 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
             title: t("v2.memory.colScore"),
             className: "num",
             width: 100,
-            render: (r: MemoryRecord) => <span className="v2-score">{fmtRelevance(r.score)}</span>,
+            render: (r: MemoryRecord) => (
+              <span className="v2-score" title={r.similarity != null ? t("v2.memory.similarityTitle", { value: fmtRelevance(r.similarity) }) : undefined}>
+                {fmtRelevance(r.score)}
+              </span>
+            ),
           },
         ]
       : []),
-    { key: "created", title: t("v2.memory.colCreated"), className: "nowrap", width: 170, render: (r) => fmtTime(r.created_at) },
+    ...(showState
+      ? [
+          {
+            key: "state",
+            title: t("v2.memory.colState"),
+            width: 120,
+            render: (r: MemoryRecord) => <StateTag record={r} />,
+          },
+        ]
+      : []),
+    {
+      key: "created",
+      title: t("v2.memory.colUpdated"),
+      className: "nowrap",
+      width: 170,
+      // r14-a: the last write wins (an in-place `update` keeps the id but moves `updated_at`)
+      render: (r) => <span title={t("v2.memory.createdTitle", { value: fmtTime(r.created_at) })}>{fmtTime(r.updated_at ?? r.created_at)}</span>,
+    },
     {
       key: "ops",
       title: t("v2.common.actions"),
       className: "right",
-      width: 80,
+      width: 140,
       render: (r) => (
         <div className="v2-actions">
           <LinkButton onClick={() => setDetail(r)}>{t("v2.common.view")}</LinkButton>
+          <LinkButton
+            danger
+            disabled={!r.record_id || deleting}
+            onClick={() => setPendingDelete(r)}
+            testId={`v2-memory-record-delete-${r.record_id ?? "none"}`}
+          >
+            {t("memoryPage.long.delete")}
+          </LinkButton>
         </div>
       ),
     },
@@ -273,6 +369,16 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
             </span>
           )}
           <div className="end">
+            <label className={`v2-check${usable ? "" : " disabled"}`} title={t("v2.memory.showSupersededHint")}>
+              <input
+                type="checkbox"
+                checked={showSuperseded}
+                disabled={!usable}
+                onChange={(e) => setShowSuperseded(e.target.checked)}
+                data-testid="v2-memory-show-superseded"
+              />
+              {t("v2.memory.showSuperseded")}
+            </label>
             <Button onClick={records.reload} disabled={!usable}>
               {t("v2.common.refresh")}
             </Button>
@@ -328,7 +434,35 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
         {!isSearch && <LoadMore token={records.token} loading={records.loading} onClick={records.loadMore} testId="v2-memory-records-more" />}
         {strategies.length === 0 && <Alert tone="warn">{t("memoryPage.overview.noStrategies")}</Alert>}
       </Card>
-      <RecordDrawer record={detail} strategyName={strategyName} onClose={() => setDetail(null)} />
+      <RecordDrawer
+        record={detail}
+        strategyName={strategyName}
+        onClose={() => setDetail(null)}
+        onDelete={detail?.record_id ? () => setPendingDelete(detail) : undefined}
+      />
+      <Confirm
+        open={pendingDelete !== null}
+        title={t("memoryPage.long.deleteTitle")}
+        body={
+          <>
+            <p>{t("memoryPage.long.deleteBody")}</p>
+            {pendingDelete && (
+              <p className="v2-memory-clamp" title={pendingDelete.text}>
+                {pendingDelete.text}
+              </p>
+            )}
+          </>
+        }
+        confirmLabel={deleting ? t("memoryPage.long.deleting") : t("memoryPage.long.delete")}
+        danger
+        busy={deleting}
+        onConfirm={() => {
+          if (pendingDelete) void remove(pendingDelete);
+        }}
+        onClose={() => {
+          if (!deleting) setPendingDelete(null);
+        }}
+      />
     </>
   );
 }

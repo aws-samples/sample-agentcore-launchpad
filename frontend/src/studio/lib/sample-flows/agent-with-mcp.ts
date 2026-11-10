@@ -24,8 +24,8 @@ export const agentWithMcp: SampleFlow = {
       data: {
         label: 'Docs Agent',
         modelProvider: 'AWS Bedrock',
-        modelId: 'global.anthropic.claude-sonnet-5',
-        modelName: 'Claude Sonnet 4.6',
+        modelId: 'global.zai.glm-5.3',
+        modelName: 'GLM 5.3 (Z.AI · global)',
         systemPrompt: 'You are a documentation assistant. Use the available MCP tools to search and fetch documentation before answering.',
         maxTokens: 32000,
         streaming: false,

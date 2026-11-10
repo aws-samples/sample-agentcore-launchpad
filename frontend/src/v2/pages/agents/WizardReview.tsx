@@ -4,16 +4,12 @@ import {
   type AgentForm,
   byocEnv,
   byocModelList,
-  hasByoMounts,
   pythonLabel,
   resolveKb,
   skillNameFromPath,
   toolkitToolNames,
 } from "../../../lib/agent-spec";
-import type { InboundAuth } from "../../../lib/api";
-import { inboundCapable, issuerMismatch, jwtSummary, wizardDeployedJwt } from "../../../lib/inbound-auth";
 import { Alert, Card, Descriptions } from "../../ui";
-import { ReachabilityWarning } from "./InboundAuthFields";
 import type { WizardCatalogs, WizardUi } from "./wizardKit";
 
 /** The review step: what will be deployed, per method (read-only). */
@@ -22,18 +18,12 @@ export function WizardReview({
   cat,
   ui,
   shortTermOff = false,
-  workspaceDefault = null,
-  cognitoIssuer = null,
 }: {
   form: AgentForm;
   cat: WizardCatalogs;
   ui: WizardUi;
   /** re-publish of an agent deployed without short-term memory (kept off on save) */
   shortTermOff?: boolean;
-  /** the workspace inbound default an unpinned agent inherits */
-  workspaceDefault?: InboundAuth | null;
-  /** the workspace pool's issuer — what platform invokes present */
-  cognitoIssuer?: string | null;
 }) {
   const { t } = useTranslation();
   const none = t("v2.agents.wizard.none");
@@ -57,6 +47,9 @@ export function WizardReview({
   const head = [
     { label: t("v2.agents.colName"), value: form.name },
     { label: t("v2.agents.colMethod"), value: t(`v2.agents.wizard.method.${method}`) },
+    // D20: only when the member picked any — the row would otherwise read "none" on
+    // deployments without the policy feature
+    ...(form.policyIds.length ? [{ label: t("v2.agents.wizard.policies"), value: mono(form.policyIds.join(", ")) }] : []),
   ];
 
   let items: { label: string; value: React.ReactNode }[];
@@ -84,6 +77,10 @@ export function WizardReview({
               value: form.byocInstallReqs ? t("v2.agents.wizard.on") : t("v2.agents.wizard.off"),
             },
           ]
+        : []),
+      ...(form.byocKind !== "code_zip"
+        ? [{ label: t("create.configure.byocCnLayer.label"),
+             value: form.byocCnTraceExporter ? t("v2.agents.wizard.on") : t("v2.agents.wizard.off") }]
         : []),
       { label: t("v2.agents.wizard.byocContractKind"), value: mono(form.byocRawContract ? "raw" : "launchpad_prompt") },
       { label: t("v2.agents.wizard.modelSource"), value: t(`v2.agents.wizard.source.${form.modelSource}`) },
@@ -126,6 +123,7 @@ export function WizardReview({
             ...form.tools.map((n) => t(`v2.agents.wizard.builtin.${n}`)),
             ...form.selectedGateway,
             ...form.selectedMcp,
+            ...form.selectedAgents.map((n) => `ask_${n.replace(/-/g, "_")}`),
             ...form.nativeTools.map((n) => t(`v2.agents.wizard.native.${n}`)),
           ]),
         },
@@ -145,7 +143,11 @@ export function WizardReview({
         ...model,
         {
           label: t("v2.agents.wizard.tools"),
-          value: list([...(kit.length ? kit : ["calculator", "current_utc_time"]), ...(a2a ? [] : form.selectedGateway)]),
+          value: list([
+            ...(kit.length ? kit : ["calculator", "current_utc_time"]),
+            ...(a2a ? [] : form.selectedGateway),
+            ...(a2a ? [] : form.selectedAgents.map((n) => `ask_${n.replace(/-/g, "_")}`)),
+          ]),
         },
         ...(a2a
           ? [{ label: t("v2.agents.wizard.a2aSkills"), value: list(form.a2aSkills.filter((s) => s.name.trim()).map((s) => s.name.trim())) }]
@@ -154,52 +156,13 @@ export function WizardReview({
         sessionFs,
       ];
     } else {
-      items = [
-        ...head,
-        { label: t("v2.agents.wizard.sdkTitle"), value: t("create.configure.agentSdkClaude") },
-        ...model,
-        { label: t("v2.agents.wizard.remoteMcp"), value: list(form.selectedMcp) },
-        { label: t("v2.agents.wizard.mcpJson"), value: form.mcpServers.trim() ? t("v2.agents.wizard.set") : none },
-        ...common,
-        {
-          label: t("v2.agents.wizard.fsTitle"),
-          value: t("v2.agents.wizard.fsSummary", {
-            session: form.sessionFs ? form.sessionMount : none,
-            s3: form.s3Mounts.length,
-            efs: form.efsMounts.length,
-          }),
-        },
-        ...(hasByoMounts(form)
-          ? [{ label: "VPC", value: mono(`${form.vpcSubnets} · ${form.vpcSgs}`) }]
-          : []),
-      ];
+      items = [...head, ...model, ...common, sessionFs];
     }
-  }
-
-  const inboundShown = inboundCapable(method, form.protocol) && !!form.inbound;
-  const deployedJwt = inboundShown ? wizardDeployedJwt(form.inbound, form.inboundJwt, workspaceDefault) : null;
-  // The last screen before 部署: say now that the console will be refused, not at the first Chat.
-  const mismatch = deployedJwt ? issuerMismatch(deployedJwt.discovery_url, cognitoIssuer) : null;
-  if (inboundShown) {
-    items = [
-      ...items,
-      {
-        label: t("inboundAuth.title"),
-        value:
-          form.inbound === "jwt" && deployedJwt
-            ? mono(`JWT · ${jwtSummary(deployedJwt)}`)
-            : t(`inboundAuth.choice.${form.inbound}`),
-      },
-      ...(deployedJwt
-        ? [{ label: t("inboundAuth.discoveryUrl"), value: mono(deployedJwt.discovery_url || none) }]
-        : []),
-    ];
   }
 
   return (
     <Card title={t("v2.agents.wizard.reviewTitle")} sub={t(`v2.agents.wizard.reviewSubBy.${method}`)} testId="v2-agent-review">
       <Descriptions items={items} />
-      {mismatch && <ReachabilityWarning mismatch={mismatch} testId="v2-agent-review-issuer-warning" />}
       {method !== "byoc" && (
         <>
           <h3 className="v2-sub-title">{t("v2.agents.wizard.systemPrompt")}</h3>

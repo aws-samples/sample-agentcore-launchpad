@@ -4,17 +4,15 @@ import { Link } from 'react-router-dom';
 import { type Node, type Edge } from '@xyflow/react';
 import { Settings, X, RefreshCw, Library } from 'lucide-react';
 import {
-  BEDROCK_MODELS,
   CUSTOM_MODEL_OPTION,
   CUSTOM_MODEL_NAME,
+  defaultNewAgentModel,
   isCustomModel,
-  MANTLE_PROVIDER,
-  MANTLE_MODELS,
-  DEFAULT_MANTLE_REGION,
-  DEFAULT_MANTLE_MODEL_ID,
-  mantleBaseUrl,
-  isCustomMantleModel,
   isBedrockOpenAiGpt,
+  isModelAvailable,
+  modelOptionLabel,
+  modelUnavailableReason,
+  studioModelOptions,
   GPT_REASONING_EFFORTS,
 } from './lib/models';
 
@@ -41,7 +39,7 @@ interface StudioNodeData {
   cacheMessages?: boolean;
   cacheTools?: boolean;
   cacheSystem?: boolean; // launchpad extension: system-prompt caching
-  // Mantle (Amazon Bedrock via OpenAI Responses API)
+  // region: legacy node data (unused by Bedrock codegen; LAUNCHPAD_MODEL_REGION decides)
   region?: string;
   coordinationPrompt?: string;
   // tool
@@ -252,7 +250,12 @@ export function PropertyPanel({
     }
   };
 
-  const bedrockModels = BEDROCK_MODELS;
+  // The catalog branch keeps the historical provider value 'AWS Bedrock' (the data
+  // contract the generators and the backend's `studio_node_models` read) but offers
+  // every catalog model — Bedrock and OpenAI-compatible rows alike (N-R6-obs2); a row
+  // whose provider is not configured is listed disabled, like every other picker.
+  const catalogModels = studioModelOptions();
+  const defaultModel = defaultNewAgentModel();
 
   // Seed provider-specific defaults when the provider dropdown changes so the
   // model field/codegen always has a coherent id (mirrors upstream :494-521).
@@ -261,19 +264,8 @@ export function PropertyPanel({
       onUpdateNode(node.id, {
         ...node.data,
         modelProvider: provider,
-        modelId: bedrockModels[0].model_id,
-        modelName: bedrockModels[0].model_name,
-      });
-    } else if (provider === MANTLE_PROVIDER) {
-      const region = (node.data as StudioNodeData).region || DEFAULT_MANTLE_REGION;
-      onUpdateNode(node.id, {
-        ...node.data,
-        modelProvider: provider,
-        region,
-        baseUrl: mantleBaseUrl(region, DEFAULT_MANTLE_MODEL_ID),
-        // Mantle model ids flow through the non-Bedrock (modelName) codegen path.
-        modelId: DEFAULT_MANTLE_MODEL_ID,
-        modelName: DEFAULT_MANTLE_MODEL_ID,
+        modelId: defaultModel.model_id,
+        modelName: defaultModel.label,
       });
     } else {
       // OpenAI / other free-text providers
@@ -284,98 +276,6 @@ export function PropertyPanel({
         modelName: '',
       });
     }
-  };
-
-  // Mantle: region + model (both drive baseUrl) + an OPTIONAL BEDROCK_API_KEY;
-  // without a key, codegen emits the IAM `bedrock_mantle_config` form instead.
-  const renderMantleFields = (data: StudioNodeData) => {
-    const region = data.region || DEFAULT_MANTLE_REGION;
-    const custom = isCustomMantleModel(data.modelId, data.modelName);
-    // The base URL path depends on the model id, so it is recomputed whenever
-    // either input changes — a stale `/openai/v1` on a grok node would 404.
-    const modelForUrl = data.modelId || DEFAULT_MANTLE_MODEL_ID;
-    return (
-      <>
-        <div className="field">
-          <label>{t('studio.prop.mantleRegion')}</label>
-          <input
-            className="input"
-            type="text"
-            value={region}
-            onChange={(e) => {
-              const r = e.target.value;
-              onUpdateNode(node.id, {
-                ...node.data,
-                region: r,
-                baseUrl: mantleBaseUrl(r, modelForUrl),
-              });
-            }}
-            placeholder={DEFAULT_MANTLE_REGION}
-          />
-          <div className="studio-prop-hint mono">{mantleBaseUrl(region, modelForUrl)}</div>
-        </div>
-
-        <div className="field">
-          <label>{t('studio.prop.model')}</label>
-          <select
-            className="input"
-            value={custom ? CUSTOM_MODEL_OPTION : data.modelId || DEFAULT_MANTLE_MODEL_ID}
-            onChange={(e) => {
-              if (e.target.value === CUSTOM_MODEL_OPTION) {
-                onUpdateNode(node.id, {
-                  ...node.data,
-                  modelId: '',
-                  modelName: CUSTOM_MODEL_NAME,
-                });
-                return;
-              }
-              onUpdateNode(node.id, {
-                ...node.data,
-                modelId: e.target.value,
-                modelName: e.target.value,
-                baseUrl: mantleBaseUrl(region, e.target.value),
-              });
-            }}
-          >
-            {MANTLE_MODELS.map((m) => (
-              <option key={m.model_id} value={m.model_id}>
-                {m.model_name}
-              </option>
-            ))}
-            <option value={CUSTOM_MODEL_OPTION}>{t('studio.prop.customModelOption')}</option>
-          </select>
-          {custom && (
-            <input
-              className="input"
-              style={{ marginTop: 8 }}
-              type="text"
-              value={data.modelId || ''}
-              onChange={(e) =>
-                onUpdateNode(node.id, {
-                  ...node.data,
-                  modelId: e.target.value,
-                  modelName: e.target.value ? e.target.value : CUSTOM_MODEL_NAME,
-                  baseUrl: mantleBaseUrl(region, e.target.value),
-                })
-              }
-              placeholder={t('studio.prop.mantleModelPlaceholder')}
-            />
-          )}
-        </div>
-
-        <div className="field">
-          <label>{t('studio.prop.bedrockApiKey')}</label>
-          <input
-            className="input"
-            type="password"
-            value={data.apiKey || ''}
-            onChange={(e) => handleInputChange('apiKey', e.target.value)}
-            placeholder={t('studio.prop.bedrockApiKeyPlaceholder')}
-          />
-          <div className="studio-prop-hint">{t('studio.prop.bedrockApiKeyHint')}</div>
-        </div>
-      </>
-    );
   };
 
   // Shared model block. `allowAnthropic` mirrors upstream: the orchestrator's
@@ -391,81 +291,95 @@ export function PropertyPanel({
           value={data.modelProvider || 'AWS Bedrock'}
           onChange={(e) => applyProviderChange(e.target.value)}
         >
-          <option value="AWS Bedrock">AWS Bedrock</option>
-          <option value={MANTLE_PROVIDER}>{MANTLE_PROVIDER}</option>
+          <option value="AWS Bedrock">{t('studio.prop.providerCatalog')}</option>
           <option value="OpenAI">OpenAI</option>
           {allowAnthropic && <option value="Anthropic">Anthropic</option>}
         </select>
       </div>
 
-      {data.modelProvider === MANTLE_PROVIDER ? (
-        renderMantleFields(data)
-      ) : (
-        <div className="field">
-          <label>{t('studio.prop.model')}</label>
-          {data.modelProvider === 'AWS Bedrock' || !data.modelProvider ? (
-            <>
-              <select
-                className="input"
-                value={
-                  isCustomModel(data.modelId, data.modelName)
-                    ? CUSTOM_MODEL_OPTION
-                    : data.modelId || bedrockModels[0].model_id
-                }
-                onChange={(e) => {
-                  if (e.target.value === CUSTOM_MODEL_OPTION) {
-                    onUpdateNode(node.id, {
-                      ...node.data,
-                      modelId: '',
-                      modelName: CUSTOM_MODEL_NAME,
-                    });
-                    return;
-                  }
-                  const selectedModel = bedrockModels.find((m) => m.model_id === e.target.value);
-                  if (selectedModel) {
-                    onUpdateNode(node.id, {
-                      ...node.data,
-                      modelId: selectedModel.model_id,
-                      modelName: selectedModel.model_name,
-                    });
-                  }
-                }}
-              >
-                {bedrockModels.map((model) => (
-                  <option key={model.model_id} value={model.model_id}>
-                    {model.model_name}
-                  </option>
-                ))}
-                <option value={CUSTOM_MODEL_OPTION}>{t('studio.prop.customModelOption')}</option>
-              </select>
-              {isCustomModel(data.modelId, data.modelName) && (
-                <input
-                  className="input"
-                  style={{ marginTop: 8 }}
-                  type="text"
-                  value={data.modelId || ''}
-                  onChange={(e) =>
-                    onUpdateNode(node.id, {
-                      ...node.data,
-                      modelId: e.target.value,
-                      modelName: CUSTOM_MODEL_NAME,
-                    })
-                  }
-                  placeholder={t('studio.prop.customModelPlaceholder')}
-                />
-              )}
-            </>
-          ) : (
-            <input
+      <div className="field">
+        <label>{t('studio.prop.model')}</label>
+        {data.modelProvider === 'AWS Bedrock' || !data.modelProvider ? (
+          <>
+            <select
               className="input"
-              type="text"
-              value={data.modelName || ''}
-              onChange={(e) => handleInputChange('modelName', e.target.value)}
-              placeholder={t('studio.prop.modelNamePlaceholder')}
-            />
-          )}
-        </div>
-      )}
+              data-testid="studio-model-picker"
+              value={
+                isCustomModel(data.modelId, data.modelName)
+                  ? CUSTOM_MODEL_OPTION
+                  : data.modelId || defaultModel.model_id
+              }
+              onChange={(e) => {
+                if (e.target.value === CUSTOM_MODEL_OPTION) {
+                  onUpdateNode(node.id, {
+                    ...node.data,
+                    modelId: '',
+                    modelName: CUSTOM_MODEL_NAME,
+                  });
+                  return;
+                }
+                const selectedModel = catalogModels.find((m) => m.model_id === e.target.value);
+                if (selectedModel && isModelAvailable(selectedModel.model_id)) {
+                  onUpdateNode(node.id, {
+                    ...node.data,
+                    modelId: selectedModel.model_id,
+                    modelName: selectedModel.label,
+                  });
+                }
+              }}
+            >
+              {catalogModels.map((model) => {
+                const reason = modelUnavailableReason(model.model_id);
+                return (
+                  <option
+                    key={model.model_id}
+                    value={model.model_id}
+                    disabled={!model.available}
+                    aria-disabled={!model.available || undefined}
+                    title={reason ? t('models.unavailable', reason) : undefined}
+                  >
+                    {modelOptionLabel(model, t('models.unavailableShort'))}
+                  </option>
+                );
+              })}
+              <option value={CUSTOM_MODEL_OPTION}>{t('studio.prop.customModelOption')}</option>
+            </select>
+            {(() => {
+              // a stored node model whose provider lost its key: say why it cannot publish
+              const reason = data.modelId ? modelUnavailableReason(data.modelId) : null;
+              return reason ? (
+                <p className="hint" data-testid="studio-model-unavailable" style={{ marginTop: 6 }}>
+                  {t('models.unavailable', reason)}
+                </p>
+              ) : null;
+            })()}
+            {isCustomModel(data.modelId, data.modelName) && (
+              <input
+                className="input"
+                style={{ marginTop: 8 }}
+                type="text"
+                value={data.modelId || ''}
+                onChange={(e) =>
+                  onUpdateNode(node.id, {
+                    ...node.data,
+                    modelId: e.target.value,
+                    modelName: CUSTOM_MODEL_NAME,
+                  })
+                }
+                placeholder={t('studio.prop.customModelPlaceholder')}
+              />
+            )}
+          </>
+        ) : (
+          <input
+            className="input"
+            type="text"
+            value={data.modelName || ''}
+            onChange={(e) => handleInputChange('modelName', e.target.value)}
+            placeholder={t('studio.prop.modelNamePlaceholder')}
+          />
+        )}
+      </div>
 
       {data.modelProvider === 'OpenAI' && (
         <>
@@ -505,7 +419,7 @@ export function PropertyPanel({
     const modelId = data.modelId || '';
     const xhighCapable = modelId.includes('claude-sonnet-5') || modelId.includes('claude-opus-4-8');
     // OpenAI GPT on native Bedrock: reasoning effort (low/medium/high) instead of
-    // adaptive thinking, and no Claude cache points — mirrors gptBedrockModelConfig
+    // adaptive thinking, and no Anthropic cache points — mirrors gptBedrockModelConfig
     const isGpt = isBedrock && isBedrockOpenAiGpt(modelId);
     const gptEffortClamped = !(GPT_REASONING_EFFORTS as readonly string[]).includes(effortValue);
     return (
@@ -547,7 +461,7 @@ export function PropertyPanel({
 
         {data.thinkingEnabled && !isGpt &&
           (isBedrock ? (
-            // Bedrock/Claude uses adaptive thinking — no budget knob.
+            // Bedrock/Anthropic uses adaptive thinking — no budget knob.
             // launchpad extension: expose the reasoning-effort tier for Bedrock (output_config.effort).
             <>
               <div className="studio-note">{t('studio.prop.adaptiveThinkingNote')}</div>

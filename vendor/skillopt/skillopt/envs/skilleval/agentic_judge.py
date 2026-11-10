@@ -1,7 +1,7 @@
 """Restricted agentic judge: networkless Artifact MCP sandbox + orchestrator.
 
 This module owns the security-critical glue between the trusted inspector
-stack (Tasks 1-7) and a tightly restricted Claude Code / Codex client:
+stack (Tasks 1-7) and a tightly restricted OpenCode judge client:
 
 - ``build_artifact_mcp_command`` wraps ``python3 -m
   skillopt.envs.skilleval.artifact_mcp`` in a minimal, networkless Bubblewrap
@@ -44,11 +44,7 @@ from skillopt.envs.skilleval.inspectors import (
     inventory_artifacts,
 )
 from skillopt.envs.skilleval.judge_cache import VerdictCache
-from skillopt.model.backend_config import (
-    get_claude_code_exec_config,
-    get_codex_exec_config,
-)
-from skillopt.model.codex_harness import check_claude_judge_cli_flags
+from skillopt.model.opencode_backend import OPENCODE_BACKEND, get_opencode_exec_config
 from skillopt.envs.skilleval.verdict import (
     parse_verdict,
     run_deterministic_checks,
@@ -68,11 +64,11 @@ ARTIFACT_TOOL_NAMES = (
     "artifact_render",
     "artifact_extract",
 )
-CLAUDE_ALLOWED_TOOLS = tuple(
-    f"mcp__{MCP_SERVER_NAME}__{name}" for name in ARTIFACT_TOOL_NAMES
-)
+# Tool ids as OpenCode exposes MCP tools (``<server>_<tool>``); the judge's
+# opencode.json enables exactly these and switches every built-in tool off.
+JUDGE_ALLOWED_TOOLS = tuple(f"{MCP_SERVER_NAME}_{name}" for name in ARTIFACT_TOOL_NAMES)
 
-_SUPPORTED_BACKENDS = frozenset({"claude_code_exec", "codex_exec"})
+_SUPPORTED_BACKENDS = frozenset({OPENCODE_BACKEND})
 _VALID_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max", "none", ""})
 
 _JUDGE_PROMPT_VERSION = 1
@@ -159,7 +155,7 @@ VERDICT_SCHEMA: dict[str, Any] = {
 @dataclass(frozen=True)
 class AgenticJudgeConfig:
     mode: str = "auto"
-    backend: str = "claude_code_exec"
+    backend: str = OPENCODE_BACKEND
     model: str = ""
     timeout: int = 300
     effort: str = "low"
@@ -662,10 +658,7 @@ _MCP_INIT_SOURCE = (
 
 def _preflight_backend(config: AgenticJudgeConfig) -> None:
     """Verify the selected judge backend executable exists and answers --version."""
-    if config.backend == "claude_code_exec":
-        path = str(get_claude_code_exec_config()["path"])
-    else:
-        path = str(get_codex_exec_config()["path"])
+    path = str(get_opencode_exec_config()["path"])
     resolved = shutil.which(path)
     if resolved is None:
         raise EvaluationError(
@@ -692,31 +685,6 @@ def _preflight_backend(config: AgenticJudgeConfig) -> None:
             "agentic judge preflight: backend executable failed its version query "
             f"({resolved!r}, exit {proc.returncode}): {detail}"
         )
-    if config.backend == "claude_code_exec":
-        _preflight_claude_judge_flags(config)
-
-
-def _preflight_claude_judge_flags(config: AgenticJudgeConfig) -> None:
-    """Exercise the full judge policy argv (not just ``--version``) against the
-    installed claude CLI so a renamed/unknown flag fails fast here, before any
-    rollout/model spend — token-free (unreachable endpoint, short timeout)."""
-    root = tempfile.mkdtemp(prefix="skillopt-judge-flagpolicy-")
-    try:
-        policy = build_backend_policy(
-            config.backend,
-            [sys.executable, "-m", "skillopt.envs.skilleval.artifact_mcp"],
-            root,
-        )
-    finally:
-        _rmtree_quiet(root)
-    try:
-        check_claude_judge_cli_flags(policy=policy, model=config.model)
-    except RuntimeError as exc:
-        raise EvaluationError(
-            "agentic judge preflight: " + str(exc)
-            + " Update the judge exec CLI or its judge flag mapping before running "
-            "with judge_mode=agentic."
-        ) from exc
 
 
 def _declared_check_kinds(items: list[dict] | None) -> dict[str, str]:
@@ -864,24 +832,17 @@ def build_backend_policy(
         "mcp_servers": mcp_servers,
         "output_schema": VERDICT_SCHEMA,
         "system_prompt": _TRUSTED_INSTRUCTIONS,
-        # Codex controls.
+        # Transport controls the OpenCode judge agent expresses through its
+        # opencode.json (opencode_backend.build_opencode_config): read-only, no
+        # shell, no network, no project instructions/rules, built-in tools off,
+        # only the Artifact MCP tools enabled.
         "sandbox": "read-only",
-        "approval_policy": "never",
         "web_search": "disabled",
         "network_access": False,
         "ignore_user_config": True,
         "ignore_rules": True,
-        "ephemeral": True,
-        "project_doc_max_bytes": 0,
-        "codex_tool_allowlist": list(ARTIFACT_TOOL_NAMES),
-        # Claude controls.
         "tools": [],
-        "allowed_tools": list(CLAUDE_ALLOWED_TOOLS),
-        "setting_sources": [],
-        "strict_mcp_config": True,
-        "disallow_skills": True,
-        "disallow_slash_commands": True,
-        "no_chrome": True,
+        "allowed_tools": list(JUDGE_ALLOWED_TOOLS),
         "session_persistence": False,
     }
 
@@ -1351,7 +1312,7 @@ def _no_model_reason(broken: frozenset[str]) -> str:
 __all__ = [
     "AgenticJudgeConfig",
     "ARTIFACT_TOOL_NAMES",
-    "CLAUDE_ALLOWED_TOOLS",
+    "JUDGE_ALLOWED_TOOLS",
     "MCP_SERVER_NAME",
     "VERDICT_SCHEMA",
     "build_artifact_mcp_command",

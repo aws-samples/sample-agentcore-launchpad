@@ -15,8 +15,8 @@
 .v2 .v2-knowledge-agents { display: block; max-width: 240px; }
 .v2 .v2-knowledge-agents .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* source picker: connectors not available yet */
-.v2 .v2-knowledge-soon { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; font-size: 12.5px; color: var(--v2-ink-3); }
+/* source picker: the document types the ingestion indexes (chips) */
+.v2 .v2-knowledge-supported { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; font-size: 12.5px; color: var(--v2-ink-3); }
 
 /* picked files (create / add source) */
 .v2 .v2-knowledge-files {

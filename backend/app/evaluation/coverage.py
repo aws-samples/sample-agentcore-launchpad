@@ -32,12 +32,13 @@ from botocore.loaders import Loader
 from botocore.model import ServiceModel, Shape
 from botocore.validate import ParamValidator
 
-from app.evaluation.agentcore_eval import (
+from app.evaluation.evaluators_local import (
     ALL_BUILTIN_EVALUATORS,
     TRAJECTORY_EVALUATORS,
     ground_truth_placeholders,
 )
-from app.evaluation.scenarios import normalize_scenarios
+from app.evaluation.scenarios import has_expected_trajectory, normalize_scenarios
+from app.services.strands_eval.judge_placeholders import GROUND_TRUTH_PLACEHOLDERS
 
 FIELDS = ("expected_response", "assertions", "expected_tool_trajectory")
 KNOWN_BUILTINS: dict[str, str] = {**ALL_BUILTIN_EVALUATORS, **TRAJECTORY_EVALUATORS}
@@ -58,7 +59,7 @@ def reference_targets(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         session_fields = set()
         if scenario.get("assertions"):
             session_fields.add("assertions")
-        if scenario.get("expected_trajectory"):
+        if has_expected_trajectory(scenario):  # N17-obs376: [] = no tools expected
             session_fields.add("expected_tool_trajectory")
         if "actor_profile" in scenario:
             out.append({"id": sid, "kind": "session", "scenario_id": sid,
@@ -228,17 +229,35 @@ def builtin_needs(evaluator_id: str) -> set[str]:
     return {"expected_tool_trajectory"} if evaluator_id in TRAJECTORY_EVALUATORS else set()
 
 
-def needs_from_config(detail: dict[str, Any], managed_rules: list[dict[str, Any]] | None
-                      ) -> tuple[set[str] | None, str]:
-    """(needs, kind) from a GetEvaluator record. ``None`` needs = unknown (an external code
-    evaluator whose rules this platform does not own)."""
-    config = detail.get("evaluatorConfig") or {}
-    if "llmAsAJudge" in config:
-        judge = config.get("llmAsAJudge") or {}
-        return set(ground_truth_placeholders(str(judge.get("instructions") or ""))), "judge"
-    if "derived" in config:
-        derived = config.get("derived") or {}
-        return set(builtin_needs(str(derived.get("baseEvaluatorId") or ""))), "derived"
+def ground_truth_needs(
+    definition: dict[str, Any], db: Any = None, workspace_id: str | None = None
+) -> list[str]:
+    """N17-obs437: the ground-truth fields a custom evaluator reads — a judge's rubric
+    placeholders (aliases included), a derived evaluator's base, a managed code evaluator's
+    reference rules (with ``db``) — in ``GROUND_TRUTH_PLACEHOLDERS`` order. ``[]`` for an
+    external code evaluator: its rules are not this platform's to read. A live session
+    (online, canary, SCORE NOW) carries none of these fields."""
+    rules = None
+    if db is not None and str(definition.get("definition") or "") == "code":
+        from app.evaluation.managed import managed_evaluator, managed_rules
+
+        owner = managed_evaluator(db, workspace_id, str(definition.get("id") or ""))
+        rules = managed_rules(db, owner) if owner else None
+    needs, _kind = needs_from_definition(definition, rules)
+    return [f for f in GROUND_TRUTH_PLACEHOLDERS if f in (needs or set())]
+
+
+def needs_from_definition(
+    definition: dict[str, Any], managed_rules: list[dict[str, Any]] | None
+) -> tuple[set[str] | None, str]:
+    """(needs, kind) from an evaluator row definition (``evaluators_local.definition_of``).
+    ``None`` needs = unknown (an external code evaluator whose rules this platform does
+    not own)."""
+    kind = str(definition.get("definition") or "judge")
+    if kind == "judge":
+        return set(ground_truth_placeholders(str(definition.get("instructions") or ""))), kind
+    if kind == "derived":
+        return set(builtin_needs(str(definition.get("base_evaluator_id") or ""))), kind
     if managed_rules is None:
         return None, "code"
     needs: set[str] = set()

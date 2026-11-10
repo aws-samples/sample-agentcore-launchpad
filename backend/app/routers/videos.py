@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.core.db import get_db
+from app.core.db import SQLITE_MAX_INT, get_db
 from app.routers.auth import Identity, require_identity
 from app.services import videos
 
@@ -91,7 +91,7 @@ def unpublish(
 @router.delete("/manage/{video_id}")
 def delete(
     video_id: str,
-    expected_revision: int = Query(ge=1),
+    expected_revision: int = Query(ge=1, le=SQLITE_MAX_INT),
     db: Session = Depends(get_db),
 ) -> dict[str, bool]:
     return videos.delete(db, video_id, expected_revision)

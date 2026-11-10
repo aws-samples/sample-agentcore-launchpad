@@ -121,8 +121,7 @@ network calls, spawning processes, or blocking. Allowed at module top level:
 - imports
 - constants
 - `def` / `class` / `@tool`-decorated functions
-- model construction (`BedrockModel(...)`, `OpenAIModel(...)`,
-  `OpenAIResponsesModel(...)`)
+- model construction (`BedrockModel(...)`, `OpenAIModel(...)`)
 - agent construction (`Agent(...)`), `Swarm(...)` construction
 - `MCPClient(...)` construction (stores the transport factory; it does NOT
   connect — connections only happen inside `with client:` blocks)
@@ -155,7 +154,6 @@ Conditionally include:
 
 - `from strands_tools import calculator, file_read, shell, current_time, http_request, editor, retrieve` — when built-in tools are used
 - `from strands.models.openai import OpenAIModel` — OpenAI provider
-- `from strands.models.openai_responses import OpenAIResponsesModel` — Amazon Bedrock (Mantle) provider
 - `from strands.multiagent import Swarm` — swarm nodes
 - `from strands.multiagent import GraphBuilder` — graph mode
 - MCP tools:
@@ -172,11 +170,6 @@ Never hardcode API keys or credentials. Even if the flow JSON contains an
 `apiKey` field, always read from environment variables in generated code:
 
 - OpenAI: `"api_key": os.environ.get("OPENAI_API_KEY")`
-- Amazon Bedrock (Mantle): no key by default — emit
-  `bedrock_mantle_config={"region": <region>}` and let the SDK mint a bearer
-  token from the ambient AWS credentials. Only when the node carries a non-empty
-  `apiKey` emit `client_args={"api_key": os.environ.get("BEDROCK_API_KEY"), ...}`
-  instead. Never both — the SDK rejects that combination.
 - AWS Bedrock (`BedrockModel`): no key argument — uses ambient AWS credentials.
 
 ## 9. General code quality

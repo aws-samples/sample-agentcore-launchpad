@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/engine_respond_request/v1",
+  "title": "I4 POST /v1/respond request: the response / error event of an executed or denied call (amendment 2: principal, agent, resource required)",
+  "type": "object",
+  "properties": {
+    "ws": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "action": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "enum": [
+        "response",
+        "error"
+      ]
+    },
+    "input": {
+      "type": "object"
+    },
+    "output": {
+      "type": "object"
+    },
+    "principal": {
+      "type": "object",
+      "description": "amendment 2: the call's principal (same object as on decide) - the event is pinned to (session, principal)"
+    },
+    "agent": {
+      "type": "object",
+      "description": "amendment 2: the calling agent (same object as on decide)"
+    },
+    "resource": {
+      "type": "string",
+      "description": "amendment 2: the gateway entity (same as on decide)"
+    }
+  },
+  "required": [
+    "ws",
+    "session",
+    "action",
+    "kind",
+    "input",
+    "output",
+    "principal",
+    "agent",
+    "resource"
+  ],
+  "additionalProperties": false
+}

@@ -13,7 +13,8 @@
 # dedicated unprivileged user for the subprocess to drop to, plus a firewall rule
 # denying that user egress to the instance metadata service. Read the trade-off
 # printed at the end before enabling it — it removes the ambient-AWS-credential
-# convenience that the default Bedrock Mantle path relies on.
+# convenience the Memory/Identity SDK calls rely on; model calls use
+# AWS_BEARER_TOKEN_BEDROCK either way.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,13 +40,10 @@ echo "==> exec venv: ${VENV_DIR}"
 uv venv "${VENV_DIR}" --python 3.12
 
 echo "==> installing strands runtime deps"
-# The [openai] extra carries `openai` AND `aws-bedrock-token-generator`, which
-# the default Bedrock Mantle model needs: generated code calls
-# OpenAIResponsesModel(bedrock_mantle_config=...), and the SDK mints a bearer
-# token from the ambient AWS credentials (so local debug uses your AWS profile —
-# no BEDROCK_API_KEY). The floor tracks the verified SDK (1.47.0); the real
-# minimum is 1.46, where the `openai.gpt-5.*` → /openai/v1 base-path split the
-# default model needs landed (1.45 served every Mantle id from /v1).
+# The [openai] extra serves the canvas's OpenAI provider. Bedrock models
+# (GLM 5.3 / Kimi K3) are reached with the Global Bedrock API key the backend
+# forwards as AWS_BEARER_TOKEN_BEDROCK (local_exec.build_execution_env); no
+# bearer-token generator is needed.
 uv pip install --python "${PY_BIN}" \
   'strands-agents[openai]>=1.47,<2' \
   'strands-agents-tools' \
@@ -53,7 +51,7 @@ uv pip install --python "${PY_BIN}" \
   'bedrock-agentcore'
 
 echo "==> verifying imports"
-"${PY_BIN}" -c "import strands, strands_tools, mcp, aws_bedrock_token_generator; from strands.models.openai_responses import OpenAIResponsesModel; from importlib.metadata import version; print('strands-agents', version('strands-agents'))"
+"${PY_BIN}" -c "import strands, strands_tools, mcp; from strands.models import BedrockModel; from importlib.metadata import version; print('strands-agents', version('strands-agents'))"
 
 if [[ "${HARDENED}" -eq 1 ]]; then
   if [[ "$(uname -s)" != "Linux" ]]; then
@@ -127,14 +125,15 @@ if [[ "${HARDENED}" -eq 1 ]]; then
 
     Trade-off, deliberately not applied for you:
 
-      Local debug currently works off your AWS profile because the default
-      Bedrock Mantle path mints its bearer token from the ambient credentials.
-      Setting forward_aws_credentials: false is what makes the subprocess
-      credential-less — and it means Studio local debug and AI Fix will need an
-      explicit bedrock_api_key / openai_api_key with each request.
+      Local debug forwards the backend's AWS_BEARER_TOKEN_BEDROCK for model
+      calls either way. Setting forward_aws_credentials: false removes the
+      ambient AWS credentials (Memory/Identity SDK calls) from the subprocess;
+      model calls keep working through the forwarded bearer or a
+      bedrock_api_key supplied with the request.
 
       Leaving it true keeps today's convenience: the uid drop and resource limits
-      still apply, but the subprocess can still use your AWS credentials.
+      still apply, but the subprocess can still use your AWS credentials for
+      Memory/Identity SDK calls.
 
 HARDENED_NOTE
 fi

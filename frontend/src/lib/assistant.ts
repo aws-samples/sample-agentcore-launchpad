@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next";
 /**
  * Architect assistant (SE-039 / SE-047) — the transport and pure business rules
  * shared by the classic `/create/assistant` page and the native V2 `/v2/assistant`
@@ -11,18 +12,37 @@ import {
   api,
   AUTH_UNAUTHORIZED_EVENT,
   HARNESS_NATIVE_TOOLS,
+  type AssistantCatalog,
   type AssistantConversationDetail,
+  type AssistantConversationFootprint,
+  type AssistantConversationPurgeResult,
   type AssistantFishbone,
+  type AssistantPurgeBlocker,
+  type AssistantPurgeJobState,
   type AssistantMessage,
   type AssistantProposal,
   type AssistantProposalContent,
   type AssistantTurnRequest,
   type HarnessNativeTool,
+  type SharedMemoryKind,
+  type ValidationErrorDetail,
 } from "./api";
 import { MODEL_CATALOG, type ModelSource } from "./models";
 import { WORKSPACE_HEADER } from "./workspace-header";
+import { compareTimesDesc } from "./timestamps";
 
 export const ASSISTANT_JOB_POLL_MS = 3000;
+
+/** Which shared memory a conversation's catalog snapshot offers (N-ARCH-bug1). The
+ * snapshot carries the resolved `memory_kind`; one taken before that field existed
+ * only knew the Global `memory_arn`, which is still read as AgentCore Memory. */
+export function catalogMemoryKind(
+  res: AssistantCatalog["resources"] | undefined,
+): SharedMemoryKind | null {
+  if (!res) return null;
+  if (res.memory_kind) return res.memory_kind;
+  return res.memory_arn ? "agentcore" : null;
+}
 export const PROPOSAL_NAME_RE = /^[a-z][a-z0-9-]{2,47}$/;
 export const PROPOSAL_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,120}$/;
 // the full proposal and a revision of the stored one (`launchpad-proposal-patch`)
@@ -31,8 +51,15 @@ const PREPARATION_FENCE_RE = /```launchpad-preparation[ \t]*\r?\n[\s\S]*?\r?\n[ 
 
 // ─── SSE turn stream ──────────────────────────────────────────────────────
 
-/** Parse a `text/event-stream` response body into `{event, data}` frames. */
-export async function* sseEvents(res: Response): AsyncGenerator<{ event: string; data: never }> {
+export interface SseFrame {
+  event: string;
+  data: never;
+  /** the `id:` field — an assistant turn's event-log `seq` (N-ARCH-obs15); absent otherwise */
+  seq?: number;
+}
+
+/** Parse a `text/event-stream` response body into `{event, data, seq?}` frames. */
+export async function* sseEvents(res: Response): AsyncGenerator<SseFrame> {
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -45,11 +72,16 @@ export async function* sseEvents(res: Response): AsyncGenerator<{ event: string;
     for (const frame of frames) {
       let event = "message";
       let data = "";
+      let seq: number | undefined;
       for (const line of frame.split("\n")) {
         if (line.startsWith("event:")) event = line.slice(6).trim();
         if (line.startsWith("data:")) data += line.slice(5).trim();
+        if (line.startsWith("id:")) {
+          const n = Number(line.slice(3).trim());
+          if (Number.isFinite(n)) seq = n;
+        }
       }
-      if (data) yield { event, data: JSON.parse(data) as never };
+      if (data) yield { event, data: JSON.parse(data) as never, ...(seq !== undefined ? { seq } : {}) };
     }
   }
 }
@@ -85,6 +117,35 @@ export async function openAssistantTurn(
   return res;
 }
 
+/**
+ * `GET …/conversations/{id}/turns/{turn}/stream?from=<seq>` — reattach to a turn that
+ * runs (or ran) server-side: replays the events after `fromSeq`, tails the producer,
+ * ends with its terminal event (N-ARCH-obs15). 404 unknown turn; 409
+ * `assistant.turn_not_yours` for another member's turn.
+ */
+export async function openAssistantTurnStream(
+  conversationId: string,
+  turn: number,
+  fromSeq: number,
+  workspaceId: string | null,
+  signal: AbortSignal,
+): Promise<Response> {
+  const res = await fetch(
+    `/api/assistant/architect/conversations/${encodeURIComponent(conversationId)}/turns/${turn}/stream?from=${fromSeq}`,
+    {
+      method: "GET",
+      headers: { ...(workspaceId ? { [WORKSPACE_HEADER]: workspaceId } : {}) },
+      signal,
+    },
+  );
+  if (!res.ok) {
+    if (res.status === 401) window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
+    const body = (await res.json().catch(() => ({}))) as { code?: string; message?: string };
+    throw new ApiError(body.code ?? `http.${res.status}`, body.message ?? res.statusText, null);
+  }
+  return res;
+}
+
 export const isAssistantUnauthorized = (err: unknown) =>
   err instanceof ApiError &&
   (err.code === "http.401" ||
@@ -102,16 +163,58 @@ export interface AssistantLiveMessage {
   /** sender of a user row; absent for a row typed in this tab (the caller) */
   author?: string | null;
   streaming?: boolean;
+  /** the streaming row's connection dropped; the turn keeps running server-side and the
+   *  tab is reattaching (N-ARCH-obs15) */
+  reconnecting?: boolean;
   /** the stored turn number; absent on rows streamed in this tab until the reload */
   turn?: number;
+  /** coded errors of a notice row (N17-obs296) — the backend's `errors[]` on a stored
+   *  row, the proposal's `validation_error_details` on a row streamed in this tab */
+  errors?: ValidationErrorDetail[];
+  /** N17-obs468: a "no proposal block" notice — the revision that stayed current
+   *  (`base`, null before any proposal) and the one a re-ask stored (`revision`) */
+  missing?: { base: number | null; revision: number | null };
 }
 
 /** Backend ``TURN_RETRIED_NAME``: marks a failed turn the member retried (never replayed). */
 export const TURN_RETRIED_NAME = "turn_retried";
-const PROPOSAL_REJECTED_NAME = "proposal_rejected";
+/** Backend ``TURN_INTERRUPTED_NAME``: the turn stopped before the reply finished — the
+ *  producer failed, lost its claim or its process died (N-ARCH-obs12 / obs15; a closed
+ *  connection no longer does this). What streamed is kept and a complete proposal block
+ *  was recorded. Still retryable. */
+export const TURN_INTERRUPTED_NAME = "turn_interrupted";
+export const PROPOSAL_REJECTED_NAME = "proposal_rejected";
+/** Backend ``AUTOCORRECT_NAMES`` (N17-obs295): the notice of the turn's automatic
+ *  proposal correction — written pending, renamed to its outcome. A notice, never a
+ *  failed turn. */
+export const PROPOSAL_AUTOCORRECT_PENDING = "proposal_autocorrect_pending";
+export const PROPOSAL_AUTOCORRECTED = "proposal_autocorrected";
+export const PROPOSAL_AUTOCORRECT_FAILED = "proposal_autocorrect_failed";
+export const AUTOCORRECT_NAMES: readonly string[] = [
+  PROPOSAL_AUTOCORRECT_PENDING, PROPOSAL_AUTOCORRECTED, PROPOSAL_AUTOCORRECT_FAILED,
+];
+/** Backend ``MISSING_NAMES`` (N17-obs468): the reply carried no proposal block although it
+ *  imitated the replay placeholder or claimed a submitted revision — written pending while
+ *  the server asks once more, renamed to its outcome. A notice, never a failed turn. */
+export const PROPOSAL_MISSING_PENDING = "proposal_missing_pending";
+export const PROPOSAL_MISSING_RECOVERED = "proposal_missing_recovered";
+export const PROPOSAL_MISSING = "proposal_missing";
+export const MISSING_NAMES: readonly string[] = [
+  PROPOSAL_MISSING_PENDING, PROPOSAL_MISSING_RECOVERED, PROPOSAL_MISSING,
+];
+/** error rows that are notices: a turn carrying only these did not fail */
+export function isNoticeRow(m: { role: string; name?: string | null }): boolean {
+  return m.role === "error" && (
+    m.name === PROPOSAL_REJECTED_NAME || m.name === TURN_RETRIED_NAME
+    || AUTOCORRECT_NAMES.includes(m.name ?? "") || MISSING_NAMES.includes(m.name ?? ""));
+}
 
 export function toLiveMessages(rows: AssistantMessage[]): AssistantLiveMessage[] {
-  return rows.map((m) => ({ role: m.role, text: m.text, name: m.name, author: m.author, turn: m.turn }));
+  return rows.map((m) => ({
+    role: m.role, text: m.text, name: m.name, author: m.author, turn: m.turn,
+    ...(m.errors ? { errors: m.errors } : {}),
+    ...(m.missing ? { missing: m.missing } : {}),
+  }));
 }
 
 /** The latest turn when it failed and was not retried yet: `{turn, prompt}` to retry. */
@@ -120,7 +223,7 @@ export function retryableTurn(messages: AssistantLiveMessage[]): { turn: number;
   if (!turns.length) return null;
   const latest = Math.max(...turns);
   const rows = messages.filter((m) => m.turn === latest);
-  const failed = rows.some((m) => m.role === "error" && m.name !== PROPOSAL_REJECTED_NAME && m.name !== TURN_RETRIED_NAME);
+  const failed = rows.some((m) => m.role === "error" && !isNoticeRow(m));
   const retried = rows.some((m) => m.role === "error" && m.name === TURN_RETRIED_NAME);
   const prompt = rows.find((m) => m.role === "user")?.text ?? "";
   return failed && !retried && prompt ? { turn: latest, prompt } : null;
@@ -202,26 +305,61 @@ export function isFishbone(v: unknown): v is AssistantFishbone {
   );
 }
 
-/** The new member revision: the edited fields, plus every solution member the form
- *  does not edit travelling with the revision unchanged. */
+/** The proposal fields the editor exposes (`ProposalEditor`): a member revision takes
+ *  these from the draft. */
+export const PROPOSAL_EDITED_KEYS = [
+  "name",
+  "model_id",
+  "model_source",
+  "system_prompt",
+  "tools",
+  "native_tools",
+  "skills",
+  "knowledge_bases",
+  "memory",
+  "max_iterations",
+  "timeout_seconds",
+] as const satisfies readonly (keyof ProposalEditDraft)[];
+
+/** Every other key of the proposal contract (`backend/app/assistant/proposal.py::
+ *  ProposalContent`), none of which the editor shows: a member revision carries each one
+ *  VERBATIM from the revision being edited when that revision has it, and omits it when
+ *  it does not (`evaluation_plan` / `fishbone` are optional there — an absent key must
+ *  stay absent so an unchanged edit hashes like its base). N15-obs13: the rebuild used to
+ *  enumerate the solution members by hand and lost `evaluation_plan`, so every member
+ *  edit of a proposal with gate recommendations drafted a plan with no seed evaluators.
+ *  `tool_functions` is carried too, narrowed to the still-selected tools (below). */
+export const PROPOSAL_CARRIED_KEYS = [
+  "summary",
+  "requirements_baseline",
+  "assumptions",
+  "manual_tasks",
+  "golden_tests",
+  "evaluator_recommendations",
+  "evaluation_plan",
+  "fishbone",
+  "builtin_tools",
+] as const satisfies readonly (keyof AssistantProposalContent)[];
+
+/** The new member revision: the edited fields from the draft, every contract key the
+ *  form does not edit travelling with the revision unchanged. Keys outside the contract
+ *  (the junk of an invalid revision, e.g. `code`) are not carried: the server refuses
+ *  them and the editor cannot show them. */
 export function proposalContentFromDraft(
   draft: ProposalEditDraft,
   base: AssistantProposal["content"],
 ): AssistantProposalContent {
+  const carried: Record<string, unknown> = {};
+  for (const key of PROPOSAL_CARRIED_KEYS) {
+    if (key in base && base[key] !== undefined) carried[key] = base[key];
+  }
+  const edited = Object.fromEntries(
+    PROPOSAL_EDITED_KEYS.map((key) => [key, draft[key]]),
+  ) as Pick<ProposalEditDraft, (typeof PROPOSAL_EDITED_KEYS)[number]>;
   return {
     version: 1,
-    ...draft,
-    summary: typeof base.summary === "string" ? base.summary : "",
-    requirements_baseline: Array.isArray(base.requirements_baseline) ? base.requirements_baseline : [],
-    assumptions: Array.isArray(base.assumptions) ? base.assumptions : [],
-    manual_tasks: Array.isArray(base.manual_tasks) ? base.manual_tasks : [],
-    golden_tests: Array.isArray(base.golden_tests) ? base.golden_tests : [],
-    evaluator_recommendations: Array.isArray(base.evaluator_recommendations)
-      ? base.evaluator_recommendations
-      : [],
-    ...(isFishbone(base.fishbone) ? { fishbone: base.fishbone } : {}),
-    // built-in tools are not editable in the draft; an edit must not drop them
-    ...(Array.isArray(base.builtin_tools) ? { builtin_tools: base.builtin_tools.map(String) } : {}),
+    ...carried,
+    ...edited,
     // a reviewed function narrowing travels with its still-selected Gateway; dropping
     // it silently would widen that Gateway to every declared function
     ...carriedToolFunctions(base.tool_functions, draft.tools),
@@ -375,7 +513,11 @@ export function planUnblockGoldenTest(
       input: String(gt.input ?? "").slice(0, 8000),
       expected_response: String(gt.expected_response ?? "").slice(0, 2000),
     }],
-    expected_trajectory: asArray<unknown>(gt.expected_tools).map((x) => String(x).slice(0, 200)),
+    // N17-obs376: [] means "no tools expected" — an unstated trajectory is omitted, as the
+    // backend's plan materializer does
+    ...(asArray<unknown>(gt.expected_tools).length > 0
+      ? { expected_trajectory: asArray<unknown>(gt.expected_tools).map((x) => String(x).slice(0, 200)) }
+      : {}),
     assertions,
     note: "re-drafted from the golden test after unblocking — confirm, rewrite or block it",
     review_required: true,
@@ -414,8 +556,7 @@ export function kbUploadSource(detail: AssistantKbDetail): AssistantKbSource | u
  *  whether it is still moving (keep polling). */
 export function kbReadiness(detail: AssistantKbDetail | null, failed: boolean) {
   const jobs = detail?.data_sources.map((source) =>
-    [...(source.ingestion_jobs ?? [])].sort((a, b) =>
-      (b.started_at ?? "").localeCompare(a.started_at ?? ""))[0]);
+    [...(source.ingestion_jobs ?? [])].sort((a, b) => compareTimesDesc(a.started_at, b.started_at))[0]);
   const indexError = detail?.status === "FAILED"
     || detail?.data_sources.some((source) => source.status === "FAILED")
     || jobs?.some((job) => job && (["FAILED", "STOPPED"].includes(job.status)
@@ -429,4 +570,97 @@ export function kbReadiness(detail: AssistantKbDetail | null, failed: boolean) {
     : indexError ? "indexFailed" : completed ? "indexComplete"
       : pending ? "indexPending" : "indexNotStarted";
   return { key, pending: Boolean(pending) };
+}
+
+// ─── CLEAR a conversation (durable clear job) ─────────────────────────────
+
+/** The canaries a CLEAR will stop and remove (cleanup not run, or ran incomplete) and
+ * the already-cleaned ones it only re-reads — both are listed so nothing is hidden. */
+export function clearCanaryList(fp: AssistantConversationFootprint, t?: TFunction): string {
+  // N17-obs457: with `t` the parts and the canary status read in the console language
+  return fp.canaries
+    .map((c) => {
+      const res = c.resources;
+      const parts = [
+        res.ab_test ? (t ? t("assistantPage.clear.part.abSplit") : "A/B split") : "",
+        res.online_evaluations
+          ? t ? t("assistantPage.clear.part.onlineEvals", { count: res.online_evaluations }) : `${res.online_evaluations} online eval`
+          : "",
+        res.endpoints.length
+          ? t ? t("assistantPage.clear.part.endpoints", { list: res.endpoints.join(", ") }) : `endpoints ${res.endpoints.join(", ")}`
+          : "",
+      ].filter(Boolean);
+      const status = t ? t(`v2.canary.status.${c.status}`, { defaultValue: c.status }) : c.status;
+      return `${c.name} (${status}${parts.length ? " · " + parts.join(" · ") : ""})`;
+    })
+    .join("; ");
+}
+
+/** A clear job is still live (a repeated DELETE follows it instead of starting one). */
+export function clearInProgress(fp: AssistantConversationFootprint): boolean {
+  return fp.purge?.status === "queued" || fp.purge?.status === "running";
+}
+
+/** Human text for a clear job's current step (`canary:<id> · waiting · endpoint:x (DELETING)`). */
+export function clearStepText(step: AssistantPurgeJobState["step"] | undefined | null, t?: TFunction): string {
+  if (!step) return "";
+  // N17-obs457: with `t` the step's state reads in the console language; the key (ids) and the
+  // detail (the server's text) stay as written
+  const state = step.state && t ? t(`assistantPage.clear.stepState.${step.state}`, { defaultValue: step.state }) : step.state;
+  return [step.key, state, step.detail].filter(Boolean).join(" · ");
+}
+
+export type ClearOutcome =
+  | { kind: "done"; result: AssistantConversationPurgeResult }
+  | { kind: "failed"; reason: string }
+  | { kind: "detached" };
+
+/**
+ * DELETE the conversation; a cloud clear answers with a durable job, which is polled
+ * until it is terminal. `onProgress` receives each step's text; `detached()` returning
+ * true stops polling (the job keeps running server-side).
+ */
+export async function runConversationClear(
+  id: string,
+  opts: {
+    /** `step` / `status`: the raw job state, for the caller to word (N17-obs457) */
+    onProgress?: (text: string, step?: AssistantPurgeJobState["step"], status?: string) => void;
+    detached?: () => boolean;
+    pollMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<ClearOutcome> {
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const res = await api.assistantDeleteConversation(id);
+  if (res.deleted || !res.job_id) return { kind: "done", result: res };
+  const jobId = res.job_id;
+  for (;;) {
+    if (opts.detached?.()) return { kind: "detached" };
+    const job = await api.getJob(jobId);
+    const payload = (job.payload ?? {}) as {
+      step?: AssistantPurgeJobState["step"];
+      blocker?: AssistantPurgeBlocker | null;
+      result?: Partial<AssistantConversationPurgeResult>;
+    };
+    if (job.status === "succeeded") {
+      return {
+        kind: "done",
+        result: {
+          operations_cleaned: [],
+          datasets: [],
+          agents: [],
+          ...payload.result,
+          deleted: true,
+          conversation_id: id,
+          job_id: jobId,
+          status: job.status,
+        },
+      };
+    }
+    if (job.status === "failed") {
+      return { kind: "failed", reason: payload.blocker?.message || job.error || job.status };
+    }
+    opts.onProgress?.(clearStepText(payload.step) || job.status, payload.step, job.status);
+    await sleep(opts.pollMs ?? ASSISTANT_JOB_POLL_MS);
+  }
 }

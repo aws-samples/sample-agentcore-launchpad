@@ -16,6 +16,7 @@ widen that boundary.
 """
 
 import re
+import signal
 import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
@@ -175,17 +176,60 @@ _FAILURE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 _UNSATISFIABLE_RE = re.compile(r"requirements are unsatisfiable")
 
 
+def _signal_name(number: int) -> str:
+    try:
+        return signal.Signals(number).name
+    except ValueError:
+        return ""
+
+
+def describe_exit(returncode: int | None) -> str:
+    """How a subprocess ended, for a failure message: ``exit status N`` or ``killed by
+    signal N (SIGTERM)``. N17-obs113: a pip child the service's own SIGTERM killed
+    exits -15 with EMPTY output — without the exit status the message read as a
+    resolver failure."""
+    if returncode is None:
+        return "no exit status"
+    if returncode < 0:
+        name = _signal_name(-returncode)
+        return f"killed by signal {-returncode}" + (f" ({name})" if name else "")
+    return f"exit status {returncode}"
+
+
+def terminated_sentence(returncode: int) -> str:
+    """The summary for an install process that a signal killed (``returncode < 0``):
+    names the signal and the likely cause, asks for a redeploy — no requirement hints,
+    the requirements were never the problem."""
+    number = -returncode
+    name = _signal_name(number)
+    label = f"signal {number}" + (f", {name}" if name else "")
+    if number == signal.SIGTERM:
+        why = "the backend was restarting, or the build was stopped from outside"
+    elif number == signal.SIGKILL:
+        why = "the backend was being stopped, or the host ran out of memory"
+    else:
+        why = "the build process was killed"
+    return f"install process terminated ({label}) — {why}; redeploy."
+
+
 def summarize_resolver_failure(
     raw: str,
     *,
     python_version: str = TARGET_PYTHON,
     hints: Sequence[str] = (),
+    returncode: int | None = None,
 ) -> str:
     """A concise, package-naming summary of a failed uv/pip resolve.
 
     ``raw`` is the resolver's stderr/stdout. The output names the offending
     package(s) and the reason, then the fix hints — never the input list.
+    ``returncode`` (N17-obs113): a negative one is a signal kill and answers with
+    ``terminated_sentence`` — never "resolver produced no output"; a positive one
+    is appended to that no-output fallback so a silent failure still says how it
+    ended.
     """
+    if returncode is not None and returncode < 0:
+        return terminated_sentence(returncode)
     platform = uv_platform()
     reasons: list[str] = []
     for pattern, template in _FAILURE_PATTERNS:
@@ -203,7 +247,12 @@ def summarize_resolver_failure(
         )
     if not reasons:
         # unknown shape: keep a bounded tail of the raw output rather than nothing
-        reasons.append((raw or "").strip()[-400:] or "resolver produced no output")
+        tail = (raw or "").strip()[-400:]
+        if not tail:
+            tail = "resolver produced no output"
+            if returncode is not None:
+                tail += f" ({describe_exit(returncode)})"
+        reasons.append(tail)
     summary = "; ".join(reasons)
     all_hints = list(hints)
     if any("wheel" in reason or "distribution" in reason for reason in reasons):

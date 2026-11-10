@@ -8,11 +8,11 @@ sent. The version is validated against ListDatasetVersions before any run row
 exists and is persisted on ``EvalRun.dataset_version``.
 """
 
-from unittest.mock import MagicMock
+import json
 
 from app.core.db import SessionLocal
 from app.evaluation.models import EvalRun
-from tests.evaluation.test_datasets_v2 import SCENARIO
+from tests.evaluation.test_datasets_v2 import SCENARIO, fake_store, seed_cloud
 from tests.evaluation.test_run_scopes import wait_terminal
 from tests.evaluation.test_runs_flow import make_agent, stub_environment
 
@@ -21,20 +21,17 @@ EXAMPLE = {"exampleId": "ex-1", **SCENARIO}
 
 
 def _stub_cloud(monkeypatch, *, versions=("3", "2", "1")):
-    stub = MagicMock()
-    stub.get_dataset.return_value = {
-        "datasetId": CLOUD_ID, "datasetName": "pinned", "status": "ACTIVE",
-        "schemaType": "AGENTCORE_EVALUATION_PREDEFINED_V1", "exampleCount": 1,
-    }
-    stub.list_dataset_examples.return_value = {"examples": [EXAMPLE]}
-    stub.list_dataset_versions.return_value = {
-        "versions": [
-            {"datasetVersion": v, "exampleCount": 1, "createdAt": f"2026-09-0{i + 1}T00:00:00Z"}
-            for i, v in enumerate(reversed(versions))
-        ]
-    }
-    monkeypatch.setattr("app.evaluation.routers.control_client", lambda _ws=None: stub)
-    return stub
+    """A cloud snapshot store ``cloudds-9`` named ``pinned`` with published ``versions``;
+    the published snapshots carry a marker turn so a pinned run provably replayed them."""
+    s3 = fake_store(monkeypatch)
+    seed_cloud(s3, cloud_id=CLOUD_ID, name="pinned", examples=[EXAMPLE],
+               versions=tuple(sorted(versions, key=int)))
+    for v in versions:
+        snapshot = {**SCENARIO, "turns": [{"input": f"version {v} prompt"}]}
+        s3.objects[("bucket", f"eval-datasets/{CLOUD_ID}/v{v}.json")] = json.dumps(
+            {"examples": [snapshot], "createdAt": "2026-09-01T00:00:00+00:00",
+             "exampleCount": 1}).encode()
+    return s3
 
 
 def _agent(name):
@@ -54,8 +51,8 @@ def _run_count(agent_id):
 
 def test_pinned_version_reads_that_version_and_is_persisted(client, monkeypatch):
     agent = _agent("pin-agent")
-    stub_environment(monkeypatch)
-    stub = _stub_cloud(monkeypatch)
+    _data, prompts = stub_environment(monkeypatch)
+    _stub_cloud(monkeypatch)
 
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "cloud_dataset_id": CLOUD_ID, "dataset_version": "2",
@@ -67,11 +64,10 @@ def test_pinned_version_reads_that_version_and_is_persisted(client, monkeypatch)
     assert created["dataset_name"] == "cloud:pinned"  # version never encoded here
     assert created["dataset_id"] == CLOUD_ID
 
-    stub.get_dataset.assert_called_once_with(datasetId=CLOUD_ID, datasetVersion="2")
-    stub.list_dataset_examples.assert_called_once_with(datasetId=CLOUD_ID, datasetVersion="2")
-
     run = wait_terminal(client, created["id"])
     assert run["dataset_version"] == "2"
+    assert run["status"] == "completed", run.get("error")
+    assert prompts["prompts"] == ["version 2 prompt"]  # the snapshot, not the draft
     db = SessionLocal()
     try:
         assert db.get(EvalRun, created["id"]).dataset_version == "2"
@@ -79,25 +75,10 @@ def test_pinned_version_reads_that_version_and_is_persisted(client, monkeypatch)
         db.close()
 
 
-def test_pinned_version_paginates_with_token_only(monkeypatch):
-    from app.evaluation import agentcore_eval as ac
-
-    stub = MagicMock()
-    stub.list_dataset_examples.side_effect = [
-        {"examples": [EXAMPLE], "nextToken": "tok"},
-        {"examples": [EXAMPLE]},
-    ]
-    out = ac.list_dataset_examples(stub, dataset_id=CLOUD_ID, version="2")
-    assert len(out) == 2
-    first, second = stub.list_dataset_examples.call_args_list
-    assert first.kwargs == {"datasetId": CLOUD_ID, "datasetVersion": "2"}
-    assert second.kwargs == {"datasetId": CLOUD_ID, "nextToken": "tok"}
-
-
-def test_without_version_reads_draft_and_sends_no_version_kwarg(client, monkeypatch):
+def test_without_version_reads_the_draft(client, monkeypatch):
     agent = _agent("draft-agent")
-    stub_environment(monkeypatch)
-    stub = _stub_cloud(monkeypatch)
+    _data, prompts = stub_environment(monkeypatch)
+    _stub_cloud(monkeypatch)
 
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "cloud_dataset_id": CLOUD_ID,
@@ -105,16 +86,15 @@ def test_without_version_reads_draft_and_sends_no_version_kwarg(client, monkeypa
     })
     assert res.status_code == 201, res.text
     assert res.json()["dataset_version"] is None
-    assert "datasetVersion" not in stub.get_dataset.call_args.kwargs
-    assert "datasetVersion" not in stub.list_dataset_examples.call_args.kwargs
-    stub.list_dataset_versions.assert_not_called()  # nothing to validate
-    wait_terminal(client, res.json()["id"])
+    run = wait_terminal(client, res.json()["id"])
+    assert run["status"] == "completed", run.get("error")
+    assert prompts["prompts"] == ["I want a refund", "Order 123 please"]  # the draft
 
 
 def test_unknown_version_is_422_and_creates_no_run(client, monkeypatch):
     agent = _agent("unknown-agent")
-    stub_environment(monkeypatch)
-    stub = _stub_cloud(monkeypatch, versions=("3", "2", "1"))
+    _data, prompts = stub_environment(monkeypatch)
+    _stub_cloud(monkeypatch, versions=("3", "2", "1"))
 
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "cloud_dataset_id": CLOUD_ID, "dataset_version": "9",
@@ -122,15 +102,14 @@ def test_unknown_version_is_422_and_creates_no_run(client, monkeypatch):
     })
     assert res.status_code == 422, res.text
     assert res.json()["code"] == "run.dataset_version_unknown"
-    stub.list_dataset_examples.assert_not_called()
-    stub.get_dataset.assert_not_called()
+    assert prompts["prompts"] == []  # nothing replayed
     assert _run_count(agent.id) == 0
 
 
 def test_version_with_local_dataset_or_window_is_scope_error(client, monkeypatch):
     agent = _agent("scope-agent")
-    stub_environment(monkeypatch)
-    stub = _stub_cloud(monkeypatch)
+    _data, prompts = stub_environment(monkeypatch)
+    _stub_cloud(monkeypatch)
     ds = client.post("/api/eval/datasets", json={
         "name": "local", "items": [{"prompt": "2+2?", "expected": "4"}],
     }).json()
@@ -149,7 +128,7 @@ def test_version_with_local_dataset_or_window_is_scope_error(client, monkeypatch
     })
     assert res.status_code == 422
     assert res.json()["code"] == "run.dataset_version_scope"
-    stub.get_dataset.assert_not_called()
+    assert prompts["prompts"] == []
     assert _run_count(agent.id) == 0
 
 

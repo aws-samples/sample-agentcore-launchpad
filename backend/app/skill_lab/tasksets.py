@@ -25,6 +25,8 @@ from sqlalchemy.orm import Session, make_transient
 
 from app.core.config import DATA_DIR, get_settings
 from app.core.errors import AppError
+from app.services import creators, visibility
+from app.services.visibility import Viewer
 from app.skill_lab import task_assets
 from app.skill_lab.models import SkillLabTaskset
 from app.skill_lab.worker_build import VENDOR_ROOT
@@ -401,6 +403,7 @@ def taskset_info(row: SkillLabTaskset) -> dict[str, Any]:
         "counts": row.counts,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        **creators.fields(row),
     }
 
 
@@ -417,19 +420,27 @@ def _reject_sample_write(row: SkillLabTaskset) -> None:
         )
 
 
-def list_tasksets(db: Session, workspace_id: str) -> list[dict[str, Any]]:
+def list_tasksets(
+    db: Session, workspace_id: str, *, viewer: Viewer = Viewer.ALL
+) -> list[dict[str, Any]]:
     rows = db.scalars(
         select(SkillLabTaskset)
         .where(SkillLabTaskset.workspace_id == workspace_id)
+        .where(visibility.clause(viewer, SkillLabTaskset.created_by))  # workspace isolation
         .order_by(SkillLabTaskset.created_at.desc())
     ).all()
     return [taskset_info(row) for row in rows]
 
 
-def get_row(db: Session, workspace_id: str, taskset_id: str) -> SkillLabTaskset:
+def get_row(
+    db: Session, workspace_id: str, taskset_id: str, *, viewer: Viewer = Viewer.ALL
+) -> SkillLabTaskset:
+    """The task set, or 404 — a foreign row and one workspace isolation hides from
+    ``viewer`` read alike. Workers and samples pass the default (everything)."""
     row = db.get(SkillLabTaskset, taskset_id)
     if row is None or row.workspace_id != workspace_id:
         raise _not_found(taskset_id)
+    visibility.require_seen(viewer, db, row.created_by, _not_found(taskset_id))
     return row
 
 
@@ -445,11 +456,13 @@ def create_taskset(
     sample: bool = False,
     run_validator: bool = True,
     extra_sources: dict[str, Path] | None = None,
+    creator: creators.Creator | None = None,
 ) -> dict[str, Any]:
     """`sample`/`run_validator` are seeding-only knobs (app/skill_lab/samples.py):
     the router never passes them. Skipping the validator subprocess is safe only
     for the vendored demo files — a hermetic test runs the real validator over
-    them, and seeding must not depend on the skill-lab venv existing yet."""
+    them, and seeding must not depend on the skill-lab venv existing yet. Seeded
+    samples carry no `creator` (no human principal)."""
     name = (name or "").strip()
     if not name:
         raise _invalid([{"split": "name", "message": "name is required"}])
@@ -471,6 +484,7 @@ def create_taskset(
             sample=sample,
             counts=_counts(canonical, keys),
         )
+        creators.stamp(row, creator)
         db.add(row)
         db.flush()  # allocate the id before the content claims its directory
         live = taskset_dir(row.id)
@@ -490,9 +504,10 @@ def create_taskset(
 
 
 def read_taskset(
-    db: Session, workspace_id: str, taskset_id: str, *, full: bool = False
+    db: Session, workspace_id: str, taskset_id: str, *, full: bool = False,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
-    row = get_row(db, workspace_id, taskset_id)
+    row = get_row(db, workspace_id, taskset_id, viewer=viewer)
     directory = taskset_dir(row.id)
     tasks_by_split: dict[str, Any] = {}
     truncated = False
@@ -553,11 +568,12 @@ def update_taskset(
     tasks_by_split: dict[str, Any],
     validator_python: str | None = None,
     extra_sources: dict[str, Path] | None = None,
+    viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
     # Lock includes reading the current tree, staging from owned descriptors,
     # the shared .old swap, ledger commit, and staged-token consumption.
     with taskset_operation(taskset_id):
-        row = get_row(db, workspace_id, taskset_id)
+        row = get_row(db, workspace_id, taskset_id, viewer=viewer)
         _reject_sample_write(row)
         keys = _split_keys_for(row.mode, tasks_by_split)  # mode is immutable
         if name is not None and not name.strip():
@@ -592,7 +608,9 @@ def update_taskset(
         return taskset_info(row)
 
 
-def delete_taskset(db: Session, workspace_id: str, taskset_id: str) -> None:
+def delete_taskset(
+    db: Session, workspace_id: str, taskset_id: str, *, viewer: Viewer = Viewer.ALL
+) -> None:
     """Delete ledger + tree, compensating a failed post-commit tree cleanup.
 
     Renaming first removes the canonical tree atomically. The ledger deletion is
@@ -601,7 +619,7 @@ def delete_taskset(db: Session, workspace_id: str, taskset_id: str) -> None:
     while leaking an unowned task-set directory.
     """
     with taskset_operation(taskset_id):
-        row = get_row(db, workspace_id, taskset_id)
+        row = get_row(db, workspace_id, taskset_id, viewer=viewer)
         _reject_sample_write(row)
         from app.skill_lab.jobs import taskset_in_use
 

@@ -1,0 +1,37 @@
+{
+ "seam": "opensearch-memory",
+ "case": "index_not_found_404",
+ "captured_at": "2026-10-19T09:14:27Z",
+ "notes": "",
+ "response_or_error": {
+  "http_status": 404,
+  "headers_subset": {
+   "Content-Type": "application/json; charset=UTF-8",
+   "Content-Length": "443"
+  },
+  "body": {
+   "error": {
+    "root_cause": [
+     {
+      "type": "index_not_found_exception",
+      "reason": "no such index [does-not-exist-seam]",
+      "index": "does-not-exist-seam",
+      "resource.id": "does-not-exist-seam",
+      "resource.type": "index_or_alias",
+      "index_uuid": "_na_"
+     }
+    ],
+    "type": "index_not_found_exception",
+    "reason": "no such index [does-not-exist-seam]",
+    "index": "does-not-exist-seam",
+    "resource.id": "does-not-exist-seam",
+    "resource.type": "index_or_alias",
+    "index_uuid": "_na_"
+   },
+   "status": 404
+  }
+ },
+ "status": 404,
+ "elapsed_s": 0.132,
+ "source": "t1 host, instance role (uv env boto3 1.43.109), via SSM"
+}

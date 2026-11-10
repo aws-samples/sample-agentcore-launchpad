@@ -1,11 +1,11 @@
-"""GET /api/eval/evaluators — catalog classification.
+from app.core.config import get_settings
 
-Builtins (incl. the skill evaluators) come from the local dicts; live
-ListEvaluators rows are classified third_party vs custom and project their
-evaluatorType/provider. The AWS call is fail-soft: builtins render without it.
+"""GET /api/eval/evaluators — catalog classification (N12 E1-1).
+
+Builtins (incl. the skill evaluators) come from the local catalog; the custom rows of the
+workspace are classified by their definition and project ``evaluator_type``/``provider``.
+There is no account listing in CN: third-party managed evaluators do not exist.
 """
-
-from unittest.mock import MagicMock
 
 GENERAL_PROMPT_TEMPLATE_EVALUATORS = {
     "Builtin.GoalSuccessRate": "SESSION",
@@ -39,122 +39,7 @@ EXPECTED_BUILTIN_EVALUATORS = {
 }
 
 
-LIVE_EVALUATORS = [
-    {
-        "evaluatorId": "ThirdParty.DeepEval.TaskCompletion",
-        "evaluatorName": "Task Completion",
-        "level": "SESSION",
-        "status": "ACTIVE",
-        "evaluatorType": "ThirdParty",
-        "provider": "DeepEval",
-    },
-    {
-        "evaluatorId": "ThirdParty.AutoEval.Security",
-        "evaluatorName": "Security",
-        "level": "SESSION",
-        "status": "ACTIVE",
-        "evaluatorType": "ThirdParty",
-        "provider": "AutoEval",
-    },
-    {
-        "evaluatorId": "my_judge-abc123",
-        "evaluatorName": "my_judge",
-        "level": "TRACE",
-        "status": "ACTIVE",
-        "evaluatorType": "Custom",
-        "provider": "Custom",
-    },
-    {
-        "evaluatorId": "my_derived-def456",
-        "evaluatorName": "my_derived",
-        "level": "SESSION",
-        "status": "ACTIVE",
-        "evaluatorType": "CustomDerived",
-        "provider": "DeepEval",
-    },
-    # the account listing echoes builtins too — must not duplicate the local rows
-    {
-        "evaluatorId": "Builtin.Helpfulness",
-        "evaluatorName": "Helpfulness",
-        "level": "TRACE",
-        "status": "ACTIVE",
-        "evaluatorType": "Builtin",
-        "provider": "AWS",
-    },
-]
-
-
-def stub_control(monkeypatch, error=None):
-    stub = MagicMock()
-    if error is not None:
-        stub.list_evaluators.side_effect = error
-    else:
-        stub.list_evaluators.return_value = {"evaluators": LIVE_EVALUATORS}
-    monkeypatch.setattr("app.evaluation.routers.control_client", lambda _ws=None: stub)
-    return stub
-
-
-def test_catalog_classification(client, monkeypatch):
-    stub_control(monkeypatch)
-    res = client.get("/api/eval/evaluators")
-    assert res.status_code == 200
-    rows = res.json()["evaluators"]
-    by_id = {r["id"]: r for r in rows}
-
-    builtin_rows = [r for r in rows if r["source"] == "builtin"]
-    builtin_by_id = {r["id"]: r for r in builtin_rows}
-
-    # The local catalog is exact, with no duplicate from the live builtin echo.
-    assert len(GENERAL_PROMPT_TEMPLATE_EVALUATORS) == 14
-    assert len(SKILL_EVALUATORS) == 2
-    assert len(TRAJECTORY_EVALUATORS) == 3
-    assert len(builtin_rows) == len(EXPECTED_BUILTIN_EVALUATORS) == 19
-    assert len(builtin_by_id) == len(builtin_rows)
-    assert {evaluator_id: row["level"] for evaluator_id, row in builtin_by_id.items()} == (
-        EXPECTED_BUILTIN_EVALUATORS
-    )
-    assert res.json()["builtin_count"] == 19
-    assert all(r["evaluator_type"] == "Builtin" for r in builtin_rows)
-    assert all(r["provider"] == "AWS" for r in builtin_rows)
-
-    # Ground-truth is required only by the three session-level trajectory matchers.
-    assert {
-        r["id"] for r in builtin_rows if r.get("requires_ground_truth")
-    } == set(TRAJECTORY_EVALUATORS)
-    assert all(
-        builtin_by_id[evaluator_id]["level"] == "TOOL_CALL"
-        for evaluator_id in SKILL_EVALUATORS
-    )
-
-    # third-party rows carry provider + source
-    for tp_id, provider in (
-        ("ThirdParty.DeepEval.TaskCompletion", "DeepEval"),
-        ("ThirdParty.AutoEval.Security", "AutoEval"),
-    ):
-        assert by_id[tp_id]["source"] == "third_party"
-        assert by_id[tp_id]["evaluator_type"] == "ThirdParty"
-        assert by_id[tp_id]["provider"] == provider
-
-    # custom + derived rows stay source=custom with their own evaluator_type
-    assert by_id["my_judge-abc123"]["source"] == "custom"
-    assert by_id["my_judge-abc123"]["evaluator_type"] == "Custom"
-    assert by_id["my_derived-def456"]["source"] == "custom"
-    assert by_id["my_derived-def456"]["evaluator_type"] == "CustomDerived"
-    assert by_id["my_derived-def456"]["provider"] == "DeepEval"
-
-
-def test_thirdparty_id_prefix_classifies_without_evaluator_type(client, monkeypatch):
-    stub = stub_control(monkeypatch)
-    stub.list_evaluators.return_value = {
-        "evaluators": [{"evaluatorId": "ThirdParty.DeepEval.Bias", "level": "TRACE"}]
-    }
-    res = client.get("/api/eval/evaluators")
-    row = next(r for r in res.json()["evaluators"] if r["id"] == "ThirdParty.DeepEval.Bias")
-    assert row["source"] == "third_party"
-
-
-def test_catalog_fail_soft_builtins_only(client, monkeypatch):
-    stub_control(monkeypatch, error=RuntimeError("no account access"))
+def test_catalog_builtins_only(client):
     res = client.get("/api/eval/evaluators")
     assert res.status_code == 200
     body = res.json()
@@ -162,5 +47,71 @@ def test_catalog_fail_soft_builtins_only(client, monkeypatch):
     assert all(r["source"] == "builtin" for r in rows)
     assert body["builtin_count"] == len(rows) == 19
     assert {r["id"]: r["level"] for r in rows} == EXPECTED_BUILTIN_EVALUATORS
-    context_relevance = next(r for r in rows if r["id"] == "Builtin.ContextRelevance")
-    assert context_relevance["level"] == "TRACE"
+    assert all(r["evaluator_type"] == "Builtin" for r in rows)
+    # N17-obs403: Global has no ContextRelevance evaluator — the one Launchpad-only builtin
+    assert {r["id"] for r in rows if r["provider"] != "AWS"} == {"Builtin.ContextRelevance"}
+    assert next(r for r in rows if r["id"] == "Builtin.ContextRelevance")["provider"] == "Launchpad"
+    # Ground-truth is required only by the three session-level trajectory matchers.
+    assert {r["id"] for r in rows if r.get("requires_ground_truth")} == set(TRAJECTORY_EVALUATORS)
+    assert all(
+        next(r for r in rows if r["id"] == e)["level"] == "TOOL_CALL" for e in SKILL_EVALUATORS
+    )
+    assert len(GENERAL_PROMPT_TEMPLATE_EVALUATORS) == 14
+    assert len(SKILL_EVALUATORS) == 2
+    assert len(TRAJECTORY_EVALUATORS) == 3
+
+
+def test_catalog_classifies_the_workspace_rows(client):
+    judge = client.post("/api/eval/evaluators", json={
+        "name": "my_judge", "instructions": "Rate the tone of {context}",
+    }).json()["evaluator_id"]
+    derived = client.post("/api/eval/evaluators", json={
+        "name": "my_derived", "base_evaluator_id": "Builtin.GoalSuccessRate",
+    }).json()["evaluator_id"]
+    res = client.get("/api/eval/evaluators")
+    body = res.json()
+    rows = body["evaluators"]
+    by_id = {r["id"]: r for r in rows}
+    builtin_rows = [r for r in rows if r["source"] == "builtin"]
+    assert len(builtin_rows) == body["builtin_count"] == 19
+    assert rows[:19] == builtin_rows  # builtins first, then the workspace's rows
+    assert by_id[judge] == {
+        "id": judge, "name": "my_judge", "level": "TRACE", "status": "ACTIVE",
+        "source": "custom", "evaluator_type": "Custom", "provider": "Custom",
+        "definition": "judge",
+        "pass_threshold": 0.7,  # N17-obs425: a custom evaluator keeps the default bar
+        # N17-obs428 (additive): the zh label display's inputs — no base, the row's own scale
+        "base_evaluator_id": None, "scale_labels": by_id[judge]["scale_labels"],
+        "version": 1,  # N17-obs434 (additive): the definition's version, listed
+        # N17-obs437 (additive): a rubric reading no ground truth
+        "requires_ground_truth": False, "ground_truth_fields": [],
+        # Family B step 1: the console principal that created the row (open console →
+        # the operator's name, no users.id)
+        "created_by": None, "created_by_name": get_settings().auth_username,
+    }
+    assert by_id[derived]["source"] == "custom"
+    assert by_id[derived]["evaluator_type"] == "CustomDerived"
+    assert by_id[derived]["provider"] == "AWS"
+    assert by_id[derived]["level"] == "SESSION"
+    assert by_id[derived]["definition"] == "derived"
+    # N17-obs428: a derived row names its base and has no scale of its own
+    assert by_id[derived]["base_evaluator_id"] == "Builtin.GoalSuccessRate"
+    assert by_id[derived]["scale_labels"] == []
+    assert by_id[derived]["version"] == 1
+    # a built-in row lists no version (it is the library release, on the detail)
+    assert "version" not in by_id["Builtin.Helpfulness"]
+
+
+def test_catalog_hides_other_workspaces_rows(client):
+    from app.core.db import SessionLocal
+    from app.evaluation.models import EvalEvaluator
+
+    db = SessionLocal()
+    try:
+        db.add(EvalEvaluator(workspace_id="other", name="foreign", definition="judge",
+                             instructions="x {session}", rating_scale=[]))
+        db.commit()
+    finally:
+        db.close()
+    rows = client.get("/api/eval/evaluators").json()["evaluators"]
+    assert all(r["source"] == "builtin" for r in rows)

@@ -130,7 +130,7 @@ Backend: `app/services/identity_providers.py` + `app/routers/identity.py`.
 | `GET /api/identity/connections/{kind}/{name}` | member | One Connection with its callback URL re-read from AWS (OAuth2). |
 | `POST /api/identity/connections/oauth2` | `perm:identity.manage` | Creates an OAuth2 provider. The response carries `callback_url`: the redirect URI to register at the IdP. |
 | `POST /api/identity/connections/api-key` | `perm:identity.manage` | Creates an API-key provider. |
-| `DELETE /api/identity/connections/{kind}/{name}` | `perm:identity.manage` | Refuses a system provider, and any provider still referenced by an agent spec or a Gateway target. |
+| `DELETE /api/identity/connections/{kind}/{name}` | `perm:identity.manage` | Refuses a system provider, any provider still referenced by an agent spec's tool auth or a Gateway target, and (N13-obs22) any provider in use as a **model credential** — an agent's `model_credential` pin or a model registry provider's `credential_provider` (`launchpad-global-bedrock` is both). |
 
 Error codes (all under `apiErrors.<code>` in the console):
 
@@ -139,6 +139,13 @@ Error codes (all under `apiErrors.<code>` in the console):
   `ConflictException` maps to the same code.
 - `identity.system_connection` (409) and `identity.connection_referenced` (409,
   `detail.referenced_by`).
+- `identity.in_use` (409, `detail.referenced_by` ≤ 20 `{type: agent | model_provider, id,
+  name}`, `detail.total`, `detail.truncated`): the provider is some agent's `model_credential`
+  or a model registry provider's credential (`services/identity_providers.
+  model_credential_references`). Checked before the external rule, so the shared Global
+  Bedrock key answers this; isolation-hidden agents are masked like `connection_referenced`, and
+  `total` / `truncated` are recomputed from the masked list (the delete stays refused with an
+  empty list and `total: 0` when nothing visible remains).
 - `identity.connection_not_found` (404).
 - `identity.unsupported_vendor`, `identity.missing_endpoints`,
   `identity.endpoints_custom_only` (422).
@@ -250,7 +257,7 @@ auth with no code change. The gateway performs the exchange.
 - **No silent stripping (P0-1 fix)**: `auth` is declared in the backend
   `AgentSpec` (which ignores unknown fields, so an undeclared key would be dropped
   on every save). In the console it round-trips `formFromStoredSpec` ↔
-  `buildAgentSpec` (`lib/agent-spec.ts`), shared by classic and v2. When editing,
+  `buildAgentSpec` (`lib/agent-spec.ts`), shared by the V2 wizard and the `/agents/new` wizard. When editing,
   a Connection missing from the catalog **blocks submission** with an error instead
   of dropping the block. `authToolIssues` is unit-tested in
   `frontend/src/lib/agent-spec.test.ts`.
@@ -367,11 +374,6 @@ Error codes (all under `apiErrors.<code>` in the console):
 - `identity.session_user_mismatch` (403): the caller is not the user the session
   was issued for.
 - `identity.session_completion_failed` (502): `CompleteResourceTokenAuth` refused.
-- `identity.session_token_unavailable` (409): a session asked over *Invoke as me*
-  cannot be completed because no user JWT of the caller could be minted.
-- `identity.as_user_requires_user_jwt` (409): an as_user consent on a JWT agent
-  was asked over the shared workspace M2M token, or such a session was presented
-  for completion. See §8.2.
 - `identity.consent_portal_required` (409), `identity.gateway_missing` (409),
   `identity.consent_portal_exists` (409), `identity.consent_portal_not_found`
   (404), `identity.invalid_portal_name` / `identity.invalid_role_arn` /
@@ -390,8 +392,9 @@ Error codes (all under `apiErrors.<code>` in the console):
   - Runs leg 4 and removes the spent `session_id` from the address bar.
   - Shows binding / done / failed, with the mapped error code.
   - Offers a way back to the chat named in the `state`.
-- **My authorizations** / 我的授权 (`/v2/my-connections`): the caller's grants per (Connection,
-  agent), with status. Revoke goes through a ConfirmDialog, is busy while the call
+- **My authorizations** / 我的授权 (`/v2/connections?view=mine`, a tab of Outbound credentials
+  since R13 — the separate `/v2/my-connections` page was folded in, N13-obs5): the caller's
+  grants per (Connection, agent), with status. Revoke goes through a ConfirmDialog, is busy while the call
   runs, and is disabled while a revocation is in force or without
   `identity.grant`.
   Deleting an agent drops every user's grants on it (its workload identity, and
@@ -492,8 +495,13 @@ and the AWS ML blog post
 
 P3 lets a caller's own identity reach the agent (inbound JWT, Chat "invoke as me")
 and the agent's downstreams (`obo` token exchange). It also adds a Cedar policy
-per Gateway tool. The real-AWS evidence is in
-[identity-e2e-evidence-p3.md](identity-e2e-evidence-p3.md).
+per Gateway tool.
+
+> **CN build note (GRAPH-LOOP-SPEC N3 / decision D9):** inbound Runtime auth in
+> the CN build is AWS_IAM (SigV4) only — the inbound-JWT switch, bearer invoke
+> and Chat "invoke as me" described below do not exist in this build. The
+> real-AWS evidence doc this section used to cite (`identity-e2e-evidence-p3.md`)
+> covered that removed path and was deleted with it.
 
 ### 8.1 Inbound auth: IAM (SigV4) vs JWT bearer
 
@@ -675,17 +683,10 @@ the toggle off, every `/v1` key holder, `POST /api/agents/{id}/invoke` and
 evaluation runs. A consent bound to it would hand one member's downstream token
 to all of them. So:
 
-- **Ask.** When an `as_user` tool of a JWT agent asks for consent on a call that
-  presented the M2M token, Launchpad records **no** pending session and no grant,
-  and sends **no** authorization URL. The call fails with
-  `identity.as_user_requires_user_jwt` (409, detail `{provider, tool, agent_id,
-  caller: "m2m"}`). In console Chat the message says to turn on *Invoke as me*.
-  On `/v1` and direct invoke it says that as_user tools on JWT agents need a user
-  JWT; those surfaces present only the M2M token, so external callers use the
-  runtime directly with the user's own token (`samples/inbound-jwt/`).
-- **Bind.** `POST /api/identity/oauth/complete` refuses a pending session whose
-  `caller_kind` is `m2m` (a row written before this rule) with the same 409. It
-  drops the row and never calls `CompleteResourceTokenAuth`.
+- **Retired.** The M2M-subject refusal this once described (an `as_user` ask
+  presenting the shared workspace M2M token) is gone along with the JWT-inbound
+  authorizer itself (GRAPH-LOOP-SPEC N3 / D9: Runtime inbound is AWS_IAM-only in
+  this build) — see `docs/cn/interfaces/gateway-iam.md`.
 - **Unchanged.** IAM-inbound agents key the vault on `runtimeUserId` and complete
   with `userId`. A consent asked over *Invoke as me* is recorded as `user_jwt`
   and completed with a fresh Cognito JWT of the caller, who must be the recorded

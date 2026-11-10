@@ -17,8 +17,8 @@
   --good:#0CA30C; --warn:#FAB219; --serious:#EC835A; --crit:#D03B3B;
   --crit-text:#DD5252;     /* crit as TEXT on --panel: 4.61:1 (AA); #D03B3B = 3.73:1 is fills/borders only */
   --grid:#212823;
-  /* surfaces and tints the chrome used to hard-code; console V2 re-points them
-     (v2/v2-classic.css) to render the same pages on its light theme */
+  /* surfaces and tints the token-styled pages read; the V2 shell re-points them
+     (v2/v2-classic.css) to its light palette on body.v2-body */
   --field:#0E1210;         /* inputs, wells, inline notes */
   --code-bg:#0A0D0C;       /* code blocks, switch tracks */
   --on-amber:#141210;      /* text on an amber fill */

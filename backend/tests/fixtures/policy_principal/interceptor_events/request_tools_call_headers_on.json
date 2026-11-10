@@ -1,0 +1,72 @@
+{
+ "recorded": "P0 probe 2026-10-26 (cn-northwest-1), anonymised; header secrets were redacted at source",
+ "phase": "REQUEST",
+ "client_context": {
+  "custom": {
+   "GATEWAY_ARN": "arn:aws-cn:bedrock-agentcore:cn-northwest-1:123456789012:gateway/launchpad-gw-exampleid0",
+   "GATEWAY_ACCOUNT_ID": "123456789012",
+   "REQUEST_ID": "18f0e90d-dee5-4034-b999-4b2ac9c3cb8c",
+   "SOURCE_IP": "198.51.100.7"
+  },
+  "env": null
+ },
+ "event": {
+  "interceptorInputVersion": "1.0",
+  "mcp": {
+   "gatewayRequest": {
+    "path": "/mcp",
+    "httpMethod": "POST",
+    "headers": {
+     "X-Amz-Date": "20261026T135000Z",
+     "x-amzn-tls-version": "TLSv1.3",
+     "x-amzn-vpce-config": "",
+     "Accept": "application/json, text/event-stream",
+     "X-Launchpad-Probe": "E-role-headers-tools/call",
+     "X-Forwarded-Proto": "https",
+     "User-Agent": "python-httpx/0.28.1",
+     "Host": "launchpad-gw-exampleid0.gateway.bedrock-agentcore.cn-northwest-1.amazonaws.com.cn",
+     "x-amzn-vpc-id": "",
+     "Accept-Encoding": "gzip, deflate",
+     "x-amzn-vpce-policy-url": "",
+     "X-Forwarded-Port": "443",
+     "X-Amzn-Trace-Id": "Root=1-6adf5a89-4d36bf532536bba4396e7719",
+     "Authorization": "<redacted len=334>",
+     "x-amzn-tls-cipher-suite": "TLS_AES_128_GCM_SHA256",
+     "X-Launchpad-Principal": "__TEST_TOKEN__",
+     "x-amzn-bedrock-agentcore-policy-session-id": "probe-psid-0001",
+     "X-Amz-Security-Token": "<redacted len=744>",
+     "X-Forwarded-For": "198.51.100.7",
+     "Content-Length": "307",
+     "x-amzn-vpce-id": "",
+     "Content-Type": "application/json"
+    },
+    "body": {
+     "id": "3452366a",
+     "jsonrpc": "2.0",
+     "method": "tools/call",
+     "params": {
+      "name": "hr-database___echo",
+      "_meta": {
+       "launchpad/principal": "__TEST_TOKEN__",
+       "probe_mode": "pass"
+      },
+      "arguments": {
+       "probe_mode": "pass",
+       "amount_cents": 1234,
+       "text": "hello E-role-headers"
+      }
+     }
+    },
+    "context": {
+     "identity": {
+      "awsPrincipalArn": "arn:aws-cn:iam::123456789012:role/launchpad-agent-hr-helpdesk-ab12cd34"
+     }
+    }
+   },
+   "gatewayResponse": null,
+   "rawGatewayRequest": {
+    "body": "<raw body contains a probe token; see parsed body>"
+   }
+  }
+ }
+}

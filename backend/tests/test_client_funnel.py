@@ -26,9 +26,13 @@ CONSTRUCTOR_RE = re.compile(
 )
 
 FACTORY = "services/aws_clients.py"
-# Hub-scoped ambient-credential use, deliberately outside the workspace funnel:
-# a Bedrock credential *availability* probe for the local Claude Code CLI.
-EXEMPT = {"codegen/backends/claude_sdk.py"}
+# Runtime-side model code lives in `.tmpl` files (excluded from this file's `rglob("*.py")`)
+# or is sliced from them at render time (templates/studio_agent since N-R6-obs2), so no
+# importable module needs an exemption today; add one here, with its reason, if that changes.
+# policy/interceptor/handler.py is the gateway interceptor LAMBDA's entry point (zipped by the
+# policy_interceptor bootstrap stage): it runs with the interceptor role's ambient credentials
+# in that function, never in the hub process, and nothing in the hub imports it.
+EXEMPT: set[str] = {"policy/interceptor/handler.py"}
 
 # SDK classes that construct boto3 clients internally: the regex above cannot see
 # them, so their construction sites are allowlisted by hand.
@@ -344,6 +348,69 @@ def test_a_probe_leaves_a_real_session_for_the_same_target_alone(stub_sts, monke
     )
 
 
+# ─── Global Bedrock (spec C1/C4): bearer-only, never a workspace's credentials ───
+
+
+def test_global_bedrock_client_refuses_to_run_without_the_bearer(monkeypatch):
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    aws_clients.reset_cache()
+    with pytest.raises(RuntimeError, match="AWS_BEARER_TOKEN_BEDROCK"):
+        aws_clients.global_bedrock_runtime_client("us-west-2")
+
+
+def test_global_bedrock_client_is_bearer_only_and_cached_per_region(monkeypatch):
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-api-key")
+    built: list[tuple] = []
+
+    class FakeSession:
+        def __init__(self, region_name=None):
+            self.region_name = region_name
+
+        def client(self, service, **cfg):
+            built.append((self.region_name, service, cfg["config"].signature_version))
+            return object()
+
+    monkeypatch.setattr(aws_clients.boto3, "Session", FakeSession)
+    aws_clients.reset_cache()
+    first = aws_clients.global_bedrock_runtime_client("us-west-2")
+    assert aws_clients.global_bedrock_runtime_client("us-west-2") is first
+    aws_clients.global_bedrock_runtime_client("us-east-1")
+    assert built == [
+        ("us-west-2", "bedrock-runtime", "bearer"),
+        ("us-east-1", "bedrock-runtime", "bearer"),
+    ]
+    assert aws_clients._SESSIONS == {}  # never parked under a workspace key
+    aws_clients.reset_cache()
+    assert aws_clients._GLOBAL_BEDROCK_CLIENTS == {}
+
+
+def test_global_bedrock_client_resolves_the_global_endpoint_offline(monkeypatch):
+    """Real botocore, no network: the client targets the aws partition's Global
+    endpoint and carries the bearer signer, whatever the hub's own region is."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-api-key")
+    aws_clients.reset_cache()
+    client = aws_clients.global_bedrock_runtime_client("us-west-2")
+    assert client.meta.endpoint_url == "https://bedrock-runtime.us-west-2.amazonaws.com"
+    assert client.meta.config.signature_version == "bearer"
+    aws_clients.reset_cache()
+
+
+def test_global_bedrock_openai_base_url_is_partition_aware():
+    assert aws_clients.global_bedrock_openai_base_url("us-west-2") == (
+        "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1"
+    )
+    assert aws_clients.global_bedrock_openai_base_url("cn-northwest-1") == (
+        "https://bedrock-runtime.cn-northwest-1.amazonaws.com.cn/openai/v1"
+    )
+
+
+def test_the_opensearch_core_constructs_no_boto3_client():
+    """`opensearch_http.py` is mirrored into a Lambda and a runtime template (N6 R15);
+    it must stay a pure consumer of injected credentials and clients."""
+    text = (APP_DIR / "services/opensearch_http.py").read_text(encoding="utf-8")
+    assert not CONSTRUCTOR_RE.search(text) and "import boto3" not in text
+
+
 def test_default_context_follows_settings(monkeypatch):
     """The context is read live: a settings reload must not serve a stale region."""
     regions = iter(["us-west-2", "eu-west-1"])
@@ -359,3 +426,53 @@ class _Settings:
         self.region = region
         self.account_id = "111122223333"
         self.resources = {"artifacts_bucket": "bucket"}
+
+
+# ─── N12 evaluation stack: judges only via global_bedrock_model, library builds nothing ───
+
+N12_MODULES = (
+    "services/strands_eval", "evaluation/engine.py", "evaluation/jobs.py",
+    "evaluation/executor.py", "evaluation/strands_engine.py", "evaluation/results_store.py",
+    "evaluation/runtime_executor.py",
+)
+
+
+def _n12_sources() -> list[tuple[str, str]]:
+    out = []
+    for rel in N12_MODULES:
+        path = APP_DIR / rel
+        if not path.exists():
+            continue  # a module another W-E group has not landed yet
+        files = sorted(path.rglob("*.py")) if path.is_dir() else [path]
+        out.extend((p.relative_to(APP_DIR).as_posix(), p.read_text(encoding="utf-8"))
+                   for p in files)
+    return out
+
+
+def test_the_strands_adapter_layer_constructs_no_boto3_client():
+    """`services/strands_eval` is inlined into the evaluation worker; it must stay a pure
+    consumer of injected clients and model objects (and import no `app.*` but jobs)."""
+    for rel, text in _n12_sources():
+        if rel.startswith("services/strands_eval"):
+            assert "boto3" not in text, rel
+            imports = [line for line in text.splitlines()
+                       if line.startswith(("from app.", "import app."))]
+            allowed = ("from app.evaluation.jobs import", "from app.evaluation import jobs",
+                       "from app.evaluation.telemetry import", "from app.services.strands_eval")
+            assert all(line.startswith(allowed) for line in imports), (rel, imports)
+
+
+def test_no_regional_bedrock_runtime_client_in_the_evaluation_stack():
+    """Judges, actors and optimizers reach Bedrock only through
+    `aws_clients.global_bedrock_model` (Global partition, bearer) — never a workspace
+    `bedrock-runtime` client, which would sign with aws-cn credentials."""
+    for rel, text in _n12_sources():
+        assert "bedrock-runtime" not in text, rel
+
+
+def test_no_evaluator_is_built_with_a_defaulted_model():
+    """`model=None` / a str would let strands default to a Claude `BedrockModel` (R-3)."""
+    for rel, text in _n12_sources():
+        for lineno, line in enumerate(text.splitlines(), 1):
+            assert "model=None" not in line.replace(" ", ""), f"{rel}:{lineno}: {line.strip()}"
+            assert "model=self.model_id" not in line.replace(" ", ""), f"{rel}:{lineno}"

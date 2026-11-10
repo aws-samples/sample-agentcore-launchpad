@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 
-import { api, errorMessage, type EvaluatorRow, type V2LogStream, type V2Range } from "../../../lib/api";
-import { CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
-import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
+import { api, errorMessage, type EvaluatorRow, type V2Dataset, type V2LogStream, type V2Range } from "../../../lib/api";
+import { ACTOR_MODELS, CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
+import { adoptModelDefault, useModelDefaultsArrival } from "../../../lib/model-defaults";
+import { evaluatorLabel, JUDGE_MODEL_OPTIONS, type EvaluatorLevel } from "../../../lib/evaluators";
+import { isModelAvailable, modelUnavailableReason } from "../../../lib/models";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
 import { INSIGHT_TYPES, insightLabel } from "../../online";
-import { SERVICE_NAME_RE, type TaskMode } from "../../tasks";
+import { needsAbsentGroundTruth, SERVICE_NAME_RE, type TaskMode } from "../../tasks";
 import {
   Alert,
   Button,
@@ -17,6 +19,7 @@ import {
   FilterSelect,
   FlowHeader,
   OptionCard,
+  Pager,
   SearchInput,
   Select,
   Spin,
@@ -24,8 +27,11 @@ import {
   Table,
   Tag,
 } from "../../ui";
+import { backTarget } from "./back";
 import { LogSourceFields } from "./LogSourceFields";
 import { LogStreamPicker } from "./LogStreamPicker";
+import { SessionPicker } from "./SessionPicker";
+import { timeMs } from "../../../lib/timestamps";
 
 type Source = "window" | "sessions" | "logs" | "dataset";
 /** What is evaluated: a platform agent, or CloudWatch telemetry with no agent behind it. */
@@ -35,6 +41,7 @@ type Strategy = "history" | "continuous";
 const LOOKBACKS = [1, 6, 24, 72, 168, 336];
 const SESSION_RANGE: V2Range = "7d";
 const MAX_EVALUATORS = 10;
+const DATASET_PREVIEW_PAGE_SIZE = 10;
 /** Insight clustering needs at least this many sessions. */
 const MIN_INSIGHT_SESSIONS = 3;
 
@@ -56,6 +63,12 @@ interface Draft {
   logHours: number;
   /** local dataset id, or `cloud:<datasetId>` */
   dataset: string;
+  /** the model that plays the user of a simulated-persona dataset */
+  actorModelId: string;
+  /** D3-d / R3-c: the dataset split the run replays */
+  split: "all" | "tuning" | "held_out";
+  /** P3.2: the judge of the run's built-in evaluators (a run task only) */
+  judgeModelId: string;
   sampling: number;
   sessionTimeout: number;
   evaluators: string[];
@@ -78,6 +91,9 @@ const EMPTY: Draft = {
   logSessionIds: [],
   logHours: 168,
   dataset: "",
+  actorModelId: ACTOR_MODELS[0],
+  split: "all",
+  judgeModelId: JUDGE_MODEL_OPTIONS[0],
   sampling: 10,
   sessionTimeout: 15,
   evaluators: ["Builtin.Correctness", "Builtin.Helpfulness"],
@@ -97,7 +113,8 @@ async function seedDraft(from: string | null, handoff: Handoff, copySuffix: stri
     const target = run.log_source
       ? { target: "cloudwatch" as const, serviceName: run.log_source.service_name, logGroups: run.log_source.log_group_names }
       : { agentId: run.agent_id };
-    const base: Draft = { ...EMPTY, name: `${run.name || run.agent_name}${copySuffix}`.slice(0, 64), description: run.description ?? "", ...target, ...copied };
+    const judge = run.judge_model_id ? { judgeModelId: run.judge_model_id } : {};
+    const base: Draft = { ...EMPTY, name: `${run.name || run.agent_name}${copySuffix}`.slice(0, 64), description: run.description ?? "", ...target, ...copied, ...judge };
     if (name.startsWith("window:")) return { ...base, source: "window", lookbackHours: parseInt(name.slice(7), 10) || 24 };
     if (name.startsWith("cloud:") && run.dataset_id) return { ...base, source: "dataset", dataset: `${CLOUD_VALUE_PREFIX}${run.dataset_id}` };
     if (run.dataset_id) return { ...base, source: "dataset", dataset: run.dataset_id };
@@ -131,6 +148,7 @@ interface Handoff {
 export function TaskWizard() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
+  const location = useLocation();
   const toast = useV2Toast();
   const from = params.get("from");
   const handoff: Handoff = {
@@ -151,16 +169,38 @@ export function TaskWizard() {
   const [submitting, setSubmitting] = useState(false);
   const [evalLevel, setEvalLevel] = useState("");
   const [evalQ, setEvalQ] = useState("");
+  const [datasetPage, setDatasetPage] = useState({ scope: "", page: 1 });
+  const [refreshedDatasets, setRefreshedDatasets] = useState<V2Dataset[] | null>(null);
+  // bumped by the trajectory picker's refresh: re-reads past the 60 s session cache
+  const [sessionsForce, setSessionsForce] = useState(0);
 
   useEffect(() => {
     if (seed.data && draft === null) setDraft(seed.data);
   }, [seed.data, draft]);
+  // r15-e: the actor picker seeds the static default and adopts the configured `actor` role
+  // when `GET /api/model-defaults` answers — a copied run keeps whatever the seed carried
+  // (which is EMPTY's value too, so a copy adopts as well; the member's own pick never does)
+  const actorDefaults = useModelDefaultsArrival(() => undefined);
+  const hasDraft = draft !== null;
+  useEffect(() => {
+    if (!actorDefaults || !hasDraft) return;
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const next = adoptModelDefault(prev.actorModelId, EMPTY.actorModelId, actorDefaults.actor);
+      // the judge picker follows the `judge` model role the same way (P3.2)
+      const judge = adoptModelDefault(prev.judgeModelId, EMPTY.judgeModelId, actorDefaults.judge);
+      return next === prev.actorModelId && judge === prev.judgeModelId ? prev : { ...prev, actorModelId: next, judgeModelId: judge };
+    });
+  }, [actorDefaults, hasDraft]);
 
   const activeAgents = useMemo(() => (agents.data?.agents ?? []).filter((a) => a.status === "active"), [agents.data]);
   const agent = activeAgents.find((a) => a.id === draft?.agentId) ?? null;
   const sessions = useLoad(
-    () => (draft && (draft.source === "sessions" || draft.source === "window") && agent ? api.obsSessions(SESSION_RANGE) : Promise.resolve(null)),
-    `wizard-sessions:${draft?.source}:${agent?.id ?? ""}`,
+    () =>
+      draft && (draft.source === "sessions" || draft.source === "window") && agent
+        ? api.obsSessions(SESSION_RANGE, sessionsForce > 0)
+        : Promise.resolve(null),
+    `wizard-sessions:${draft?.source}:${agent?.id ?? ""}:${sessionsForce}`,
   );
   const agentSessions = useMemo(
     () => (sessions.data?.sessions ?? []).filter((s) => agent && s.agent === agent.name),
@@ -176,12 +216,39 @@ export function TaskWizard() {
 
   if (seed.error) return <Alert tone="error">{seed.error}</Alert>;
   if (!draft) return <Spin />;
-  const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
+  const set = (patch: Partial<Draft>) => {
+    if ((patch.dataset !== undefined && patch.dataset !== draft.dataset) ||
+        (patch.split !== undefined && patch.split !== draft.split)) {
+      setDatasetPage({ scope: "", page: 1 });
+    }
+    setDraft({ ...draft, ...patch });
+  };
 
-  const localDatasets = (datasets.data?.datasets ?? []).filter((d) => d.kind !== "simulated");
+  const localDatasets = refreshedDatasets ?? datasets.data?.datasets ?? [];
   const selectedDataset = localDatasets.find((d) => d.id === draft.dataset) ?? null;
+  // item_splits is resolved by the backend using the original, complete dataset.
+  // Raw items may omit split; never guess its deterministic default in the browser.
+  const splitsKnown = !!selectedDataset &&
+    selectedDataset.item_splits?.length === selectedDataset.items.length &&
+    selectedDataset.item_splits.every((split) => split === "tuning" || split === "held_out");
+  const datasetItems = !selectedDataset || (draft.split !== "all" && !splitsKnown)
+    ? null
+    : selectedDataset.items.filter((_, i) => draft.split === "all" || selectedDataset.item_splits?.[i] === draft.split);
+  const datasetScope = `${draft.dataset}:${selectedDataset?.revision ?? ""}:${draft.split}`;
+  const datasetPages = Math.max(1, Math.ceil((datasetItems?.length ?? 0) / DATASET_PREVIEW_PAGE_SIZE));
+  const previewPage = datasetPage.scope === datasetScope ? Math.min(datasetPage.page, datasetPages) : 1;
+  const previewStart = (previewPage - 1) * DATASET_PREVIEW_PAGE_SIZE;
+  const datasetProblem = draft.source === "dataset" && !draft.dataset.startsWith(CLOUD_VALUE_PREFIX)
+    ? datasets.loading ? t("v2.common.loading")
+      : datasets.error ? datasets.error
+      : !selectedDataset ? t("v2.tasks.errDataset")
+      : datasetItems === null ? t("v2.tasks.previewSplitUnavailable")
+      : datasetItems.length === 0 ? t("v2.tasks.previewSplitEmpty") : null
+    : null;
+  // persona scenarios: an LLM actor plays the user, so the run needs its model
+  const simulated = selectedDataset?.kind === "simulated";
   const windowSessions = agentSessions.filter(
-    (s) => !s.last || Date.now() - new Date(s.last).getTime() <= draft.lookbackHours * 3_600_000,
+    (s) => !s.last || Date.now() - timeMs(s.last) <= draft.lookbackHours * 3_600_000,
   );
 
   const allEvaluators = evaluators.data?.evaluators ?? [];
@@ -198,6 +265,7 @@ export function TaskWizard() {
     if (draft.target === "cloudwatch" && draft.logGroups.length === 0) return t("v2.tasks.cw.errGroups");
     if (draft.source === "sessions" && draft.sessionIds.length === 0) return t("v2.tasks.errSessions");
     if (draft.source === "dataset" && !draft.dataset) return t("v2.tasks.errDataset");
+    if (datasetProblem) return datasetProblem;
     if (draft.source === "logs" && draft.logSessionIds.length === 0) return t("v2.tasks.errLogs");
     const picked = draft.source === "sessions" ? draft.sessionIds.length : draft.source === "logs" ? draft.logSessionIds.length : null;
     if (draft.mode === "insights" && picked !== null && picked < MIN_INSIGHT_SESSIONS) {
@@ -213,6 +281,8 @@ export function TaskWizard() {
   };
 
   const submit = async () => {
+    const scopeProblem = validateStep0();
+    if (scopeProblem) return setError(scopeProblem);
     const insights = draft.mode === "insights";
     if (insights && draft.insights.length === 0) return setError(t("v2.tasks.errInsights"));
     if (!insights && draft.evaluators.length === 0) return setError(t("v2.tasks.errEvaluators"));
@@ -220,6 +290,18 @@ export function TaskWizard() {
     setSubmitting(true);
     setError(null);
     try {
+      if (draft.source === "dataset" && selectedDataset) {
+        const latest = await api.v2Datasets();
+        const current = latest.datasets.find((d) => d.id === selectedDataset.id);
+        setRefreshedDatasets(latest.datasets);
+        if (!current || JSON.stringify([current.revision, current.items, current.item_splits]) !==
+            JSON.stringify([selectedDataset.revision, selectedDataset.items, selectedDataset.item_splits])) {
+          setDatasetPage({ scope: "", page: 1 });
+          setStep(0);
+          setError(t("v2.tasks.previewChanged"));
+          return;
+        }
+      }
       if (draft.strategy === "continuous" && !insights) {
         const cfg = await api.v2CreateOnlineConfig({
           agent_id: draft.agentId,
@@ -232,7 +314,8 @@ export function TaskWizard() {
           enable_on_create: true,
         });
         toast("success", t("v2.tasks.createdOnline"));
-        setParams({ view: "detail", kind: "online", id: cfg.config_id });
+        // the new task's Back returns to where the wizard was opened from
+        setParams({ view: "detail", kind: "online", id: cfg.config_id }, { state: location.state });
       } else {
         const scope =
           draft.source === "window"
@@ -243,7 +326,8 @@ export function TaskWizard() {
                 ? { session_ids: draft.logSessionIds, session_source: "logs" as const }
                 : draft.dataset.startsWith(CLOUD_VALUE_PREFIX)
                 ? { cloud_dataset_id: draft.dataset.slice(CLOUD_VALUE_PREFIX.length) }
-                : { dataset_id: draft.dataset };
+                : { dataset_id: draft.dataset, ...(simulated ? { actor_model_id: draft.actorModelId } : {}) };
+        const split = draft.source === "dataset" && draft.split !== "all" ? { split: draft.split } : {};
         const run = await api.v2CreateRun({
           ...(draft.target === "cloudwatch"
             ? { log_source: { service_name: draft.serviceName.trim(), log_group_names: draft.logGroups } }
@@ -252,9 +336,11 @@ export function TaskWizard() {
           description: draft.description || undefined,
           ...(insights ? { mode: "insights" as const, evaluators: [], insights: draft.insights } : { evaluators: draft.evaluators }),
           ...scope,
+          ...split,
+          judge_model_id: draft.judgeModelId,
         });
         toast("success", t("v2.tasks.createdRun"));
-        setParams({ view: "detail", kind: "run", id: run.id });
+        setParams({ view: "detail", kind: "run", id: run.id }, { state: location.state });
       }
     } catch (err) {
       setError(errorMessage(err));
@@ -263,6 +349,7 @@ export function TaskWizard() {
     }
   };
 
+  const gtBlocked = (e: EvaluatorRow) => needsAbsentGroundTruth(e, draft.strategy, draft.source); // N17-obs437
   const toggleEvaluator = (id: string) =>
     set({ evaluators: draft.evaluators.includes(id) ? draft.evaluators.filter((e) => e !== id) : [...draft.evaluators, id] });
 
@@ -291,24 +378,24 @@ export function TaskWizard() {
   const fewSessions =
     draft.mode === "insights" &&
     ((draft.source === "window" && !sessions.loading && windowSessions.length < MIN_INSIGHT_SESSIONS) ||
-      (draft.source === "dataset" && !!selectedDataset && selectedDataset.item_count < MIN_INSIGHT_SESSIONS) ||
+      (draft.source === "dataset" && datasetItems !== null && datasetItems.length < MIN_INSIGHT_SESSIONS) ||
       (cloudwatch && draft.source === "window" && !!cwWindow.data && cwWindow.data.streams.length < MIN_INSIGHT_SESSIONS));
 
   return (
     <>
       <FlowHeader
         title={t("v2.tasks.newTitle")}
-        onBack={() => setParams({})}
+        onBack={() => setParams(backTarget(location.state))}
         steps={
           <Steps
             steps={[t("v2.tasks.stepData"), draft.mode === "insights" ? t("v2.tasks.stepInsights") : t("v2.tasks.stepEvaluators")]}
             current={step}
-            onSelect={setStep}
+            onSelect={(nextStep) => { if (!submitting) setStep(nextStep); }}
           />
         }
         end={
           <>
-            <Button disabled={step === 0} onClick={() => setStep(0)}>
+            <Button disabled={step === 0 || submitting} onClick={() => setStep(0)}>
               {t("v2.common.prev")}
             </Button>
             {step === 0 ? (
@@ -324,6 +411,17 @@ export function TaskWizard() {
         }
       />
       {error && <Alert tone="error">{error}</Alert>}
+      {draft.source === "dataset" && selectedDataset && (
+        <div role="status" aria-atomic="true" data-testid="v2-task-dataset-count">
+          <Alert tone={datasetProblem ? "warn" : "info"}>
+            {datasetItems === null
+              ? t("v2.tasks.previewSplitUnavailable")
+              : t("v2.tasks.previewEvaluationCount", { count: datasetItems.length, split: t(`v2.tasks.splitOption.${draft.split}`) })}
+            <div className="sub">{t("v2.tasks.previewSnapshotHint")}</div>
+            {datasetProblem && datasetItems !== null && <div>{datasetProblem}</div>}
+          </Alert>
+        </div>
+      )}
 
       {step === 0 && (
         <>
@@ -474,20 +572,54 @@ export function TaskWizard() {
                       placeholder={t("v2.common.choose")}
                       options={[
                         ...(draft.dataset && !selectedDataset ? [{ value: draft.dataset, label: draft.dataset }] : []),
-                        ...localDatasets.map((d) => ({ value: d.id, label: `${d.name} · ${t("v2.datasets.items", { count: d.item_count })}` })),
+                        ...localDatasets.map((d) => ({
+                          value: d.id,
+                          label: `${d.name} · ${t("v2.datasets.items", { count: d.item_count })}${d.kind === "simulated" ? ` · ${t("v2.datasets.kind.simulated")}` : ""}`,
+                        })),
                       ]}
                     />
                   </Field>
                 ) : (
                   <p className="v2-muted">{t("v2.tasks.sessionsPicked", { count: draft.sessionIds.length })}</p>
                 )}
+                {draft.source === "dataset" && (
+                  <div style={{ marginTop: 16 }}>
+                    <Field label={t("v2.tasks.split")} hint={t("v2.tasks.splitHint")}>
+                      <Select
+                        value={draft.split}
+                        onChange={(v) => set({ split: v as Draft["split"] })}
+                        testId="v2-task-split"
+                        options={(["all", "tuning", "held_out"] as const).map((s) => ({ value: s, label: t(`v2.tasks.splitOption.${s}`) }))}
+                      />
+                    </Field>
+                  </div>
+                )}
+                {draft.source === "dataset" && simulated && (
+                  <div style={{ marginTop: 16 }}>
+                    <Field label={t("v2.tasks.actorModel")} required hint={t("v2.tasks.actorModelHint")}>
+                      <Select
+                        value={draft.actorModelId}
+                        onChange={(v) => set({ actorModelId: v })}
+                        testId="v2-task-actor-model"
+                        mono
+                        options={ACTOR_MODELS.map((m) => ({ value: m, label: m }))}
+                      />
+                    </Field>
+                  </div>
+                )}
               </div>
             </div>
           </Card>
 
           <Card
-            title={draft.source === "logs" ? t("v2.tasks.logs.title") : t("v2.tasks.preview")}
-            sub={draft.source === "logs" ? t(cloudwatch ? "v2.tasks.cw.logsSub" : "v2.tasks.logs.sub") : t("v2.tasks.previewSub")}
+            title={draft.source === "logs" ? t("v2.tasks.logs.title") : draft.source === "sessions" && !cloudwatch ? t("v2.tasks.sessions.title") : t("v2.tasks.preview")}
+            sub={
+              draft.source === "logs"
+                ? t(cloudwatch ? "v2.tasks.cw.logsSub" : "v2.tasks.logs.sub")
+                : draft.source === "sessions" && !cloudwatch
+                  ? t("v2.tasks.sessions.sub")
+                  : t("v2.tasks.previewSub")
+            }
           >
             {cloudwatch && !cwReady ? (
               <p className="v2-muted">{t("v2.tasks.cw.previewPick")}</p>
@@ -546,58 +678,70 @@ export function TaskWizard() {
                 )}
               </>
             ) : draft.source === "dataset" ? (
-              selectedDataset ? (
+              datasets.loading ? <Spin /> : datasets.error ? <Alert tone="error">{datasets.error}</Alert> : selectedDataset ? (
+                <>
+                {datasetItems !== null && (
+                  <p className="v2-muted" data-testid="v2-task-preview-range">
+                    {t("v2.tasks.previewRange", {
+                      total: datasetItems.length,
+                      start: datasetItems.length ? previewStart + 1 : 0,
+                      end: Math.min(previewStart + DATASET_PREVIEW_PAGE_SIZE, datasetItems.length),
+                    })}
+                  </p>
+                )}
                 <Table
                   columns={[
                     { key: "n", title: "#", width: 48, render: (r: { i: number }) => r.i + 1 },
-                    { key: "input", title: "Input", render: (r: { input: string }) => <span className="clip">{r.input}</span> },
-                    { key: "expected", title: t("v2.datasets.expected"), render: (r: { expected: string }) => (r.expected ? <span className="clip">{r.expected}</span> : "—") },
+                    { key: "input", title: simulated ? t("v2.datasets.simInput") : "Input", render: (r: { input: string }) => <span className="clip">{r.input}</span> },
+                    {
+                      key: "expected",
+                      title: simulated ? t("v2.datasets.simGoal") : t("v2.datasets.expected"),
+                      render: (r: { expected: string }) => (r.expected ? <span className="clip">{r.expected}</span> : "—"),
+                    },
                   ]}
-                  rows={selectedDataset.items.slice(0, 5).map((item, i) => {
+                  rows={(datasetItems ?? []).slice(previewStart, previewStart + DATASET_PREVIEW_PAGE_SIZE).map((item, i) => {
                     const turns = item.turns as { input?: unknown; expected_response?: unknown }[] | undefined;
+                    const goal = (item.actor_profile as { goal?: unknown } | undefined)?.goal;
                     return {
-                      i,
+                      i: previewStart + i,
                       input: String(turns?.[0]?.input ?? item.prompt ?? item.input ?? ""),
-                      expected: String(turns?.[0]?.expected_response ?? item.expected ?? ""),
+                      expected: String(turns?.[0]?.expected_response ?? item.expected ?? goal ?? ""),
                     };
                   })}
                   rowKey={(r) => String(r.i)}
+                  testId="v2-task-dataset-preview"
+                  empty={datasetItems === null ? t("v2.tasks.previewSplitUnavailable") : t("v2.tasks.previewEmpty")}
                 />
+                {datasetPages > 1 && (
+                  <Pager
+                    testId="v2-task-preview-pages"
+                    page={previewPage}
+                    pages={datasetPages}
+                    total={datasetItems?.length ?? 0}
+                    onPage={(page) => setDatasetPage({ scope: datasetScope, page })}
+                  />
+                )}
+                </>
               ) : (
                 <p className="v2-muted">{t("v2.tasks.previewPickDataset")}</p>
               )
+            ) : draft.source === "sessions" ? (
+              <SessionPicker
+                agentId={agent?.id ?? ""}
+                sessions={agentSessions}
+                loading={sessions.loading}
+                error={sessions.error}
+                onRefresh={() => setSessionsForce((n) => n + 1)}
+                selected={draft.sessionIds}
+                onChange={(sessionIds) => set({ sessionIds })}
+              />
             ) : draft.strategy === "continuous" ? (
               <Alert>{t("v2.tasks.previewContinuous", { rate: draft.sampling })}</Alert>
             ) : (
               <>
-                {draft.source === "window" && (
-                  <Alert>{t("v2.tasks.previewWindow", { count: windowSessions.length, hours: draft.lookbackHours })}</Alert>
-                )}
+                <Alert>{t("v2.tasks.previewWindow", { count: windowSessions.length, hours: draft.lookbackHours })}</Alert>
                 <Table
                   columns={[
-                    ...(draft.source === "sessions"
-                      ? [
-                          {
-                            key: "sel",
-                            title: "",
-                            width: 36,
-                            render: (s: (typeof agentSessions)[number]) => (
-                              <input
-                                type="checkbox"
-                                aria-label={s.session_id}
-                                checked={draft.sessionIds.includes(s.session_id)}
-                                onChange={() =>
-                                  set({
-                                    sessionIds: draft.sessionIds.includes(s.session_id)
-                                      ? draft.sessionIds.filter((id) => id !== s.session_id)
-                                      : [...draft.sessionIds, s.session_id],
-                                  })
-                                }
-                              />
-                            ),
-                          },
-                        ]
-                      : []),
                     { key: "sid", title: t("v2.traces.colSession"), render: (s: (typeof agentSessions)[number]) => <span className="mono">{s.session_id}</span> },
                     { key: "traces", title: t("v2.pipelines.traceCount"), className: "num", render: (s: (typeof agentSessions)[number]) => s.traces },
                     {
@@ -607,7 +751,7 @@ export function TaskWizard() {
                     },
                     { key: "last", title: t("v2.pipelines.lastActive"), className: "nowrap", render: (s: (typeof agentSessions)[number]) => fmtTime(s.last) },
                   ]}
-                  rows={(draft.source === "window" ? windowSessions : agentSessions).slice(0, draft.source === "sessions" ? 50 : 8)}
+                  rows={windowSessions.slice(0, 8)}
                   rowKey={(s) => s.session_id}
                   loading={sessions.loading}
                   error={sessions.error}
@@ -644,6 +788,7 @@ export function TaskWizard() {
         <Card title={t("v2.tasks.pickEvaluators")} sub={t("v2.tasks.pickedCount", { count: draft.evaluators.length, max: MAX_EVALUATORS })}>
           <div className="v2-toolbar">
             <FilterSelect
+              testId="v2-task-evaluator-level"
               label={t("v2.evaluators.colLevel")}
               value={evalLevel}
               allLabel={t("v2.common.all")}
@@ -674,7 +819,8 @@ export function TaskWizard() {
                     type="checkbox"
                     aria-label={e.id}
                     checked={draft.evaluators.includes(e.id)}
-                    disabled={!draft.evaluators.includes(e.id) && draft.evaluators.length >= MAX_EVALUATORS}
+                    disabled={!draft.evaluators.includes(e.id) && (draft.evaluators.length >= MAX_EVALUATORS || gtBlocked(e))}
+                    title={gtBlocked(e) ? t("v2.online.needsGt") : undefined}
                     onChange={() => toggleEvaluator(e.id)}
                     data-testid={`v2-task-eval-${e.id}`}
                   />
@@ -716,6 +862,27 @@ export function TaskWizard() {
                 <Alert tone="warn">{t("v2.tasks.gtWarning")}</Alert>
               </div>
             )}
+          {draft.strategy !== "continuous" && (
+            <div className="v2-form" style={{ marginTop: 16 }}>
+              <Field label={t("v2.tasks.judgeModel")} hint={t("v2.tasks.judgeModelHint")}>
+                <Select
+                  value={draft.judgeModelId}
+                  onChange={(v) => set({ judgeModelId: v })}
+                  testId="v2-task-judge-model"
+                  mono
+                  options={(JUDGE_MODEL_OPTIONS.includes(draft.judgeModelId) ? JUDGE_MODEL_OPTIONS : [draft.judgeModelId, ...JUDGE_MODEL_OPTIONS]).map((m) => {
+                    const reason = modelUnavailableReason(m);
+                    return {
+                      value: m,
+                      label: isModelAvailable(m) ? m : `${m} · ${t("models.unavailableShort")}`,
+                      disabled: !isModelAvailable(m),
+                      title: reason ? t("models.unavailable", reason) : undefined,
+                    };
+                  })}
+                />
+              </Field>
+            </div>
+          )}
         </Card>
       )}
     </>

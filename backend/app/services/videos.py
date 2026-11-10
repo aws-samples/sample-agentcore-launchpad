@@ -1,4 +1,11 @@
-"""Hub-global video catalog: fixed V2 sections, editable drafts, published snapshots."""
+"""Hub-global video catalog: fixed V2 sections, editable drafts, published snapshots.
+
+CN port note: the build owns no media stack. Every media field is a permanent HTTPS CDN
+URL the administrator enters; the backend never uploads, proxies or probes it. The
+bundled `videos.initial.json` is a one-time import manifest and ships EMPTY here (the
+Global recordings show the Global console); a manifest entry names its V2 section with
+`sectionId`, so an operator can still seed a fresh ledger through it.
+"""
 
 import ipaddress
 import json
@@ -23,26 +30,11 @@ _LEGACY_PATH = _DATA_DIR / "videos.initial.json"
 _V2_MEDIA_REVISION = re.compile(r"/media/[^/]+/[0-9]{8}-v2(?:-[^/]*)?/")
 
 ConsoleVersion = Literal["v2", "classic"]
-
-# One-time migration of the bundled directory into its matching V2 navigation section.
-_LEGACY_SECTIONS = {
-    "agent-development-harness": "agents",
-    "architect-assistant": "assistant",
-    "architect-assistant-runtime-ab": "assistant",
-    "agent-management": "agents",
-    "agent-management-byoc": "agents",
-    "registry": "registry",
-    "memory": "memory",
-    "observability": "observability",
-    "evaluation-datasets": "eval-data",
-    "evaluation-runs": "eval-tasks",
-    "evaluation-ab": "eval-experiments",
-    "evaluation-online": "eval-online",
-    "evaluation-evaluators": "eval-evaluators",
-    "skill-tasksets": "skill-lab",
-    "skill-evaluation": "skill-lab",
-    "skill-optimization": "skill-lab",
-}
+# A library item is a recording (the default, every pre-field row) or a document — a
+# workshop / student manual published as a PDF and/or a self-contained HTML page that the
+# console opens in a new tab (the CSP forbids frames). Documents carry no playable media.
+ContentKind = Literal["video", "document"]
+_DOCUMENT_EXTENSIONS = (".pdf", ".html")
 
 
 @lru_cache
@@ -59,8 +51,28 @@ def taxonomy() -> dict[str, Any]:
     return data
 
 
+# Retired section ids → the section that absorbed them (R13 N13-obs5: the My connections page
+# became the `?view=mine` tab of Connections). Applied on read like the area correction —
+# stored snapshots are never rewritten; the next publish stores the canonical id.
+_SECTION_ALIASES: dict[str, str] = {"my-connections": "connections"}
+
+
+def canonical_section_id(section_id: str) -> str:
+    return _SECTION_ALIASES.get(section_id, section_id)
+
+
 def _section(section_id: str) -> dict[str, Any] | None:
+    section_id = canonical_section_id(section_id)
     return next((item for item in taxonomy()["sections"] if item["id"] == section_id), None)
+
+
+def _clean_text(value: str) -> str:
+    if re.search(r"%(?![0-9a-fA-F]{2})", value) or any(ch.isspace() for ch in value):
+        raise ValueError("CDN URLs must not contain whitespace or malformed escapes")
+    decoded = unquote(value, errors="strict")
+    if "\\" in decoded or any(ord(ch) < 32 or ord(ch) == 127 for ch in decoded):
+        raise ValueError("CDN URLs cannot contain controls or backslashes")
+    return decoded
 
 
 def _url(value: str | None, extension: str, *, optional: bool = False) -> str | None:
@@ -68,11 +80,7 @@ def _url(value: str | None, extension: str, *, optional: bool = False) -> str | 
         if optional:
             return None
         raise ValueError("A CDN video URL is required")
-    if re.search(r"%(?![0-9a-fA-F]{2})", value) or any(ch.isspace() for ch in value):
-        raise ValueError("CDN URLs must not contain whitespace or malformed escapes")
-    decoded = unquote(value, errors="strict")
-    if "\\" in decoded or any(ord(ch) < 32 or ord(ch) == 127 for ch in decoded):
-        raise ValueError("CDN URLs cannot contain controls or backslashes")
+    _clean_text(value)
     parsed = urlsplit(value)
     if (
         parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
@@ -92,6 +100,41 @@ def _url(value: str | None, extension: str, *, optional: bool = False) -> str | 
     if not parsed.path.lower().endswith(extension):
         raise ValueError(f"CDN URL must end with {extension}")
     return value
+
+
+def _media_path(value: str, extension: str) -> str:
+    """A same-origin `/media/<section>/<revision>/<file>` path served by the console's nginx.
+
+    Documents open in a new tab on whichever console address the viewer uses (instance
+    EIP or NLB), so a root-relative path is the natural form; the browser resolves it
+    against the page's own origin. No scheme, host, query, fragment or dot segments.
+    """
+    decoded = _clean_text(value)
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        raise ValueError("Same-origin document paths must start with /media/ and carry no query")
+    if not parsed.path.startswith("/media/"):
+        raise ValueError("Same-origin document paths must start with /media/ and carry no query")
+    if any(segment in ("", ".", "..") for segment in decoded.split("/")[1:]):
+        raise ValueError("Same-origin document paths cannot contain empty or dot segments")
+    if not parsed.path.lower().endswith(extension):
+        raise ValueError(f"CDN URL must end with {extension}")
+    return value
+
+
+def _document_asset(value: str | None, extension: str, *, optional: bool = False) -> str | None:
+    """A document's file: a same-origin `/media/…` path or a permanent HTTPS URL."""
+    if value is not None and value.startswith("/"):
+        return _media_path(value, extension)
+    return _url(value, extension, optional=optional)
+
+
+def _document_extension(value: str) -> str:
+    path = urlsplit(value).path.lower()
+    extension = next((ext for ext in _DOCUMENT_EXTENSIONS if path.endswith(ext)), None)
+    if extension is None:
+        raise ValueError("Document URLs must end with .pdf or .html")
+    return extension
 
 
 def _console_version(content: dict[str, Any]) -> ConsoleVersion:
@@ -115,13 +158,28 @@ def _aligned(content: dict[str, Any]) -> dict[str, Any]:
     corrected at the API boundary and on publish, never rewritten on read.
     """
     section = _section(str(content.get("section_id") or ""))
-    if section is None or content.get("category_id") == section["categoryId"]:
+    if section is None:
         return content
-    return {**content, "category_id": section["categoryId"]}
+    if content.get("section_id") == section["id"] and content.get("category_id") == (
+            section["categoryId"]):
+        return content
+    return {**content, "section_id": section["id"], "category_id": section["categoryId"]}
+
+
+def _kind(content: dict[str, Any]) -> ContentKind:
+    """Pre-field ledger snapshots are recordings; reads never rewrite them."""
+    return "document" if content.get("kind") == "document" else "video"
 
 
 def _present_content(content: dict[str, Any] | None) -> dict[str, Any] | None:
-    return {**_aligned(content), "console_version": _console_version(content)} if content else None
+    if not content:
+        return None
+    return {
+        **_aligned(content),
+        "console_version": _console_version(content),
+        "kind": _kind(content),
+        "alt_url": content.get("alt_url"),
+    }
 
 
 class LocalizedText(BaseModel):
@@ -150,12 +208,15 @@ class VideoContent(BaseModel):
     category_id: str
     section_id: str
     console_version: ConsoleVersion
+    kind: ContentKind = "video"
     title: LocalizedText
     description: LocalizedText
     cdn_url: str = Field(min_length=1, max_length=2048)
     webm_url: str | None = Field(default=None, max_length=2048)
     poster_url: str | None = Field(default=None, max_length=2048)
     caption_url: str | None = Field(default=None, max_length=2048)
+    # document only: the same manual in the other format (PDF when `cdn_url` is HTML)
+    alt_url: str | None = Field(default=None, max_length=2048)
     duration_seconds: float = Field(default=0, ge=0, le=86400)
     chapters: list[Chapter] = Field(default_factory=list, max_length=100)
     sort_order: int = Field(default=1000, ge=0, le=1_000_000)
@@ -177,6 +238,10 @@ class VideoContent(BaseModel):
                 raise ValueError("Video title and introduction are required")
         if len(self.title.zh_cn) > 160 or len(self.title.en) > 160:
             raise ValueError("Video title cannot exceed 160 characters")
+        if self.kind == "document":
+            return self._valid_document()
+        if self.alt_url is not None:
+            raise ValueError("Only a document carries an alternate format URL")
         primary = _url(self.cdn_url, ".mp4" if self.cdn_url.lower().endswith(".mp4") else ".webm")
         if self.webm_url is not None:
             _url(self.webm_url, ".webm")
@@ -189,6 +254,22 @@ class VideoContent(BaseModel):
             if chapter.start_seconds <= previous or chapter.start_seconds >= self.duration_seconds:
                 raise ValueError("Chapter offsets must increase within the video duration")
             previous = chapter.start_seconds
+        return self
+
+    def _valid_document(self) -> "VideoContent":
+        """A manual: `.pdf` / `.html` primary, optional other-format twin, no playable media."""
+        extension = _document_extension(self.cdn_url)
+        _document_asset(self.cdn_url, extension)
+        if self.webm_url is not None or self.caption_url is not None:
+            raise ValueError("A document carries no WebM or caption URL")
+        if self.duration_seconds or self.chapters:
+            raise ValueError("A document has no duration or chapters")
+        _document_asset(self.poster_url, ".jpg", optional=True)
+        if self.alt_url is not None:
+            other = _document_extension(self.alt_url)
+            if other == extension:
+                raise ValueError("The alternate document URL must be the other format")
+            _document_asset(self.alt_url, other)
         return self
 
 
@@ -224,17 +305,21 @@ def _legacy_content(video: dict[str, Any], section_id: str, order: int) -> dict[
     ))
 
 
-def seed_legacy_catalog(bind) -> None:
-    """Import the existing bundled catalog once; later restarts never overwrite admin edits."""
+def seed_legacy_catalog(bind, manifest_path: Path = _LEGACY_PATH) -> None:
+    """Import the bundled manifest once; later restarts never overwrite admin edits.
+
+    The marker row is written even when the manifest is empty (the CN default), so an
+    administrator who later removes every video keeps an empty directory on restart.
+    """
     with Session(bind=bind) as db:
         if db.get(VideoCatalogSeed, 1) is not None:
             return
         if not db.query(Video).first():
-            legacy = json.loads(_LEGACY_PATH.read_text(encoding="utf-8"))
+            legacy = json.loads(manifest_path.read_text(encoding="utf-8"))
             videos = legacy["videos"]
-            missing = {video["id"] for video in videos} - _LEGACY_SECTIONS.keys()
+            missing = sorted(video["id"] for video in videos if not video.get("sectionId"))
             if missing:
-                raise RuntimeError(f"Legacy video section mapping missing: {sorted(missing)}")
+                raise RuntimeError(f"Legacy video entries without a V2 sectionId: {missing}")
             playlist_order = {
                 video_id: index * 10
                 for index, video_id in enumerate(
@@ -244,7 +329,7 @@ def seed_legacy_catalog(bind) -> None:
             }
             for video in videos:
                 content = _legacy_content(
-                    video, _LEGACY_SECTIONS[video["id"]], playlist_order[video["id"]],
+                    video, video["sectionId"], playlist_order.get(video["id"], 1000),
                 )
                 db.add(Video(
                     id=video["id"], content=content, published_content=deepcopy(content),
@@ -274,14 +359,18 @@ def serialize_managed(row: Video) -> dict[str, Any]:
 def _public(row: Video) -> dict[str, Any]:
     content = row.published_content or {}
     primary = content["cdn_url"]
-    sources = [{"url": primary, "type": "video/mp4" if primary.lower().endswith(".mp4")
-                else "video/webm"}]
-    if content.get("webm_url"):
-        sources.append({"url": content["webm_url"], "type": "video/webm"})
+    kind = _kind(content)
+    sources: list[dict[str, str]] = []
+    if kind == "video":
+        sources.append({"url": primary, "type": "video/mp4" if primary.lower().endswith(".mp4")
+                        else "video/webm"})
+        if content.get("webm_url"):
+            sources.append({"url": content["webm_url"], "type": "video/webm"})
     captions = [{"url": content["caption_url"], "language": "zh-CN", "label": "简体中文"}] \
         if content.get("caption_url") else []
     return {
         "id": row.id,
+        "kind": kind,
         "consoleVersion": _console_version(content),
         "title": content["title"],
         "description": content["description"],
@@ -289,6 +378,9 @@ def _public(row: Video) -> dict[str, Any]:
         "durationSeconds": content["duration_seconds"],
         "language": "zh-CN",
         "posterUrl": content.get("poster_url") or "",
+        # documents: the file the console opens in a new tab (+ its other-format twin)
+        "documentUrl": primary if kind == "document" else "",
+        "altUrl": content.get("alt_url") if kind == "document" else None,
         "sources": sources,
         "captions": captions,
         "chapters": content.get("chapters") or [],
@@ -315,7 +407,7 @@ def published_catalog(db: Session) -> dict[str, Any]:
                     published=True)
     by_section: dict[str, list[Video]] = {}
     for row in rows:
-        by_section.setdefault(row.published_content["section_id"], []).append(row)
+        by_section.setdefault(_aligned(row.published_content)["section_id"], []).append(row)
     sections = [item for item in taxonomy()["sections"] if item["id"] in by_section]
     category_ids = {item["categoryId"] for item in sections}
     return {

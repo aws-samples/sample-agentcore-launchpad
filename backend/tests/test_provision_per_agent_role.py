@@ -1,4 +1,4 @@
-"""All three deployers provision the agent's own execution role (T3).
+"""Each deployer provisions the agent's own execution role.
 
 The deploy stages already read `ctx.scratch["execution_role_arn"]` first, so wiring
 the provision stage is the whole change — these tests pin that each method actually
@@ -8,8 +8,6 @@ does it, and that the documented escape hatch still yields the shared role.
 import pytest
 
 from app.core.db import DEFAULT_WORKSPACE_ID
-from app.deployer import container as container_method
-from app.deployer import harness as harness_method
 from app.deployer import zip_runtime as zip_method
 from app.deployer.pipeline import StageContext
 from app.models.ledger import Agent
@@ -58,8 +56,6 @@ def _ctx(resources: dict | None = None) -> StageContext:
     ("module", "method"),
     [
         (zip_method, "zip_runtime"),
-        (container_method, "container"),
-        (harness_method, "harness"),
     ],
 )
 class TestEachDeployerProvisionsItsOwnRole:
@@ -67,9 +63,6 @@ class TestEachDeployerProvisionsItsOwnRole:
         self, module, method, monkeypatch
     ):
         monkeypatch.setattr(module, "get_settings", lambda: Settings())
-        if module is harness_method:
-            # the harness provision stage also touches the KB gateway; no KBs here
-            monkeypatch.setattr(module, "control_client", lambda _ws=None: object())
         iam = StubIam()
         agent = _agent(method)
         ctx = _ctx()
@@ -82,8 +75,6 @@ class TestEachDeployerProvisionsItsOwnRole:
 
     def test_is_idempotent_for_a_resumed_job(self, module, method, monkeypatch):
         monkeypatch.setattr(module, "get_settings", lambda: Settings())
-        if module is harness_method:
-            monkeypatch.setattr(module, "control_client", lambda _ws=None: object())
         iam = StubIam()
         agent = _agent(method)
         first = module._stage_provision(_ctx(), agent, iam_client=iam)
@@ -95,8 +86,6 @@ class TestEachDeployerProvisionsItsOwnRole:
         """An over-tight policy fails at invoke time, so an operator needs a way back
         without a code change."""
         monkeypatch.setattr(module, "get_settings", lambda: SharedRoleSettings())
-        if module is harness_method:
-            monkeypatch.setattr(module, "control_client", lambda _ws=None: object())
         iam = StubIam()
         ctx = _ctx()
         module._stage_provision(ctx, _agent(method), iam_client=iam)

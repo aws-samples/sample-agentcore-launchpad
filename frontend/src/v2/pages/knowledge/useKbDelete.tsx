@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiError, errorMessage, v2KnowledgeApi } from "../../../lib/api";
-import { extractConflictAgents } from "../../../lib/knowledgeBases";
+import { extractConflictAgents, hasPendingCleanup } from "../../../lib/knowledgeBases";
 import { useV2Toast } from "../../hooks";
 import { Confirm } from "../../ui";
 
@@ -21,8 +21,17 @@ export function useKbDelete(onDeleted: (kbId: string) => void) {
     if (!target) return;
     setBusy(true);
     try {
-      await v2KnowledgeApi.remove(target.kb_id, force);
-      toast("success", t("knowledge.detail.deleted", { name: target.name }));
+      const out = await v2KnowledgeApi.remove(target.kb_id, force);
+      // WB-008: the KB is gone either way; say so when storage cleanup is still retrying
+      toast(
+        "success",
+        t(
+          hasPendingCleanup(out)
+            ? "knowledge.detail.deletedCleanupPending"
+            : "knowledge.detail.deleted",
+          { name: target.name },
+        ),
+      );
       setTarget(null);
       setConflict(null);
       onDeleted(target.kb_id);

@@ -1,0 +1,1127 @@
+LAUNCHPAD_MEMORY_RUNTIME = 'v1'
+# --- CN memory/KB (N6): self-hosted runtime memory library ----------------------------
+# Rendered by app.templates.memory_support.render_memory_source() into every generated
+# Strands agent (and grafted by the self-built Harness template). Short-term memory is
+# Strands' own S3SessionManager under the Launchpad snapshot prefix (ruling R5); every
+# turn also lands as one AgentCore-shaped event + one SQS extraction message
+# (LaunchpadMemoryHook); long-term recall is k-NN over this environment's memory index
+# (`launchpad-memory`, or `launchpad-<env>-memory` — D17). Everything is env-driven
+# (LAUNCHPAD_MEMORY_*, LAUNCHPAD_ENV_NAME) and fail-soft: without
+# LAUNCHPAD_MEMORY_ID every entry point is a no-op, and no AWS error ever aborts a turn.
+# Depends on the model block defined earlier in this file — _resolve_bedrock_api_key(),
+# MODEL_REGION, BEDROCK_BEARER_ENV — because the Titan embedder authenticates with the
+# agent's own Global Bedrock API key (ruling R1), never a second credential.
+# Contract: docs/cn/interfaces/memory-runtime.md.
+import os
+import sys
+
+import boto3
+from botocore.config import Config as _MemoryBotoConfig
+from botocore.exceptions import ClientError as _MemoryClientError
+from strands.hooks import AfterInvocationEvent, HookProvider, HookRegistry
+from strands.session import S3SessionManager
+from strands.types.exceptions import SessionException as _MemorySessionException
+
+# <launchpad-opensearch-core>
+import hashlib
+import json
+import math
+import re
+import uuid
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from typing import Any
+from urllib.parse import urlencode
+
+import urllib3
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+
+EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
+EMBED_DIMENSIONS = 1024
+EMBED_MAX_CHARS = 8000
+DEDUPE_COSINE = 0.92
+# Merge strategy v2 (r14-a, N14-obs1). Below `DEDUPE_COSINE` and at or above this bound the
+# extractor lets the model decide between add / update / supersede; below it a new fact is
+# always an `add` unless the model names a candidate it saw.
+MERGE_GRAY_ZONE_LOW = 0.75
+# Recall ranking: similarity × 0.5 ** (age_days / half_life) × max(confidence, floor).
+RECALL_HALF_LIFE_DAYS = 90
+RECALL_CONFIDENCE_FLOOR = 0.5
+RECALL_CANDIDATES_PER_K = 4
+RECALL_MAX_CANDIDATES = 20
+# Per-store merge settings (ledger `memory_stores.merge_settings`, SQS `merge` block, agent
+# env `LAUNCHPAD_MEMORY_HALF_LIFE_DAYS` / `LAUNCHPAD_MEMORY_TTL_DAYS`). `None` TTL = keep.
+MERGE_SETTINGS_DEFAULTS: dict[str, Any] = {
+    "recall_half_life_days": RECALL_HALF_LIFE_DAYS,
+    "max_facts_per_actor": 200,
+    "max_preferences_per_actor": 100,
+    "long_term_ttl_days": None,
+    "actor_summary_interval": 1,
+}
+MERGE_SETTINGS_BOUNDS: dict[str, tuple[int, int]] = {
+    "recall_half_life_days": (1, 3650),
+    "max_facts_per_actor": (10, 10000),
+    "max_preferences_per_actor": (10, 10000),
+    "long_term_ttl_days": (7, 3650),
+    "actor_summary_interval": (1, 100),
+}
+# Consolidation pass: at most this many records are merged per extraction event.
+CONSOLIDATE_MAX_RECORDS = 20
+# Actor-level rolling summary: `/summaries/{actorId}/_actor`, rewritten from the most
+# recent session summaries, at most this many words.
+ACTOR_SUMMARY_SEGMENT = "_actor"
+ACTOR_SUMMARY_MAX_WORDS = 150
+ACTOR_SUMMARY_SOURCES = 10
+# Record ops the extractor / consolidation pass write into `last_op`.
+RECORD_OPS = ("add", "update", "supersede", "delete", "noop")
+# Additive v2 record fields. Every pre-v2 document lacks them and is read as ACTIVE with
+# confidence 1.0 and `created_at` as its timestamp; `ensure_mapping` (hub bootstrap) PUTs
+# the missing properties onto a legacy index, never a reindex.
+MEMORY_RECORD_V2_PROPERTIES: dict[str, dict[str, Any]] = {
+    "updated_at": {"type": "date"},
+    "confidence": {"type": "float"},
+    "superseded_by": {"type": "keyword"},
+    "superseded_at": {"type": "date"},
+    "supersedes": {"type": "keyword"},
+    "deleted_at": {"type": "date"},
+    "expired_at": {"type": "date"},
+    "last_op": {"type": "keyword"},
+}
+
+# D17: one OpenSearch domain is shared by every EnvName environment of an account+region,
+# so every index carries the environment: `launchpad-<base>` in the default environment,
+# `launchpad-<env>-<base>` otherwise. The expression in `index_name` is the one in
+# `app/core/naming.py::index_name` (the hub reads the env from Settings); the runtime
+# library and the extractor Lambda read it from INDEX_ENV_VAR, set by their deployer.
+INDEX_ENV_VAR = "LAUNCHPAD_ENV_NAME"
+
+STRATEGIES: tuple[dict[str, str], ...] = (
+    {"strategy_id": "semantic", "name": "Semantic facts", "type": "SEMANTIC",
+     "template": "/facts/{actorId}"},
+    {"strategy_id": "user_preference", "name": "User preferences", "type": "USER_PREFERENCE",
+     "template": "/preferences/{actorId}"},
+    {"strategy_id": "summarization", "name": "Session summaries", "type": "SUMMARIZATION",
+     "template": "/summaries/{actorId}/{sessionId}"},
+)
+# Every catalogued strategy is extracted (the never-extracted `episodic` entry was
+# removed in R13, N13-obs4); stores that still list it load with it ignored.
+EXTRACTED_STRATEGIES = ("semantic", "user_preference", "summarization")
+NAMESPACE_BY_STRATEGY = {s["strategy_id"]: s["template"] for s in STRATEGIES}
+
+
+def index_name(base: str, env_name: str) -> str:
+    return f"launchpad-{base}" if not env_name else f"launchpad-{env_name}-{base}"
+
+
+def memory_index(env_name: str) -> str:
+    return index_name("memory", env_name)
+
+
+def jobs_index(env_name: str) -> str:
+    return index_name("jobs", env_name)
+
+
+def kb_docs_index(env_name: str) -> str:
+    return index_name("kb-docs", env_name)
+
+
+def kb_index_name(kb_id: str, env_name: str) -> str:
+    return index_name(f"kb-{kb_id.lower()}", env_name)
+
+
+def _knn_field() -> dict[str, Any]:
+    return {
+        "type": "knn_vector",
+        "dimension": EMBED_DIMENSIONS,
+        "method": {"name": "hnsw", "space_type": "cosinesimil", "engine": "lucene"},
+    }
+
+
+def _settings() -> dict[str, Any]:
+    return {"index.knn": True, "number_of_shards": 1, "number_of_replicas": 0}
+
+
+def memory_index_body() -> dict[str, Any]:
+    """Long-term records: one row per fact/preference/summary a store holds."""
+    keyword_fields = ("store_id", "workspace_id", "actor_id", "namespace", "strategy",
+                       "session_id", "source_event_ids")
+    return {
+        "settings": _settings(),
+        "mappings": {
+            "properties": {
+                **{f: {"type": "keyword"} for f in keyword_fields},
+                "text": {"type": "text"},
+                "embedding": _knn_field(),
+                "created_at": {"type": "date"},
+                "metadata": {"type": "object", "enabled": False},
+                **MEMORY_RECORD_V2_PROPERTIES,
+            }
+        },
+    }
+
+
+def normalize_merge_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """The per-store merge settings with every default filled in; unknown keys dropped,
+    values outside `MERGE_SETTINGS_BOUNDS` clamped (the API validates and 422s before a
+    row is written — this is the read-side safety net for a hand-edited row or an
+    in-flight SQS message)."""
+    out = dict(MERGE_SETTINGS_DEFAULTS)
+    for key, value in (raw or {}).items():
+        if key not in MERGE_SETTINGS_DEFAULTS:
+            continue
+        if value is None:
+            out[key] = None if key == "long_term_ttl_days" else MERGE_SETTINGS_DEFAULTS[key]
+            continue
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            continue
+        low, high = MERGE_SETTINGS_BOUNDS[key]
+        out[key] = min(max(number, low), high)
+    return out
+
+
+def active_record_filter() -> dict[str, Any]:
+    """One filter clause that keeps only ACTIVE long-term records: nothing superseded,
+    soft-deleted or expired. Legacy documents carry none of the three fields and match."""
+    return {"bool": {"must_not": [
+        {"exists": {"field": "superseded_by"}},
+        {"exists": {"field": "deleted_at"}},
+        {"exists": {"field": "expired_at"}},
+    ]}}
+
+
+def ttl_cutoff_filter(now: datetime, ttl_days: int | None) -> dict[str, Any] | None:
+    """Records older than the store's TTL (by `updated_at`, else `created_at`) are hidden on
+    read even before the consolidation pass marks them `expired_at`; `None` TTL = no clause."""
+    if not ttl_days:
+        return None
+    cutoff = (now.astimezone(UTC) - timedelta(days=int(ttl_days))).isoformat()
+    return {"bool": {"should": [
+        {"range": {"updated_at": {"gte": cutoff}}},
+        {"bool": {"must_not": [{"exists": {"field": "updated_at"}}],
+                  "filter": [{"range": {"created_at": {"gte": cutoff}}}]}},
+    ], "minimum_should_match": 1}}
+
+
+def parse_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def record_timestamp(doc: dict[str, Any]) -> datetime:
+    """`updated_at`, else `created_at`, else the epoch (a legacy document without either
+    decays to the floor rather than being dropped)."""
+    return (
+        parse_timestamp(doc.get("updated_at"))
+        or parse_timestamp(doc.get("created_at"))
+        or datetime(1970, 1, 1, tzinfo=UTC)
+    )
+
+
+def record_is_active(doc: dict[str, Any]) -> bool:
+    return not (doc.get("superseded_by") or doc.get("deleted_at") or doc.get("expired_at"))
+
+
+def record_confidence(doc: dict[str, Any]) -> float:
+    value = doc.get("confidence")
+    if value is None:
+        return 1.0  # pre-v2 record
+    try:
+        return min(max(float(value), 0.0), 1.0)
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def recency_weight(doc: dict[str, Any], now: datetime, half_life_days: float) -> float:
+    age_days = max((now.astimezone(UTC) - record_timestamp(doc)).total_seconds(), 0.0) / 86400
+    if half_life_days <= 0:
+        return 1.0
+    return 0.5 ** (age_days / float(half_life_days))
+
+
+def rank_records(
+    hits: list[dict[str, Any]], vector: list[float], now: datetime, top_k: int,
+    half_life_days: float = RECALL_HALF_LIFE_DAYS,
+    confidence_floor: float = RECALL_CONFIDENCE_FLOOR,
+) -> list[dict[str, Any]]:
+    """Recall ranking (v2): `similarity × recency × max(confidence, floor)` over k-NN hits
+    that still carry their `embedding`; inactive hits are dropped, the embedding is
+    stripped, and each kept hit gains `similarity` and `recall_score`. Deterministic for
+    equal scores (stable sort on the input order)."""
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for hit in hits:
+        if not record_is_active(hit):
+            continue
+        embedding = hit.get("embedding")
+        similarity = cosine(vector, embedding) if embedding else float(hit.get("_score") or 0.0)
+        weight = recency_weight(hit, now, half_life_days) * max(
+            record_confidence(hit), confidence_floor
+        )
+        out = {k: v for k, v in hit.items() if k != "embedding"}
+        out["similarity"] = similarity
+        out["recall_score"] = similarity * weight
+        scored.append((out["recall_score"], out))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [doc for _, doc in scored[:top_k]]
+
+
+def actor_summary_namespace(actor_id: str) -> str:
+    return f"/summaries/{actor_id}/{ACTOR_SUMMARY_SEGMENT}"
+
+
+def summary_record_id(store_id: str, namespace: str) -> str:
+    """Deterministic id of a summary document (one per namespace): the same rule the
+    extractor used for session summaries since N6, now shared with the actor summary."""
+    return hashlib.sha1(f"{store_id}|{namespace}".encode()).hexdigest()[:32]
+
+
+def jobs_index_body() -> dict[str, Any]:
+    """Extraction + ingestion job status (read by the hub, written by the Lambda)."""
+    keyword_fields = ("job_id", "kind", "store_id", "kb_id", "ds_id", "workspace_id",
+                       "actor_id", "session_id", "strategy_ids", "status")
+    return {
+        "settings": _settings(),
+        "mappings": {
+            "properties": {
+                **{f: {"type": "keyword"} for f in keyword_fields},
+                "failure_reason": {"type": "text"},
+                "warnings": {"type": "text"},
+                "counts": {"type": "object"},
+                "created_at": {"type": "date"},
+                "updated_at": {"type": "date"},
+            }
+        },
+    }
+
+
+def kb_docs_index_body() -> dict[str, Any]:
+    """One row per source document (status, not chunk content)."""
+    keyword_fields = ("kb_id", "ds_id", "uri", "name", "status")
+    return {
+        "settings": _settings(),
+        "mappings": {
+            "properties": {
+                **{f: {"type": "keyword"} for f in keyword_fields},
+                "status_reason": {"type": "text"},
+                "size_bytes": {"type": "long"},
+                "chunk_count": {"type": "integer"},
+                "uploaded_at": {"type": "date"},
+                "indexed_at": {"type": "date"},
+            }
+        },
+    }
+
+
+def kb_index_body() -> dict[str, Any]:
+    """One index per knowledge base: one row per indexed chunk."""
+    keyword_fields = ("kb_id", "ds_id", "doc_uri", "doc_name")
+    return {
+        "settings": _settings(),
+        "mappings": {
+            "properties": {
+                **{f: {"type": "keyword"} for f in keyword_fields},
+                "chunk_index": {"type": "integer"},
+                "text": {"type": "text"},
+                "embedding": _knn_field(),
+                "metadata": {"type": "object", "enabled": False},
+                "indexed_at": {"type": "date"},
+            }
+        },
+    }
+
+
+def cosine(a: list[float], b: list[float]) -> float:
+    """Dot product of normalized vectors — used for dedupe/recall scoring in Python
+    rather than trusting `_score`, whose scale differs by k-NN engine (ruling R3)."""
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?。！？])\s+")
+
+
+def _split_long_paragraph(paragraph: str, size: int) -> list[str]:
+    sentences = _SENTENCE_SPLIT.split(paragraph)
+    pieces: list[str] = []
+    for sentence in sentences:
+        if len(sentence) <= size:
+            pieces.append(sentence)
+            continue
+        # A single sentence longer than `size`: hard-wrap it so no piece this
+        # function returns exceeds `size` on its own.
+        for start in range(0, len(sentence), size):
+            pieces.append(sentence[start:start + size])
+    return [p for p in pieces if p.strip()]
+
+
+def chunk_text(text: str, size: int = 1000, overlap: int = 200) -> list[str]:
+    """Split on paragraphs, then sentences for paragraphs longer than `size`, then
+    greedily pack pieces into windows of at most `size` characters; each window after
+    the first starts with the last `overlap` characters of the previous one so the
+    embedder sees local context across a chunk boundary."""
+    normalized = text.replace("\r\n", "\n").strip()
+    if not normalized:
+        return []
+    if len(normalized) <= size:
+        return [normalized]
+
+    pieces: list[str] = []
+    for paragraph in normalized.split("\n\n"):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+        if len(paragraph) <= size:
+            pieces.append(paragraph)
+        else:
+            pieces.extend(_split_long_paragraph(paragraph, size))
+
+    chunks: list[str] = []
+    current = ""
+    for piece in pieces:
+        candidate = f"{current} {piece}".strip() if current else piece
+        if len(candidate) <= size:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        if len(piece) <= size:
+            current = piece
+        else:
+            # A piece this long only happens if `_split_long_paragraph` could not
+            # bring it under `size` (one sentence longer than `size` already hard-
+            # wrapped above) — fall back to a hard slice so no chunk ever exceeds it.
+            for start in range(0, len(piece), size):
+                chunks.append(piece[start:start + size])
+            current = ""
+    if current:
+        chunks.append(current)
+
+    if overlap <= 0 or len(chunks) <= 1:
+        return [c for c in chunks if c]
+
+    out = [chunks[0]]
+    for chunk in chunks[1:]:
+        tail = out[-1][-overlap:].lstrip()
+        merged = f"{tail} {chunk}".strip() if tail else chunk
+        out.append(merged[:size] if len(merged) > size else merged)
+    return [c for c in out if c]
+
+
+_PLACEHOLDER = re.compile(r"\{(\w+)\}")
+
+
+def resolve_namespace(
+    template: str, actor_id: str, session_id: str | None = None
+) -> tuple[str, bool, bool]:
+    """Substitute `{actorId}` (and `{sessionId}` when given) into a namespace
+    template. An unresolved placeholder that trails every resolved/literal segment
+    (no `session_id` supplied, nothing after it) is dropped and reported as a
+    prefix match; an unresolved placeholder with a resolved segment AFTER it stays
+    in place (braces kept) and the whole namespace is reported unresolvable."""
+    values = {"actorId": actor_id}
+    if session_id is not None:
+        values["sessionId"] = session_id
+
+    segments = template.split("/")
+    resolved_segments: list[str] = []
+    unresolved_indices: list[int] = []
+    for segment in segments:
+        match = _PLACEHOLDER.fullmatch(segment)
+        if match is None:
+            resolved_segments.append(segment)
+            continue
+        key = match.group(1)
+        if key in values:
+            resolved_segments.append(values[key])
+        else:
+            resolved_segments.append(segment)  # keep the "{key}" marker
+            unresolved_indices.append(len(resolved_segments) - 1)
+
+    if not unresolved_indices:
+        return "/".join(resolved_segments), True, False
+
+    last_resolved_idx = max(
+        (i for i in range(len(resolved_segments)) if i not in unresolved_indices), default=-1
+    )
+    if all(i > last_resolved_idx for i in unresolved_indices):
+        # Every unresolved placeholder trails the last resolved/literal segment —
+        # drop them and report a prefix match.
+        namespace = "/".join(resolved_segments[: last_resolved_idx + 1])
+        if not namespace.endswith("/"):
+            namespace += "/"
+        return namespace, True, True
+
+    return "/".join(resolved_segments), False, False
+
+
+def event_key(ts: datetime, uid: str) -> str:
+    """Lexically sortable event filename: UTC timestamp (microsecond) + a short
+    unique suffix, so S3 listing order is chronological with no extra metadata."""
+    return f"{ts.astimezone(UTC).strftime('%Y%m%dT%H%M%S%f')}Z_{uid}.json"
+
+
+_EVENT_KEY_TS_RE = re.compile(r"^(\d{8}T\d{6}\d{6})Z_")
+
+
+def parse_event_key(key: str) -> datetime | None:
+    match = _EVENT_KEY_TS_RE.match(key)
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y%m%dT%H%M%S%f").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def turn_event(
+    actor_id: str, session_id: str, prompt: str, answer: str, ts: datetime | None = None
+) -> dict[str, Any]:
+    """One AgentCore-shaped event body for a single USER/ASSISTANT turn — the shape
+    `observability.session_transcript` already knows how to read."""
+    ts = ts or datetime.now(UTC)
+    return {
+        "eventId": uuid.uuid4().hex,
+        "eventTimestamp": ts.isoformat(),
+        "actorId": actor_id,
+        "sessionId": session_id,
+        "payload": [
+            {"conversational": {"role": "USER", "content": {"text": prompt}}},
+            {"conversational": {"role": "ASSISTANT", "content": {"text": answer}}},
+        ],
+    }
+
+
+class OpenSearchError(RuntimeError):
+    """Raised for any non-2xx OpenSearch response; `.status` is the HTTP status."""
+
+    def __init__(self, status: int, body: str) -> None:
+        super().__init__(f"OpenSearch HTTP {status}: {body[:500]}")
+        self.status = status
+
+
+class OpenSearchHttp:
+    """A SigV4-signed REST client for the OpenSearch Service data plane (service
+    name `es`) over `urllib3`, with no `opensearch-py` dependency. `credentials_provider`
+    is a zero-argument callable returning frozen botocore credentials — never a session
+    — so this class never constructs or caches a boto3 client itself."""
+
+    def __init__(
+        self,
+        endpoint: str,
+        region: str,
+        credentials_provider: Callable[[], Any],
+        http: Any = None,
+        service: str = "es",
+    ) -> None:
+        self.endpoint = endpoint.replace("https://", "").replace("http://", "").rstrip("/")
+        self.region = region
+        self.service = service
+        self.credentials_provider = credentials_provider
+        self.http = http or urllib3.PoolManager(
+            timeout=urllib3.Timeout(connect=5.0, read=30.0), retries=False
+        )
+
+    def request(
+        self, method: str, path: str, body: Any = None, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        url = f"https://{self.endpoint}{path}"
+        if params:
+            url += "?" + urlencode(params)
+        data: str | None
+        if body is None:
+            data = None
+        elif isinstance(body, str):
+            data = body
+        else:
+            data = json.dumps(body)
+
+        req = AWSRequest(
+            method=method, url=url, data=data, headers={"Content-Type": "application/json"}
+        )
+        SigV4Auth(self.credentials_provider(), self.service, self.region).add_auth(req)
+        resp = self.http.request(method, url, body=data, headers=dict(req.headers))
+
+        if method == "HEAD":
+            if resp.status == 404:
+                return {"found": False}
+            if resp.status >= 300:
+                raise OpenSearchError(resp.status, "")
+            return {"found": True}
+
+        if resp.status >= 300:
+            raise OpenSearchError(resp.status, (resp.data or b"").decode(errors="replace"))
+        return json.loads(resp.data or b"{}")
+
+    def index_exists(self, name: str) -> bool:
+        return bool(self.request("HEAD", f"/{name}")["found"])
+
+    def ensure_index(self, name: str, body: dict[str, Any]) -> bool:
+        if self.index_exists(name):
+            return False
+        self.request("PUT", f"/{name}", body)
+        return True
+
+    def delete_index(self, name: str) -> None:
+        try:
+            self.request("DELETE", f"/{name}")
+        except OpenSearchError as exc:
+            if exc.status != 404:
+                raise
+
+    def put_doc(self, index: str, doc_id: str, doc: dict[str, Any], refresh: bool = True) -> None:
+        self.request(
+            "PUT", f"/{index}/_doc/{doc_id}", doc, {"refresh": "true" if refresh else "false"}
+        )
+
+    def get_doc(self, index: str, doc_id: str) -> dict[str, Any] | None:
+        try:
+            return dict(self.request("GET", f"/{index}/_doc/{doc_id}")["_source"])
+        except OpenSearchError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def update_doc(
+        self, index: str, doc_id: str, fields: dict[str, Any], refresh: bool = True
+    ) -> bool:
+        """Partial update (`_update` with a `doc` body) — the merge strategy's way of marking
+        a record superseded / deleted / expired without re-sending its embedding. ``False``
+        when the document is gone (404)."""
+        try:
+            self.request(
+                "POST", f"/{index}/_update/{doc_id}", {"doc": fields},
+                {"refresh": "true" if refresh else "false"},
+            )
+        except OpenSearchError as exc:
+            if exc.status == 404:
+                return False
+            raise
+        return True
+
+    def delete_doc(self, index: str, doc_id: str, refresh: bool = True) -> bool:
+        """Delete one document; ``False`` when it was already gone (404)."""
+        try:
+            self.request(
+                "DELETE", f"/{index}/_doc/{doc_id}", None,
+                {"refresh": "true" if refresh else "false"},
+            )
+        except OpenSearchError as exc:
+            if exc.status == 404:
+                return False
+            raise
+        return True
+
+    def bulk(self, index: str, docs: list[tuple[str, dict[str, Any]]], refresh: bool = True) -> int:
+        lines: list[str] = []
+        for doc_id, doc in docs:
+            lines.append(json.dumps({"index": {"_index": index, "_id": doc_id}}))
+            lines.append(json.dumps(doc))
+        body = "\n".join(lines) + "\n" if lines else ""
+        out = self.request("POST", "/_bulk", body, {"refresh": "true" if refresh else "false"})
+        if out.get("errors"):
+            raise OpenSearchError(400, json.dumps(out))
+        return len(docs)
+
+    def search(self, index: str, body: dict[str, Any]) -> dict[str, Any]:
+        return self.request("POST", f"/{index}/_search", body)
+
+    def knn_search(
+        self,
+        index: str,
+        vector: list[float],
+        k: int,
+        filters: list[dict[str, Any]],
+        include_embedding: bool = False,
+    ) -> list[dict[str, Any]]:
+        body = {
+            "size": k,
+            "_source": {"excludes": [] if include_embedding else ["embedding"]},
+            "query": {
+                "knn": {
+                    "embedding": {
+                        "vector": vector,
+                        "k": k,
+                        "filter": {"bool": {"filter": filters}},
+                    }
+                }
+            },
+        }
+        hits = self.search(index, body)["hits"]["hits"]
+        return [{"_id": h["_id"], "_score": h.get("_score"), **h["_source"]} for h in hits]
+
+    def delete_by_query(self, index: str, query: dict[str, Any]) -> int:
+        out = self.request(
+            "POST", f"/{index}/_delete_by_query", {"query": query}, {"refresh": "true"}
+        )
+        return int(out.get("deleted", 0))
+
+
+class TitanEmbedder:
+    """Amazon Titan Text Embeddings V2 (`amazon.titan-embed-text-v2:0`, 1024 dims,
+    normalized) over an injected `bedrock-runtime` client — never constructed here."""
+
+    def __init__(
+        self,
+        bedrock_runtime: Any,
+        model_id: str = EMBED_MODEL_ID,
+        dimensions: int = EMBED_DIMENSIONS,
+    ) -> None:
+        self.bedrock_runtime = bedrock_runtime
+        self.model_id = model_id
+        self.dimensions = dimensions
+
+    def embed(self, text: str) -> list[float]:
+        body = json.dumps({
+            "inputText": text[:EMBED_MAX_CHARS],
+            "dimensions": self.dimensions,
+            "normalize": True,
+        })
+        out = self.bedrock_runtime.invoke_model(
+            modelId=self.model_id,
+            body=body,
+            contentType="application/json",
+            accept="application/json",
+        )
+        return list(json.loads(out["body"].read())["embedding"])
+# </launchpad-opensearch-core>
+
+# D17: this runtime's environment — deployer/environment.py writes LAUNCHPAD_ENV_NAME for a
+# non-default environment; unset means the default one. MEMORY_INDEX and
+# launchpad_kb_index() are therefore the hub's own `app/core/naming.py` names for the
+# environment that deployed this agent, on the domain every environment shares.
+LAUNCHPAD_ENV_NAME = os.environ.get(INDEX_ENV_VAR, "")
+MEMORY_INDEX = memory_index(LAUNCHPAD_ENV_NAME)
+# Recall splices the actor's recent per-session summaries into the system prompt (one
+# ≤ 120-word summary per extraction, SUMMARY_PROMPT); this caps their total text at about
+# 3 × 120 words whatever their length, and a remainder too short to carry one sentence is
+# not spent on a truncated line.
+RECALL_SESSION_SUMMARY_MAX_CHARS = 2400
+RECALL_SESSION_SUMMARY_MIN_CHARS = 200
+
+
+def launchpad_kb_index(kb_id: str) -> str:
+    return kb_index_name(kb_id, LAUNCHPAD_ENV_NAME)
+
+
+def _memory_env() -> dict:
+    """The substrate as deployer/environment.py described it; every key is optional."""
+    return {
+        "store": os.environ.get("LAUNCHPAD_MEMORY_ID", ""),
+        "bucket": os.environ.get("LAUNCHPAD_MEMORY_BUCKET", ""),
+        "prefix": os.environ.get("LAUNCHPAD_MEMORY_PREFIX", "memory").strip("/") or "memory",
+        "endpoint": os.environ.get("LAUNCHPAD_MEMORY_OS_ENDPOINT", ""),
+        "queue": os.environ.get("LAUNCHPAD_MEMORY_QUEUE_URL", ""),
+        "long_term": os.environ.get("LAUNCHPAD_MEMORY_LONG_TERM", "0") == "1",
+        "region": os.environ.get("AWS_REGION", "cn-northwest-1"),
+        # r14-a recall knobs (merge strategy v2): the store's half-life / soft TTL, written
+        # by the deployer only when they differ from the core defaults
+        "half_life_days": _memory_env_int("LAUNCHPAD_MEMORY_HALF_LIFE_DAYS", RECALL_HALF_LIFE_DAYS),
+        "ttl_days": _memory_env_int("LAUNCHPAD_MEMORY_TTL_DAYS", 0) or None,
+        # F-LOAD-02 (N17-obs533): the `memory_extract` model-role row the hub resolved when it
+        # deployed this agent (compact JSON of `embedding_backend.extract_model_block()`,
+        # written by deployer/environment.py next to the queue URL). The hook sends it as the
+        # message's `extract_model`, like the hub's own messages do, so the extractor Lambda
+        # runs the role's model with its capabilities (F-LOAD-03 `temperature`). Absent or
+        # unparseable → None and the message omits the block exactly as before (the Lambda's
+        # env fallback). Baked in at deploy: a model-role change takes effect for this agent
+        # on its NEXT redeploy; hub-side messages follow the role immediately.
+        "extract_model": _memory_env_json("LAUNCHPAD_MEMORY_EXTRACT_MODEL"),
+    }
+
+
+def _memory_env_int(name, default):
+    try:
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+def _memory_env_json(name):
+    """A JSON object with a `model_id` from the environment; None when absent or malformed."""
+    try:
+        value = json.loads(os.environ.get(name, "") or "null")
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) and value.get("model_id") else None
+
+
+# Per-process cache of the clients below (s3, sqs, creds, os, kb_os, emb).
+_MEMORY_CLIENTS: dict = {}
+# Every fail-soft path here is bounded in seconds, not botocore's default minutes: a
+# hook or recall that cannot reach AWS must give the turn back quickly (the OpenSearch
+# core already uses 5s connect / 30s read).
+_MEMORY_BOTO_CONFIG = _MemoryBotoConfig(
+    connect_timeout=3, read_timeout=10, retries={"max_attempts": 2, "mode": "standard"}
+)
+# S3 keys: Strands rejects a session id with a path separator; the snapshot prefix also
+# folds the actor id into the key, so both are checked the same way before any S3 call.
+_MEMORY_UNSAFE_ID = ("/", "..")
+
+
+def _memory_ids_ok(actor_id, session_id) -> bool:
+    for value in (actor_id, session_id):
+        if not isinstance(value, str) or not value or any(c in value for c in _MEMORY_UNSAFE_ID):
+            print(f"memory skipped: unsafe actor/session id {value!r}", file=sys.stderr)
+            return False
+    return True
+
+
+def _memory_s3():
+    if "s3" not in _MEMORY_CLIENTS:
+        _MEMORY_CLIENTS["s3"] = boto3.client(
+            "s3", region_name=_memory_env()["region"], config=_MEMORY_BOTO_CONFIG
+        )
+    return _MEMORY_CLIENTS["s3"]
+
+
+def _memory_sqs():
+    if "sqs" not in _MEMORY_CLIENTS:
+        _MEMORY_CLIENTS["sqs"] = boto3.client(
+            "sqs", region_name=_memory_env()["region"], config=_MEMORY_BOTO_CONFIG
+        )
+    return _MEMORY_CLIENTS["sqs"]
+
+
+def _memory_credentials():
+    """Frozen credentials of this runtime's execution role, for SigV4 (service `es`)."""
+    if "creds" not in _MEMORY_CLIENTS:
+        _MEMORY_CLIENTS["creds"] = boto3.Session().get_credentials()
+    return _MEMORY_CLIENTS["creds"].get_frozen_credentials()
+
+
+def _memory_opensearch():
+    if "os" not in _MEMORY_CLIENTS:
+        env = _memory_env()
+        _MEMORY_CLIENTS["os"] = OpenSearchHttp(env["endpoint"], env["region"], _memory_credentials)
+    return _MEMORY_CLIENTS["os"]
+
+
+def _memory_embedder():
+    """Titan v2 over Global Bedrock with the workspace's API key (N2 contract, ruling R1):
+    the same key and region as the agent's own model, exported as the bearer right before
+    the bedrock-runtime client is created — never a second credential exchange."""
+    if "emb" not in _MEMORY_CLIENTS:
+        os.environ[BEDROCK_BEARER_ENV] = _resolve_bedrock_api_key()
+        _MEMORY_CLIENTS["emb"] = TitanEmbedder(
+            boto3.client("bedrock-runtime", region_name=MODEL_REGION, config=_MEMORY_BOTO_CONFIG)
+        )
+    return _MEMORY_CLIENTS["emb"]
+
+
+class SnapshotSessionManager(S3SessionManager):
+    """Strands' own S3 session persistence, keyed under the Launchpad snapshot prefix
+    memory/<store>/<actor> (ruling R5) so the console lists actors and sessions by prefix.
+    The base is named explicitly (not `super()`) so it is resolved when an instance is
+    built — a graft may substitute the base class without re-deriving this one.
+
+    First-turn lookup without a 404 (N17-obs528): the base opens a session with
+    GetObject (NoSuchKey) and then HeadObject (404) when it is new, and the botocore
+    instrumentation records both ClientErrors as error spans, so every new chat's first
+    turn showed a "failed" trace with two S3 errors. Here the session's own key is
+    probed with ListObjectsV2 (a 200 with no contents when absent) and the base calls run
+    only for a session that exists; an absent session is remembered for the create that
+    follows so no HeadObject is needed either. 403/5xx on the probe still surface."""
+
+    def __init__(self, actor_id: str, session_id: str):
+        env = _memory_env()
+        self._known_absent: set = set()
+        S3SessionManager.__init__(
+            self,
+            session_id=session_id,
+            bucket=env["bucket"],
+            prefix=f"{env['prefix']}/{env['store']}/{actor_id}",
+            region_name=env["region"],
+        )
+
+    def _session_key(self, session_id: str) -> str:
+        return f"{self._get_session_path(session_id)}session.json"
+
+    def _object_exists(self, key: str) -> bool:
+        """ListObjectsV2 on the exact key: 200 either way, no error span for a missing
+        object. Anything but success (403, 5xx) is a real error and is raised."""
+        try:
+            page = self.client.list_objects_v2(Bucket=self.bucket, Prefix=key, MaxKeys=1)
+        except _MemoryClientError as exc:
+            raise _MemorySessionException(f"S3 error probing {key}: {exc}") from exc
+        return any(obj.get("Key") == key for obj in page.get("Contents") or [])
+
+    def read_session(self, session_id: str, **kwargs):
+        key = self._session_key(session_id)
+        if not self._object_exists(key):
+            self._known_absent.add(key)
+            return None
+        return S3SessionManager.read_session(self, session_id, **kwargs)
+
+    def create_session(self, session, **kwargs):
+        key = self._session_key(session.session_id)
+        if key in self._known_absent:
+            self._known_absent.discard(key)
+            self._write_s3_object(key, session.to_dict())
+            return session
+        return S3SessionManager.create_session(self, session, **kwargs)
+
+
+def make_session_manager(actor_id, session_id):
+    """Short-term memory for one turn; None when the workspace has no store or bucket.
+    Never raises — a turn without persistence beats no turn."""
+    env = _memory_env()
+    if not (env["store"] and env["bucket"]) or not _memory_ids_ok(actor_id, session_id):
+        return None
+    try:
+        return SnapshotSessionManager(actor_id, session_id)
+    except Exception as exc:
+        print(f"memory session manager unavailable: {exc}", file=sys.stderr)
+        return None
+
+
+# Legacy name kept for main.py.tmpl and the Harness graft anchors (ruling R6).
+memory_session_manager = make_session_manager
+
+
+class OpenSearchMemoryStore:
+    """Long-term records: k-NN over `launchpad-memory`, filtered to this store and one
+    namespace per query. A plain class, not a strands MemoryStore (none exists in
+    strands-agents 1.47.0 — ruling R6)."""
+
+    def __init__(self, actor_id):
+        self.actor_id = actor_id
+
+    def _query(self, query, top_k):
+        """One embedding + the visibility clauses every recall query shares: ACTIVE records
+        only and, with a store TTL, records updated within it."""
+        env = _memory_env()
+        vector = _memory_embedder().embed(query[:900] or "user context")
+        now = datetime.now(UTC)
+        visibility = [active_record_filter()]
+        ttl = ttl_cutoff_filter(now, env["ttl_days"])
+        if ttl is not None:
+            visibility.append(ttl)
+        candidates = max(min(top_k * RECALL_CANDIDATES_PER_K, RECALL_MAX_CANDIDATES), top_k)
+        return env, vector, now, visibility, candidates
+
+    @staticmethod
+    def _row(hit, namespace, text):
+        return {
+            "text": text,
+            "namespace": namespace,
+            "score": hit.get("recall_score"),
+            "similarity": hit.get("similarity"),
+            "created_at": hit.get("created_at"),
+            "updated_at": hit.get("updated_at"),
+        }
+
+    def search(self, query, namespaces=None, top_k=3) -> list:
+        """Top-k ACTIVE records per namespace, ranked by the merge strategy v2 rule
+        (r14-a): cosine × recency decay (store half-life) × confidence floor; superseded,
+        soft-deleted, expired and (with a store TTL) over-age records never surface."""
+        namespaces = namespaces or [f"/preferences/{self.actor_id}", f"/facts/{self.actor_id}"]
+        env, vector, now, visibility, candidates = self._query(query, top_k)
+        out: list = []
+        for namespace in namespaces:
+            hits = _memory_opensearch().knn_search(
+                MEMORY_INDEX,
+                vector,
+                candidates,
+                [{"term": {"store_id": env["store"]}}, {"term": {"namespace": namespace}},
+                 *visibility],
+                include_embedding=True,
+            )
+            for hit in rank_records(hits, vector, now, top_k, half_life_days=env["half_life_days"]):
+                out.append(self._row(hit, namespace, hit.get("text", "")))
+        return out
+
+    def session_summaries(self, query, top_k=3) -> list:
+        """Top-k ACTIVE per-session summaries of this actor (`/summaries/<actor>/<session>`,
+        strategy `summarization`; never the rolling `_actor` document), ranked by the same
+        v2 rule as `search`. The extractor writes one at every extraction, so a conversation
+        that just ended is recalled in the next one at once — the gap the rolling actor
+        summary left open until its next roll (Global AgentCore Memory recalls the summary
+        namespace semantically the same way). Rows carry the decoded summary text."""
+        env, vector, now, visibility, candidates = self._query(query, top_k)
+        hits = _memory_opensearch().knn_search(
+            MEMORY_INDEX,
+            vector,
+            candidates,
+            [{"term": {"store_id": env["store"]}},
+             {"term": {"strategy": "summarization"}},
+             {"prefix": {"namespace": f"/summaries/{self.actor_id}/"}},
+             {"bool": {"must_not": [
+                 {"term": {"namespace": actor_summary_namespace(self.actor_id)}}]}},
+             *visibility],
+            include_embedding=True,
+        )
+        out: list = []
+        for hit in rank_records(hits, vector, now, top_k, half_life_days=env["half_life_days"]):
+            text = _summary_text(hit)
+            if text:
+                out.append(self._row(hit, hit.get("namespace", ""), text))
+        return out
+
+    def actor_summary(self) -> str:
+        """The rolling actor summary (`/summaries/<actor>/_actor`, rewritten by the extractor
+        every `actor_summary_interval` extractions — default 1) as one line; '' when absent,
+        inactive or unreadable."""
+        env = _memory_env()
+        doc = _memory_opensearch().get_doc(
+            MEMORY_INDEX, summary_record_id(env["store"], actor_summary_namespace(self.actor_id))
+        )
+        if not doc or not record_is_active(doc):
+            return ""
+        return _summary_text(doc)
+
+
+def _summary_text(doc) -> str:
+    """The summary string of one summary document: the extractor stores `text` as JSON
+    `{"summary": …}` (plain text for an older record); '' when neither reads."""
+    try:
+        value = json.loads(doc.get("text") or "")
+    except ValueError:
+        value = None
+    text = value.get("summary") if isinstance(value, dict) else doc.get("text")
+    return text.strip() if isinstance(text, str) else ""
+
+
+def make_memory_store(actor_id):
+    """None unless long-term memory is on and the OpenSearch endpoint is known."""
+    env = _memory_env()
+    if env["store"] and env["endpoint"] and env["long_term"]:
+        return OpenSearchMemoryStore(actor_id)
+    return None
+
+
+def recall_context(actor_id, query, top_k=3) -> str:
+    """Advisory text for the system prompt: newline-joined preference/fact texts for this
+    actor (top_k per namespace, v2 ranking), then up to top_k of the actor's per-session
+    summaries as `Summary of an earlier conversation: …` lines (bounded to
+    RECALL_SESSION_SUMMARY_MAX_CHARS of summary text in total; the one that crosses the
+    bound is cut with `…`, the rest dropped) and, when the extractor has written one, the
+    rolling actor summary as the last line; '' when long-term memory is off or anything
+    fails."""
+    store = make_memory_store(actor_id)
+    if store is None:
+        return ""
+    try:
+        lines = [r["text"] for r in store.search(query, top_k=top_k) if r.get("text")]
+        budget = RECALL_SESSION_SUMMARY_MAX_CHARS
+        for row in store.session_summaries(query, top_k=top_k):
+            text = row["text"]
+            if len(text) > budget:
+                if budget < RECALL_SESSION_SUMMARY_MIN_CHARS:
+                    break
+                text = text[: budget - 1].rstrip() + "…"
+            lines.append(f"Summary of an earlier conversation: {text}")
+            budget -= len(text)
+            if budget <= 0:
+                break
+        summary = store.actor_summary()
+        if summary:
+            lines.append(f"Summary of earlier conversations: {summary}")
+        return "\n".join(lines)
+    except Exception as exc:
+        print(f"memory recall skipped: {exc}", file=sys.stderr)
+        return ""
+
+
+def _message_text(message) -> str:
+    """The text blocks of one Strands message ('' for tool-only blocks)."""
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content.strip()
+    parts = []
+    for block in content or []:
+        if isinstance(block, dict) and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+    return "\n".join(p for p in parts if p).strip()
+
+
+def _last_turn(messages) -> tuple:
+    """(last user text, last assistant text) from Strands messages; '' when absent."""
+    prompt, answer = "", ""
+    for message in reversed(list(messages)):
+        if not isinstance(message, dict):
+            continue
+        text = _message_text(message)
+        if not text:
+            continue
+        role = str(message.get("role", "")).lower()
+        if role == "assistant":
+            if prompt:
+                break  # an earlier turn's answer
+            if not answer:
+                answer = text
+        elif role == "user":
+            prompt = text
+            break
+    return prompt, answer
+
+
+class LaunchpadMemoryHook(HookProvider):
+    """AfterInvocationEvent → one AgentCore-shaped turn event at
+    memory/<store>/<actor>/session_<sid>/events/<ts>_<uuid8>.json plus one SQS
+    extraction message {"kind": "memory_extract", ..., "extract_model"?} (the role's row when
+    the deployer wrote LAUNCHPAD_MEMORY_EXTRACT_MODEL, F-LOAD-02); nothing for a turn without an
+    assistant answer (N17-obs304). Fail-soft: logs and returns."""
+
+    def __init__(self, actor_id, session_id):
+        self.actor_id = actor_id
+        self.session_id = session_id
+
+    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        registry.add_callback(AfterInvocationEvent, self._after_invocation)
+
+    def _after_invocation(self, event) -> None:
+        try:
+            env = _memory_env()
+            prompt, answer = _last_turn(getattr(event.agent, "messages", None) or [])
+            answer = answer or str(getattr(event, "result", "") or "").strip()
+            if not answer:
+                # N17-obs304: a failed turn (Strands fires this event in a `finally`; result
+                # None) has a question and no answer — recording it would let the extractor
+                # summarize an unanswered question and invent the answer
+                return
+            ts = datetime.now(UTC)
+            ev = turn_event(self.actor_id, self.session_id, prompt, answer, ts)
+            key = (
+                f"{env['prefix']}/{env['store']}/{self.actor_id}/session_{self.session_id}"
+                f"/events/{event_key(ts, ev['eventId'][:8])}"
+            )
+            _memory_s3().put_object(
+                Bucket=env["bucket"], Key=key, Body=json.dumps(ev).encode(),
+                ContentType="application/json",
+            )
+            if env["queue"]:
+                message = {
+                    "kind": "memory_extract",
+                    "store_id": env["store"],
+                    "actor_id": self.actor_id,
+                    "session_id": self.session_id,
+                    "event_key": key,
+                    "long_term": env["long_term"],
+                }
+                if env["extract_model"]:
+                    # F-LOAD-02: the role's row as deployed (see _memory_env); omitted when
+                    # the deployer wrote none, so the Lambda keeps its env fallback
+                    message["extract_model"] = env["extract_model"]
+                _memory_sqs().send_message(QueueUrl=env["queue"], MessageBody=json.dumps(message))
+        except Exception as exc:
+            print(f"memory hook skipped: {exc}", file=sys.stderr)
+
+
+def make_memory_hooks(actor_id, session_id) -> list:
+    """[] when memory is off, else the one hook to pass as Agent(hooks=...)."""
+    env = _memory_env()
+    if env["store"] and env["bucket"] and _memory_ids_ok(actor_id, session_id):
+        return [LaunchpadMemoryHook(actor_id, session_id)]
+    return []
+# --- end CN memory/KB (N6) ---

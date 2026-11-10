@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { UserGrantInfo, UserGrantStatus } from "./api";
+import { AGENT_PERMISSIONS, type UserGrantInfo, type UserGrantStatus } from "./api";
 import {
   AUTH_POLL_LIMIT_MS,
   AUTH_POLL_MS,
@@ -257,7 +257,7 @@ describe("streamed answer around an auth card", () => {
   });
 
   it("opens a new bubble after a tool event closed the previous one", () => {
-    let m = appendDelta([{ kind: "user", text: "hi" }], "a", false);
+    let m: ChatMessage[] = appendDelta([{ kind: "user", text: "hi" }], "a", false);
     m = [...m, { kind: "tool", text: "t", name: "t" }];
     m = appendDelta(m, "b", false);
     expect(m.map((x) => x.kind)).toEqual(["user", "agent", "tool", "agent"]);
@@ -266,5 +266,11 @@ describe("streamed answer around an auth card", () => {
   it("never appends to a finished bubble from an earlier turn", () => {
     const m = appendDelta([{ kind: "agent", text: "old" }, card], "new", true);
     expect(m.map((x) => x.text)).toEqual(["old", "team-idp", "new"]);
+  });
+});
+
+describe("AGENT_PERMISSIONS (R15: conversion is gone, the enum value stays readable)", () => {
+  it("still lists agents.convert — a stored member row may carry it, even though no UI label grants it anymore", () => {
+    expect(AGENT_PERMISSIONS).toContain("agents.convert");
   });
 });

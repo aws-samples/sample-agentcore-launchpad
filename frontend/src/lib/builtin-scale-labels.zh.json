@@ -1,0 +1,105 @@
+{
+  "_comment": "N17-obs428: zh display text of every built-in evaluator scale label, per evaluator (Yes / No mean different things per evaluator). Display only: stored labels, scores and pass logic never read this. backend/tests/evaluation/test_scale_label_display.py fails on any built-in label missing here; '*' applies to every built-in.",
+  "*": {
+    "NOT_APPLICABLE": "不适用"
+  },
+  "Builtin.GoalSuccessRate": {
+    "Yes": "目标达成",
+    "No": "目标未达成",
+    "success": "目标达成",
+    "failure": "目标未达成"
+  },
+  "Builtin.Helpfulness": {
+    "Not Helpful At All": "完全没有帮助",
+    "Very Unhelpful": "很没有帮助",
+    "Somewhat Unhelpful": "有些没有帮助",
+    "Neutral/Mixed": "中性/好坏参半",
+    "Somewhat Helpful": "有些帮助",
+    "Very Helpful": "非常有帮助",
+    "Above And Beyond": "超出预期"
+  },
+  "Builtin.Correctness": {
+    "Perfectly Correct": "完全正确",
+    "Partially Correct": "部分正确",
+    "Incorrect": "不正确",
+    "Correct": "正确"
+  },
+  "Builtin.Faithfulness": {
+    "Not At All": "完全不忠实",
+    "Not Generally": "大体不忠实",
+    "Neutral/Mixed": "中性/好坏参半",
+    "Generally Yes": "大体忠实",
+    "Completely Yes": "完全忠实"
+  },
+  "Builtin.ResponseRelevance": {
+    "Not At All": "完全不相关",
+    "Not Generally": "大体不相关",
+    "Neutral/Mixed": "中性/好坏参半",
+    "Generally Yes": "大体相关",
+    "Completely Yes": "完全相关"
+  },
+  "Builtin.Coherence": {
+    "Not At All": "完全不连贯",
+    "Not Generally": "大体不连贯",
+    "Neutral/Mixed": "中性/好坏参半",
+    "Generally Yes": "大体连贯",
+    "Completely Yes": "完全连贯"
+  },
+  "Builtin.Conciseness": {
+    "Not Concise": "不简洁",
+    "Partially Concise": "部分简洁",
+    "Perfectly Concise": "非常简洁"
+  },
+  "Builtin.InstructionFollowing": {
+    "Yes": "遵循了指令",
+    "No": "未遵循指令"
+  },
+  "Builtin.Refusal": {
+    "Yes": "已拒答",
+    "No": "未拒答"
+  },
+  "Builtin.Harmfulness": {
+    "Harmful": "有害",
+    "Not Harmful": "无害"
+  },
+  "Builtin.Stereotyping": {
+    "Stereotyping": "存在刻板印象",
+    "Not Stereotyping": "无刻板印象"
+  },
+  "Builtin.ToolSelectionAccuracy": {
+    "Yes": "工具选择正确",
+    "No": "工具选择不当"
+  },
+  "Builtin.ToolParameterAccuracy": {
+    "Yes": "参数正确",
+    "No": "参数有误"
+  },
+  "Builtin.TrajectoryExactOrderMatch": {
+    "Yes": "轨迹匹配",
+    "No": "轨迹不匹配"
+  },
+  "Builtin.TrajectoryInOrderMatch": {
+    "Yes": "轨迹匹配",
+    "No": "轨迹不匹配"
+  },
+  "Builtin.TrajectoryAnyOrderMatch": {
+    "Yes": "轨迹匹配",
+    "No": "轨迹不匹配"
+  },
+  "Builtin.SkillSelectionAccuracy": {
+    "Yes": "技能选择正确",
+    "No": "技能选择不当"
+  },
+  "Builtin.SkillInstructionFollowing": {
+    "Fully Followed": "完全遵循",
+    "Mostly Followed": "大部分遵循",
+    "Partially Followed": "部分遵循",
+    "Minimally Followed": "极少遵循",
+    "Not Followed": "未遵循"
+  },
+  "Builtin.ContextRelevance": {
+    "Not Relevant": "不相关",
+    "Partially Relevant": "部分相关",
+    "Fully Relevant": "完全相关"
+  }
+}

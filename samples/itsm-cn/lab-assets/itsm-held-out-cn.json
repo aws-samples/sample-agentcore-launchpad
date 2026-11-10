@@ -1,0 +1,35 @@
+{
+  "name": "itsm-held-out-cn",
+  "locale": "zh-CN",
+  "description": "独立验收题，不参与提示词优化。",
+  "items": [
+    {
+      "scenario_id": "V01",
+      "split": "held_out",
+      "turns": [
+        {
+          "input": "QD-301刚考完就申请QDocs，为什么培训记录还没同步？",
+          "expected_response": "等待2小时后再在AccessHub申请，只选择编辑者。"
+        }
+      ],
+      "assertions": [
+        "说明2小时同步等待",
+        "不编造其他等待时长"
+      ]
+    },
+    {
+      "scenario_id": "V02",
+      "split": "held_out",
+      "turns": [
+        {
+          "input": "活动核销人数和签到表对不上，可以直接提交吗？",
+          "expected_response": "应核对并保持一致，否则退回；10个工作日内准备完整材料。"
+        }
+      ],
+      "assertions": [
+        "要求人数与签到表一致",
+        "说明退回风险"
+      ]
+    }
+  ]
+}

@@ -4,14 +4,16 @@ English: [setup.md](setup.md)
 
 ## 前置条件
 
-- 已在 `us-west-2` 开启 Bedrock AgentCore 预览的 AWS 账号（Runtime、Harness、
-  Gateway、Policy、Evaluation）；Agent Registry 已 GA（自 2026-08-06 起使用
-  `agent-registry` 命名空间，见 [registry-ga-migration.md](registry-ga-migration.md)），
-  无需开启预览
-- 具备管理员级别权限的凭证(`aws sts get-caller-identity` 可用)
-- `uv` ≥ 0.8、Node.js ≥ 20(`npm`)、AWS CDK CLI v2(`npm i -g aws-cdk`)、
-  Docker(支持 ARM64,第 5 阶段容器路径需要)
-- 每个账号/区域执行一次 CDK bootstrap:`cdk bootstrap aws://<account>/us-west-2`
+- 一个 `cn-northwest-1` 区域的 AWS 账号——AgentCore Runtime、Gateway、Identity
+  和 Observability 在该区域已正式可用，无需开启预览
+- 一个**Global**（海外）AWS 账号的 Amazon Bedrock API key，能访问
+  `global.zai.glm-5.3` 和/或 `global.moonshotai.kimi-k3`（中国区暂无 Bedrock
+  模型，CN Runtime 通过跨 partition 的方式访问它们——见
+  [architecture.md](architecture.md)）
+- `cn-northwest-1` 账号内具备管理员级别权限的凭证（`aws sts get-caller-identity` 可用）
+- `uv` ≥ 0.8、Node.js ≥ 20（`npm`）、AWS CDK CLI v2（`npm i -g aws-cdk`）；只有
+  计划使用 BYOC 的 Dockerfile 路径时才需要 Docker（支持 ARM64）
+- 每个账号/区域执行一次 CDK bootstrap：`cdk bootstrap aws://<account>/cn-northwest-1`
 
 ## 引导(Bootstrap)
 
@@ -44,7 +46,6 @@ bootstrap 还负责安装 Harness 转 Runtime 时使用的 CLI。它会把固定
 | S3 产物桶 | `launchpad-artifacts-<acct>-<region>` |
 | ECR 仓库 | `launchpad-agents` |
 | CodeBuild(ARM64) | `launchpad-agent-builder` |
-| Cognito 用户池 | `launchpad-users`(+ 组 `platform-admin`、`hr-analyst`,演示用户 `admin`/`demo`) |
 | IAM 执行角色 | `launchpad-agent-execution-role` |
 | AgentCore Registry | `launchpad-registry` |
 | AgentCore Memory | `launchpad_memory`(短期事件 + 语义、用户偏好、会话摘要、情节这四种长期策略;对已存在的 memory 重跑 bootstrap 会补齐缺失的策略) |
@@ -53,20 +54,6 @@ bootstrap 还负责安装 Harness 转 Runtime 时使用的 CLI。它会把固定
 
 演示用户密码由 bootstrap 生成并存入 `config/launchpad.yaml`(**已 gitignore**——
 视为本地机密;仓库中提交的是脱敏的 `config/launchpad.example.yaml`)。
-
-### Policy 由用户显式管理
-
-bootstrap 会创建共享 Gateway，但不会创建 Policy Engine、创建 Cedar Policy、挂载
-Engine，也不会替用户选择 Gateway 的执行模式。重跑 bootstrap 时，已有 Policy 资源与
-挂载关系同样保持不变。
-
-需要 Policy 时，请在治理页面中显式纳管目标 Gateway，创建或选择 Engine，以默认
-`ENFORCE` 或可选 `LOG_ONLY` 模式挂载。`ENFORCE` 默认拒绝，因此应在依赖 Gateway
-流量前创建并审核明确放行的 Policy。
-
-bootstrap 仍会为通用可观测性开启 CloudWatch Transaction Search，但不创建逐条 Policy
-决策 span 所需的 per-Gateway CloudWatch Logs delivery。Policy 配置完成后，决策计数
-仍来自 CloudWatch 指标；逐条决策明细需要另行管理 trace delivery。
 
 ## 本地运行
 
@@ -92,7 +79,7 @@ init kwargs，因此环境变量总是压过 bootstrap 生成的那份文件。�
 
 ### 控制台登录
 
-控制台支持本地账户登录,不依赖 Cognito 或其他 AWS 服务。未配置密码时登录网关关闭,
+控制台用本地账户认证——不依赖任何 AWS 身份服务。未配置密码时登录网关关闭,
 此时控制台顶栏会显示 `AUTH OFF` 徽标。
 
 **未认证的控制台只响应 loopback 调用方。** `./start.py --prod` 会把两个服务都绑定到
@@ -119,15 +106,14 @@ HTTP 回传,所以若 TLS 在某处终止后再以 HTTP 转发,登录会静默�
 ### 角色:成员能做什么
 
 只有两个角色,自 2026-08-11 起两者只差一处:**用户管理**(`/users`)仅限管理员,
-**控制台的其余全部功能对成员开放** —— 注册表的注册/编辑/导入、知识库变更、评估
-数据集/评估器/运行、AB 实验与金丝雀、Cedar 策略写入、API Key、Studio 画布,以及
+**控制台的其余全部功能对成员开放** —— 注册表的注册/编辑/导入、知识库变更、
+API Key、Studio 画布,以及
 浏览器 / 代码解释器 demo。权威清单是 `backend/app/core/route_policy.py` 里的表;
 未登记的路由会被拒绝而不是放行。(本地代码执行在生产模式下对所有角色一律禁用,
 除非用 `LAUNCHPAD_STUDIO_LOCAL_EXEC_ENABLED` 显式打开。)
 
 仍有一小组能力**可在用户管理控制台按用户撤销**:智能体生命周期(部署、导入、删除、
-转换)以及发起评估/洞察运行。成员默认全部持有;撤销后即可对该账号关闭部署与计费的
-评估任务。
+转换)。成员默认全部持有;撤销后即可对该账号关闭部署。
 
 注意控制台没有按用户的数据隔离:每个成员看到并可修改同一套共享资源,因此成员账号
 只应发给可以托付整个环境的人。
@@ -161,6 +147,17 @@ Harness），并提交审核；只有当你**在 Registry 中批准**之后，�
 标签：没有人能在控制台编辑、重新导入或删除它，成员可以查看与挂载，管理员负责其审批；卸载预置会
 保留该记录。
 **实机冒烟尚未完成**（见 architecture.zh-CN.md →“系统托管预置”）。
+
+**自动修复（N17-obs206）。** 已安装的预置会在模型目录变化（在设置 → 模型提供方中新增或删除提供方、
+模型）或新构建带来更新的技能包时落后。主机会自行修复**所有** Workspace 中已安装、运行中且落后的预置
+——启动后 60 秒以及最后一次目录变更后 180 秒（连续多次编辑只巡检一次），每次只部署一个——期间卡片
+显示「自动修复中」。以下为 `config/launchpad.yaml` 的键（或带 `LAUNCHPAD_` 前缀的环境变量，后者优先）：
+
+| 配置项 | 默认值 | 作用 |
+|---|---|---|
+| `system_presets_auto_repair` | `true` | 设为 false 关闭自动巡检（启动与目录变更两个触发点）；卡片上的「修复快照」仍可用。 |
+| `system_presets_auto_repair_start_delay_s` | `60` | 启动后多少秒进行首次巡检（0–3600）。 |
+| `system_presets_auto_repair_debounce_s` | `180` | 最后一次影响目录的注册表写入后静默多少秒再巡检（0–3600）。 |
 
 ### 架构助手
 
@@ -283,9 +280,8 @@ cd backend && uv run python scripts/migrate_pin_requirements.py --apply
 在该次部署上。镜像标签刻意保持**可变**:打包发生在版本号递增之前,因此重新发布会把
 同一个标签推送两次,不可变标签策略会让第二次推送失败。
 
-> **两套环境都要应用。** scan-on-push 是 CDK 改动,所以 `make bootstrap` 需要在
-> `us-west-2` **和** `us-east-1` 主机上各跑一次。在此之前,那台主机上的闸门会报告
-> 无法读取扫描结果。
+> **scan-on-push 是 CDK 改动。** 要在既有部署上生效需要重新执行 `make
+> bootstrap`;在那之前,闸门会报告无法读取扫描结果。
 
 > **默认阈值第一天就会拦住部署。** 对现役 demo 镜像实测扫描得到 **4 个 CRITICAL**,
 > 全部是 Debian 基础镜像里未修补的 OS 包(`glibc`、`perl`),而不是本项目安装的任何东西
@@ -465,57 +461,33 @@ Cookie 过期。
 
 ## 生产部署
 
-`./start.py --prod` 只是本地预览:构建前端、提供构建产物、关闭后端自动重载,并绑定到
-`0.0.0.0`。长期运行的主机应改用进程管理器托管这两个服务,并在前面放一层终结 TLS 的
-边缘。参考部署(workshop EC2 + CloudFront)的单元文件与实测过的更新流程见
-[agent-runbook-prod.md](agent-runbook-prod.md#3-shape-b--systemd-reference-the-us-east-1-box),其拓扑为:
+从零搭建主机时使用 `infra/ec2/launchpad-cn-ec2.yaml`（全新机器上不需要任何 CDK
+工具链）——确切的参数与验证命令见
+[docs/cn/interfaces/deploy.md](cn/interfaces/deploy.md)。其 systemd/nginx 拓扑为：
 
 ```text
-浏览器 → CloudFront(TLS、不缓存、放通全部方法、注入一个密钥请求头)
-           └─ 实例上的 nginx :80 —— 缺少该请求头的请求直接拒绝
-                ├─ /api/、/v1/ → 127.0.0.1:8000   (后端,SSE 需要 proxy_buffering off)
-                └─ /、/assets/ → 127.0.0.1:5173    (vite preview 提供 frontend/dist)
+浏览器（仅限 AllowedCidr）→ 实例上的 nginx :80 或 :443
+                                 ├─ /api/、/v1/ → 127.0.0.1:8000   （后端，SSE 需要 proxy_buffering off）
+                                 └─ /、/assets/ → 127.0.0.1:5173    （vite preview 提供 frontend/dist）
 ```
 
-**1. 托管两个进程。** 认证配置写在后端单元里,没有别的东西会替你开启网关:
+没有 CloudFront，没有公开的 ALB（spec 决策：v1 只在私有网络内交付——见
+[docs/architecture.md](architecture.md)）。`LAUNCHPAD_AUTH_COOKIE_SECURE` 跟随
+TLS 的终结位置：模板的 `TlsMode=none`（受信任 CIDR 内的纯 HTTP）用 `false`，
+`TlsMode=selfsigned` 用 `true`。Global Bedrock API key 只经由实例角色在启动时
+读取的一个 SSM SecureString 参数到达主机——绝不作为 CloudFormation 参数值，
+也绝不写入日志（spec C4）。
 
-```ini
-# /etc/systemd/system/launchpad-backend.service   (节选)
-[Service]
-WorkingDirectory=/home/ubuntu/workspace/agentcore_launchpad/backend
-Environment=LAUNCHPAD_RUN_MODE=prod
-Environment=LAUNCHPAD_AUTH_USERNAME=admin
-Environment=LAUNCHPAD_AUTH_PASSWORD=<strong-password>
-Environment=LAUNCHPAD_AUTH_COOKIE_SECURE=true
-ExecStart=/home/ubuntu/.local/bin/uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
-Restart=on-failure
-```
+**可选的固定公网 IP（N12-obs52，用户决策 2026-10-16）。**
+`infra/ec2/launchpad-console-nlb.yaml` 新增一个独立、可单独删除的栈：在默认主机前放一台
+带静态弹性 IP 的 Network Load Balancer，**仅在 8443** 做 TCP 透传（主机的自签名 TLS 不变），
+默认**对任意来源 IP 开放**（`AccessMode=OpenToInternet`；`AllowedCidrs` 保留白名单模式）——
+控制台登录是唯一的门，因此请保持强管理员密码和上文的注册管控。每个主机栈各配一个栈
+（每个主机栈拥有自己的 VPC；t1 暂不接入）。删除该栈时弹性 IP 会被保留（对外公布的地址
+不会消失；需要时手工释放）。命令、注意事项与删除顺序见
+[docs/cn/interfaces/deploy.md §9](cn/interfaces/deploy.md#9-console-nlb-fixed-public-ip-n12-obs52)；`scripts/ec2-console-nlb.sh` 封装了这些命令。
 
-```ini
-# /etc/systemd/system/launchpad-frontend.service  (节选)
-[Service]
-WorkingDirectory=/home/ubuntu/workspace/agentcore_launchpad/frontend
-Requires=launchpad-backend.service
-ExecStart=/usr/bin/npm run preview -- --host 127.0.0.1 --port 5173 --strictPort
-Restart=on-failure
-```
-
-`vite preview` 提供的是 `frontend/dist`,所以**前端每次改动都必须先
-`npm run build` 再重启**。两个进程都绑定 `127.0.0.1`,对外只暴露反向代理。
-
-**2. 封闭 origin。** CloudFront 注入一个自定义请求头(如
-`X-Launchpad-Origin-Key`),nginx 拒绝不带该头的请求,这样直连实例公网 IP 无法绕过
-CDN:
-
-```nginx
-if ($http_x_launchpad_origin_key != "<shared-secret>") { return 403; }
-proxy_set_header X-Forwarded-Proto https;   # TLS 在 CloudFront 终结
-```
-
-由于 TLS 在边缘终结,`LAUNCHPAD_AUTH_COOKIE_SECURE=true` 必须保持开启;纯 HTTP 下
-浏览器会丢弃会话 Cookie。
-
-**3. 更新已有主机。**
+**1. 更新已有主机。**
 
 ```bash
 cp data/launchpad.db data/launchpad.db.bak-$(date +%Y%m%d-%H%M)

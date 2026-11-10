@@ -5,12 +5,14 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from app.core.errors import AppError
+from app.deployer.pipeline import method_capabilities, registered_methods
 from app.routers.workspaces import WorkspaceScope, require_workspace
-from app.services import mcp_client
+from app.services import aws_clients, mcp_client
+from app.services.agentcore import browser_stream
 from app.services.agentcore.client import control_client
 from app.services.workspace import WorkspaceContext
 
@@ -41,6 +43,17 @@ BUILTIN_TOOLS = [
     },
 ]
 
+
+def builtin_methods(name: str) -> list[str]:
+    """The deploy methods whose declared domain renders builtin ``name`` (round 16: read
+    off ``MethodCapabilities.builtin_tools``; N15-obs16: the V2 wizard offers a builtin only
+    where it renders — elsewhere `POST /api/agents` answers 422 `agent.method_unsupported`)."""
+    return [m for m in registered_methods() if name in method_capabilities(m).builtin_tools]
+
+
+for _row in BUILTIN_TOOLS:
+    _row["methods"] = builtin_methods(_row["name"])
+
 # Per workspace: the gateway tool catalog belongs to one environment's gateway.
 _cache: dict[str, dict[str, Any]] = {}
 
@@ -65,19 +78,50 @@ class _BrowserDemoSession:
 _browser_demo_sessions: dict[str, _BrowserDemoSession] = {}
 
 
+def _console_principal(request: Request) -> Any:
+    """Stream A2b: who asks — the governed Gateway sees the console user (I2)."""
+    from app.routers.auth import require_identity
+    from app.services.policy_entities import Principal
+
+    return Principal.from_identity(require_identity(request))
+
+
+def _principal_kwargs(principal: Any) -> dict[str, Any]:
+    """``{"principal": …}`` only while the interceptor switch may be on — off, the client is
+    called exactly as before (stream A2b is inert)."""
+    from app.core.config import get_settings
+
+    return {"principal": principal} if get_settings().policy_gateway_interceptor else {}
+
+
+def _cache_key(workspace_id: str, principal: Any) -> str:
+    """The workspace alone while the interceptor switch is off (as before); per principal
+    once it may be on — the Gateway then answers tools/list per user."""
+    from app.core.config import get_settings
+
+    if not get_settings().policy_gateway_interceptor:
+        return workspace_id
+    return f"{workspace_id}|{principal.kind}:{principal.id}"
+
+
 @router.get("/tools")
 def list_tools(
+    request: Request,
     refresh: bool = False,
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    slot = _cache.setdefault(ws.id, {"tools": None, "at": 0.0})
+    principal = _console_principal(request)
+    # with the interceptor on, the Gateway filters tools/list per user: never share one
+    # user's list with another through the cache
+    key = _cache_key(ws.id, principal)
+    slot = _cache.setdefault(key, {"tools": None, "at": 0.0})
     gateway_tools: list[dict[str, Any]] = []
     gateway_error: str | None = None
     if not refresh and slot["tools"] is not None and time.time() - slot["at"] < 60:
         gateway_tools = slot["tools"]
     else:
         try:
-            raw = mcp_client.tools_list(ws.context)
+            raw = mcp_client.tools_list(ws.context, **_principal_kwargs(principal))
             gateway_tools = [
                 {
                     "name": t["name"],
@@ -85,7 +129,7 @@ def list_tools(
                     "target": t["name"].split("___")[0] if "___" in t["name"] else "",
                     "description": t.get("description", ""),
                     "inputSchema": t.get("inputSchema", {}),
-                    "auth": "Cognito JWT · via launchpad-gw",
+                    "auth": "IAM · via launchpad-gw",
                 }
                 for t in raw
             ]
@@ -107,9 +151,11 @@ class ToolCallRequest(BaseModel):
 @router.post("/tools/call")
 def call_tool(
     req: ToolCallRequest,
+    request: Request,
     ws: WorkspaceScope = Depends(require_workspace),
 ) -> dict[str, Any]:
-    return mcp_client.tools_call(ws.context, req.name, req.arguments)
+    return mcp_client.tools_call(ws.context, req.name, req.arguments,
+                                 **_principal_kwargs(_console_principal(request)))
 
 
 class CodeDemoRequest(BaseModel):
@@ -270,6 +316,20 @@ def browser_demo_options(
     }
 
 
+# N17-obs258 (user ruling 2026-10-22): Web Bot Auth request signing does not exist in
+# the China partition — `CreateBrowser` with `browserSigning.enabled=true` answers
+# ValidationException "Browser signing configuration is not enabled in this environment"
+# in both cn-northwest-1 and cn-north-1, so no signed browser can ever be READY there.
+# One partition-derived answer drives `GET /api/capabilities.tools.browser_signing` (the
+# console hides the Web Bot Auth toggle) and the 409 below (a client that still asks).
+_BROWSER_SIGNING_UNSUPPORTED_PARTITIONS = frozenset({"aws-cn"})
+
+
+def browser_signing_supported(workspace: WorkspaceContext) -> bool:
+    """Whether the workspace's partition offers Web Bot Auth browser signing."""
+    return workspace.partition not in _BROWSER_SIGNING_UNSUPPORTED_PARTITIONS
+
+
 def _assert_browser_demo_available(workspace: WorkspaceContext) -> None:
     """Refuse the browser demo in a cross-account workspace.
 
@@ -301,6 +361,14 @@ def _resolve_browser_demo_configuration(
             "tools.browser_profile_required",
             "select a browser profile before enabling profile save",
             status_code=422,
+        )
+
+    if req.web_bot_auth and not browser_signing_supported(workspace):
+        raise AppError(
+            "browser.signing_unsupported_in_partition",
+            "Web Bot Auth browser signing is not available in this partition",
+            {"partition": workspace.partition},
+            status_code=409,
         )
 
     browser_identifier = BROWSER_DEMO_DEFAULT_IDENTIFIER
@@ -432,6 +500,7 @@ def demo_browser(
     browser_identifier, profile_identifier = _resolve_browser_demo_configuration(
         req, ws.context
     )
+    credentials = _demo_signing_credentials(ws.context)
     client = BrowserClient(region=ws.context.region)
     started = time.monotonic()
     retained = False
@@ -446,7 +515,11 @@ def demo_browser(
                 "profileIdentifier": profile_identifier
             }
         client.start(**start_kwargs)
-        ws_url, headers = client.generate_ws_headers()
+        # N15-obs17: SDK 1.17.0 `generate_ws_headers` / `generate_live_view_url` build a
+        # Global-only host (ENOTFOUND in aws-cn); both URLs are signed here from the
+        # client's resolved data-plane endpoint instead (shared recipe with the Harness
+        # builtin — services/agentcore/browser_stream.py).
+        ws_url, headers = browser_stream.stream_endpoint(client, credentials)
         with sync_playwright() as pw:
             browser = pw.chromium.connect_over_cdp(ws_url, headers=headers)
             context = browser.contexts[0] if browser.contexts else browser.new_context()
@@ -455,8 +528,8 @@ def demo_browser(
             title = page.title()
             # Exiting Playwright disconnects automation while the AgentCore session
             # remains alive for the DCV Live View client.
-        live_view_url = client.generate_live_view_url(
-            expires=BROWSER_DEMO_SESSION_SECONDS
+        live_view_url = browser_stream.live_view_url(
+            client, credentials, expires=BROWSER_DEMO_SESSION_SECONDS
         )
         _retain_browser_demo_session(
             client,
@@ -479,12 +552,42 @@ def demo_browser(
             "profile_identifier": profile_identifier,
             "save_profile": req.save_profile,
         }
+    except AppError:
+        raise
+    except Exception as exc:
+        # N15-obs17: a failing session start / stream dial / navigation used to escape as a
+        # plain-text 500; it is one bounded envelope now (the session is stopped below)
+        raise AppError(
+            "demo.browser_failed",
+            "the browser demo failed",
+            {"reason": _demo_failure_reason(exc)},
+            status_code=502,
+        ) from exc
     finally:
         if not retained:
             try:
                 client.stop()
             except Exception:
                 pass
+
+
+def _demo_signing_credentials(workspace: WorkspaceContext) -> Any:
+    """The credentials the demo signs the session's stream / live-view URLs with: the
+    workspace's own session from the one client funnel (C2). The demo only runs under the
+    hub's credentials (`_assert_browser_demo_available`), so these are the credentials the
+    SDK's `BrowserClient` resolved for its own clients as well."""
+    return aws_clients.get_session(
+        workspace.account_id, workspace.region, workspace.role_arn, workspace.external_id
+    ).get_credentials()
+
+
+DEMO_FAILURE_REASON_CHARS = 300
+
+
+def _demo_failure_reason(exc: BaseException) -> str:
+    """One bounded line (`Type: message`), the shape the Harness browser tool reports with
+    — never a traceback, never more than `DEMO_FAILURE_REASON_CHARS` characters."""
+    return " ".join(f"{type(exc).__name__}: {exc}".split())[:DEMO_FAILURE_REASON_CHARS]
 
 
 @router.delete("/demos/browser/{session_id}")

@@ -23,9 +23,17 @@ import {
   MEMORY_NAME_RE,
   MEMORY_STRATEGY_KEYS,
   MEMORY_STRATEGY_NAMESPACES,
+  MERGE_BOUNDS,
+  MERGE_DEFAULTS,
+  MERGE_KEYS,
   type MemoryStrategyKey,
+  type MergeKey,
+  mergeFormValue,
+  mergePatch,
+  mergeValueValid,
 } from "../../../lib/memory";
-import { fmtTime } from "../../format";
+import { awsStatusLabel } from "../../awsStatus";
+import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
   Alert,
@@ -217,11 +225,12 @@ export function ResourceList() {
       title: t("v2.memory.colStatus"),
       render: (row) => (
         <Tag tone={statusTone(row.status)} dot>
-          {row.status ?? "—"}
+          {awsStatusLabel(t, row.status)}
         </Tag>
       ),
     },
     { key: "agents", title: t("v2.memory.colUsedBy"), render: (row) => <UsedBy row={row} /> },
+    { key: "creator", title: t("v2.common.creator"), render: (row) => creatorLabel(row) },
     { key: "created", title: t("v2.memory.colCreated"), className: "nowrap", render: (row) => fmtTime(row.created_at) },
     { key: "updated", title: t("v2.memory.colUpdated"), className: "nowrap", render: (row) => fmtTime(row.updated_at) },
     {
@@ -288,7 +297,7 @@ export function ResourceList() {
             value={status}
             allLabel={t("v2.common.all")}
             onChange={setStatus}
-            options={statuses.map((s) => ({ value: s, label: s }))}
+            options={statuses.map((s) => ({ value: s, label: awsStatusLabel(t, s) }))}
           />
           <div className="end">
             <SearchInput value={q} onChange={setQ} placeholder={t("v2.memory.res.search")} />
@@ -313,6 +322,84 @@ export function ResourceList() {
   );
 }
 
+/** r14-a (N14-obs1): the merge strategy v2 knobs of a store, read-only. */
+function MergeSummary({ merge }: { merge: MemoryResourceDetail["merge"] }) {
+  const { t } = useTranslation();
+  const current = { ...MERGE_DEFAULTS, ...(merge ?? {}) };
+  return (
+    <Descriptions
+      items={MERGE_KEYS.map((key) => ({
+        label: t(`v2.memory.merge.${key}`),
+        value:
+          current[key] == null
+            ? t("v2.memory.merge.keepForever")
+            : key === "actor_summary_interval"
+              ? t("v2.memory.merge.everyN", { count: current[key] as number })
+              : key.endsWith("_days")
+                ? t("memoryPage.overview.daysValue", { count: current[key] as number })
+                : String(current[key]),
+      }))}
+    />
+  );
+}
+
+/** N14-obs2: whether a knob's field text is acceptable. On create an empty field means
+ *  "use the default" (the API omits the knob — what the card promises); on edit an empty
+ *  non-nullable knob stays invalid (`parseMergeValue`), the nullable one resets to "keep". */
+function mergeFieldValid(key: MergeKey, raw: string, emptyIsDefault: boolean): boolean {
+  return (emptyIsDefault && raw.trim() === "") || mergeValueValid(key, raw);
+}
+
+/** The five merge knobs as a form; `form` holds the field texts (empty = default / keep). */
+function MergeFields({
+  form,
+  onChange,
+  disabled,
+  emptyIsDefault,
+}: {
+  form: Record<MergeKey, string>;
+  onChange: (key: MergeKey, value: string) => void;
+  disabled: boolean;
+  /** create mode: an empty field is the default, never an error */
+  emptyIsDefault: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="v2-form cols-2">
+      {MERGE_KEYS.map((key) => {
+        const [min, max] = MERGE_BOUNDS[key];
+        const valid = mergeFieldValid(key, form[key], emptyIsDefault);
+        const fallback = MERGE_DEFAULTS[key];
+        return (
+          <Field
+            key={key}
+            label={t(`v2.memory.merge.${key}`)}
+            hint={t(`v2.memory.merge.${key}Hint`, { min, max })}
+            error={valid ? null : t("v2.memory.merge.invalid", { min, max })}
+          >
+            <input
+              className="v2-input mono"
+              type="number"
+              min={min}
+              max={max}
+              value={form[key]}
+              disabled={disabled}
+              placeholder={fallback == null ? t("v2.memory.merge.keepForever") : String(fallback)}
+              onChange={(e) => onChange(key, e.target.value)}
+              aria-label={t(`v2.memory.merge.${key}`)}
+              data-testid={`v2-memory-merge-${key}`}
+            />
+          </Field>
+        );
+      })}
+    </div>
+  );
+}
+
+function emptyMergeForm(): Record<MergeKey, string> {
+  return Object.fromEntries(MERGE_KEYS.map((k) => [k, ""])) as Record<MergeKey, string>;
+}
+
 function StrategyTable({ strategies }: { strategies: MemoryResourceStrategy[] }) {
   const { t } = useTranslation();
   const columns: Column<MemoryResourceStrategy>[] = [
@@ -332,7 +419,7 @@ function StrategyTable({ strategies }: { strategies: MemoryResourceStrategy[] })
       title: t("v2.memory.colStatus"),
       render: (s) => (
         <Tag tone={statusTone(s.status)} dot>
-          {s.status ?? "—"}
+          {awsStatusLabel(t, s.status)}
         </Tag>
       ),
     },
@@ -405,7 +492,7 @@ export function ResourceDetail({ id }: { id: string }) {
           <span className="v2-row">
             {mem.name ?? id}
             <Tag tone={statusTone(mem.status)} dot>
-              {mem.status ?? "—"}
+              {awsStatusLabel(t, mem.status)}
             </Tag>
             {mem.is_default && <Tag tone="orange">{t("v2.memory.res.default")}</Tag>}
           </span>
@@ -437,7 +524,7 @@ export function ResourceDetail({ id }: { id: string }) {
         }
       />
       {mem.failure_reason && <Alert tone="error">{mem.failure_reason}</Alert>}
-      {transient && <Alert tone="info">{t("v2.memory.res.transient", { status: mem.status })}</Alert>}
+      {transient && <Alert tone="info">{t("v2.memory.res.transient", { status: awsStatusLabel(t, mem.status) })}</Alert>}
       {mem.is_default && <Alert tone="info">{t("memoryPage.resources.saveBodyDefault")}</Alert>}
       <Card title={t("v2.memory.res.summary")}>
         <Descriptions
@@ -466,12 +553,16 @@ export function ResourceDetail({ id }: { id: string }) {
             },
             { label: t("v2.memory.colUsedBy"), value: <UsedBy row={row} /> },
             { label: t("memoryPage.overview.createdAt"), value: fmtTime(mem.created_at) },
+            { label: t("v2.common.creator"), value: creatorLabel(mem) },
             { label: t("memoryPage.overview.updatedAt"), value: fmtTime(mem.updated_at) },
           ]}
         />
       </Card>
       <Card title={t("memoryPage.overview.strategiesTitle")} sub={t("memoryPage.overview.strategiesSub")}>
         <StrategyTable strategies={mem.strategies} />
+      </Card>
+      <Card title={t("v2.memory.merge.title")} sub={t("v2.memory.merge.sub")} testId="v2-memory-res-merge">
+        <MergeSummary merge={mem.merge} />
       </Card>
       {mem.namespace_keys.length > 0 && (
         <Card title={t("v2.memory.res.nsKeys")}>
@@ -515,6 +606,8 @@ export function ResourceEditor({ id }: { id: string | null }) {
   const [description, setDescription] = useState("");
   const [expiryDays, setExpiryDays] = useState(DEFAULT_EXPIRY_DAYS);
   const [strategies, setStrategies] = useState<MemoryStrategyKey[]>(DEFAULT_MEMORY_STRATEGIES);
+  // r14-a: merge strategy v2 knobs as field texts (empty = default / keep forever)
+  const [mergeForm, setMergeForm] = useState<Record<MergeKey, string>>(emptyMergeForm);
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmSave, setConfirmSave] = useState(false);
@@ -524,14 +617,34 @@ export function ResourceEditor({ id }: { id: string | null }) {
     if (!detail) return;
     setDescription(detail.description ?? "");
     setExpiryDays(detail.event_expiry_days ?? DEFAULT_EXPIRY_DAYS);
+    const current = { ...MERGE_DEFAULTS, ...(detail.merge ?? {}) };
+    setMergeForm(Object.fromEntries(MERGE_KEYS.map((k) => [k, mergeFormValue(current[k])])) as Record<MergeKey, string>);
   }, [detail]);
   const row = list.data?.items.find((r) => r.id === id) ?? null;
+  // what the knobs are compared against: the stored values on edit, the defaults on create
+  const mergeCurrent: Record<MergeKey, number | null> = { ...MERGE_DEFAULTS, ...(detail?.merge ?? {}) };
+  // N14-obs2: on create an empty knob is the default (omitted from the body — `mergePatch`
+  // skips it), so a form with only the name filled is valid and sends no `merge` block
+  const mergeValid = MERGE_KEYS.every((k) => mergeFieldValid(k, mergeForm[k], !editing));
+  const mergeChanges = mergeValid ? mergePatch(mergeForm, mergeCurrent) : {};
+  const mergeChanged = Object.keys(mergeChanges).length > 0;
 
   const back = () => (id ? setParams({ view: "resource", id }) : setParams({ tab: "resources" }));
 
   // create validation
   const nameErr = !editing && (touched || name) && !MEMORY_NAME_RE.test(name) ? t("memoryPage.resources.nameInvalid") : null;
   const createExpiryOk = expiryValid(expiryDays, CREATE_EXPIRY_MIN);
+  // N14-obs2: why the Create button is disabled, or null — the same fields show the error,
+  // so an invalid form can never be submitted silently
+  const createReason: string | null = editing
+    ? null
+    : !MEMORY_NAME_RE.test(name)
+      ? t("memoryPage.resources.nameInvalid")
+      : !createExpiryOk
+        ? t("v2.memory.res.expiryRange", { min: CREATE_EXPIRY_MIN, max: EXPIRY_MAX })
+        : !mergeValid
+          ? t("v2.memory.merge.someInvalid")
+          : null;
 
   // edit diff — validity judged per changed field so a memory created with a
   // 3-day expiry can still have its description edited
@@ -546,9 +659,11 @@ export function ResourceEditor({ id }: { id: string | null }) {
         ? t("memoryPage.resources.editDescriptionRequired")
         : expiryChanged && !expiryValid(expiryDays, EDIT_EXPIRY_MIN)
           ? t("memoryPage.resources.editExpiryInvalid")
-          : !descChanged && !expiryChanged
-            ? t("memoryPage.resources.editNothingChanged")
-            : null;
+          : !mergeValid
+            ? t("v2.memory.merge.someInvalid")
+            : !descChanged && !expiryChanged && !mergeChanged
+              ? t("memoryPage.resources.editNothingChanged")
+              : null;
 
   const expiryErr = editing
     ? expiryChanged && !expiryValid(expiryDays, EDIT_EXPIRY_MIN)
@@ -564,13 +679,15 @@ export function ResourceEditor({ id }: { id: string | null }) {
 
   const create = async () => {
     setTouched(true);
-    if (!MEMORY_NAME_RE.test(name) || !createExpiryOk) return;
+    if (createReason !== null) return; // unreachable from the UI: the button is disabled
     const input: MemoryResourceCreateInput = {
       name,
       description: trimmed,
       event_expiry_days: expiryDays,
       strategies: MEMORY_STRATEGY_KEYS.filter((k) => strategies.includes(k)),
     };
+    // only knobs set away from their defaults go on the wire
+    if (mergeChanged) input.merge = mergeChanges;
     setBusy(true);
     try {
       const created = await api.memoryResourceCreate(input);
@@ -589,6 +706,7 @@ export function ResourceEditor({ id }: { id: string | null }) {
     const input: MemoryResourceUpdateInput = {};
     if (descChanged) input.description = trimmed;
     if (expiryChanged) input.event_expiry_days = expiryDays;
+    if (mergeChanged) input.merge = mergeChanges; // a cleared knob is sent as null (= reset)
     setBusy(true);
     try {
       await api.memoryResourceUpdate(id, input);
@@ -607,6 +725,7 @@ export function ResourceEditor({ id }: { id: string | null }) {
   const saveBody = [
     t("memoryPage.resources.saveBody", { id: id ?? "" }),
     expiryChanged ? t("memoryPage.resources.saveBodyExpiry", { days: expiryDays }) : null,
+    mergeChanged ? t("v2.memory.merge.saveBody", { count: Object.keys(mergeChanges).length }) : null,
     detail?.is_default ? t("memoryPage.resources.saveBodyDefault") : null,
     row && row.agents.length > 0
       ? t("memoryPage.resources.saveBodyAgents", { count: row.agents.length, names: row.agents.map((a) => a.name).join(", ") })
@@ -642,7 +761,7 @@ export function ResourceEditor({ id }: { id: string | null }) {
         end={
           <>
             {/* field errors already explain themselves; "nothing changed" has no field */}
-            {editing && !descChanged && !expiryChanged && <span className="v2-muted v2-memory-reason">{t("memoryPage.resources.editNothingChanged")}</span>}
+            {editing && !descChanged && !expiryChanged && !mergeChanged && <span className="v2-muted v2-memory-reason">{t("memoryPage.resources.editNothingChanged")}</span>}
             <Button onClick={back}>{t("v2.common.cancel")}</Button>
             {editing ? (
               <Button
@@ -655,7 +774,13 @@ export function ResourceEditor({ id }: { id: string | null }) {
                 {busy ? t("memoryPage.resources.saving") : t("v2.common.save")}
               </Button>
             ) : (
-              <Button kind="primary" disabled={busy} onClick={() => void create()} testId="v2-memory-res-create">
+              <Button
+                kind="primary"
+                disabled={createReason !== null || busy}
+                title={createReason ?? undefined}
+                onClick={() => void create()}
+                testId="v2-memory-res-create"
+              >
                 {busy ? t("memoryPage.resources.creating") : t("v2.common.create")}
               </Button>
             )}
@@ -738,6 +863,15 @@ export function ResourceEditor({ id }: { id: string | null }) {
             {strategies.length === 0 && <Alert tone="warn">{t("memoryPage.resources.nsPreviewNoStrategies")}</Alert>}
           </>
         )}
+      </Card>
+      <Card title={t("v2.memory.merge.title")} sub={t("v2.memory.merge.sub")} testId="v2-memory-res-merge">
+        <MergeFields
+          form={mergeForm}
+          onChange={(key, value) => setMergeForm((prev) => ({ ...prev, [key]: value }))}
+          disabled={busy}
+          emptyIsDefault={!editing}
+        />
+        <p className="v2-muted v2-memory-hint">{t("v2.memory.merge.hint")}</p>
       </Card>
       <Confirm
         open={confirmSave}

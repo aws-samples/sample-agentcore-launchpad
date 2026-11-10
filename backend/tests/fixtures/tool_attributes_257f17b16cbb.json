@@ -1,0 +1,14 @@
+{
+ "source": "session 257f17b16cbb (run fb8a7e230b11): the gen_ai.agent.tools / gen_ai.tool.description attributes obs315_preamble_session.json strips, copied verbatim from the same real aws/spans records (research-obs315 raw, read 2026-10-23); keyed by spanId",
+ "attributes": {
+  "8bc7127dc51c2fe1": {
+   "gen_ai.tool.description": "Search the mounted knowledge bases with one k-NN similarity search over their indexed passages and return the matches with their source. Mounted: travel-expense-kb. Fast and cheap — prefer it for a single fact you can name. Leave kb_id empty to search all of them; pass one kb_id to target a single knowledge base."
+  },
+  "9f656fc0421a1cd1": {
+   "gen_ai.tool.description": "Look up an employee record by employee id (format EMP-NNNN). Returns name, department, role and vacation-day balances including days remaining this year."
+  },
+  "50a71f02742d68d6": {
+   "gen_ai.agent.tools": "[\"code_interpreter\", \"shell\", \"file_operations\", \"kb_search\", \"kb_deep_search\", \"launchpad_gw_hr-database___get_employee\", \"skills\"]"
+  }
+ }
+}

@@ -18,22 +18,22 @@ Vendor shapes come from the botocore `bedrock-agentcore-control` service model
 import logging
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
 
 from botocore.exceptions import ClientError
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, IdentityProvider
+from app.models.model_registry import ModelProvider
 from app.schemas.inbound_auth import (
     discovery_url_for_issuer,
     issuer_from_discovery_url,
     normalize_issuer,
 )
-from app.services import inbound_auth, oauth_sessions
+from app.services import creators, inbound_auth, oauth_sessions
 from app.services.gateway_bootstrap import (
-    API_KEY_PROVIDER_NAME,
-    GATEWAY_M2M_PROVIDER_NAME,
+    api_key_provider_name,
+    gateway_m2m_provider_name,
 )
 
 logger = logging.getLogger("launchpad.identity_providers")
@@ -45,7 +45,12 @@ KIND_API_KEY = "api_key"
 KINDS = (KIND_OAUTH2, KIND_API_KEY)
 
 # Vault-owned providers the platform depends on; never deletable here.
-SYSTEM_PROVIDER_NAMES = frozenset({GATEWAY_M2M_PROVIDER_NAME, API_KEY_PROVIDER_NAME})
+
+
+def system_provider_names() -> frozenset[str]:
+    """The two server-owned provider names in THIS environment (N11: suffixed with
+    `Settings.env_name`, so another environment's providers are ordinary Connections)."""
+    return frozenset({gateway_m2m_provider_name(), api_key_provider_name()})
 
 # Acting modes Launchpad knows, and where each executes: `as_user` (3LO)
 # shipped in P2; `obo` (token exchange, P3) is performed by the gateway, so it
@@ -68,12 +73,10 @@ OBO_ACTOR_CONTENTS = ("NONE", "M2M")
 # CredentialProviderVendorType members the console offers, mapped to the
 # oauth2ProviderConfigInput key that carries their config. CustomOauth2 is the
 # only member whose input takes endpoints; the others take {clientId,
-# clientSecret}. The newer vendors (Okta, Auth0, Cognito, ...) ride
+# clientSecret}. The newer vendors (Okta, Auth0, ...) ride
 # `includedOauth2ProviderConfig`; they are refused rather than guessed.
 VENDOR_CONFIG_KEYS: dict[str, str] = {
     "CustomOauth2": "customOauth2ProviderConfig",
-    "GoogleOauth2": "googleOauth2ProviderConfig",
-    "GithubOauth2": "githubOauth2ProviderConfig",
     "SlackOauth2": "slackOauth2ProviderConfig",
     "SalesforceOauth2": "salesforceOauth2ProviderConfig",
     "MicrosoftOauth2": "microsoftOauth2ProviderConfig",
@@ -85,16 +88,6 @@ VENDOR_CONFIG_KEYS: dict[str, str] = {
 # shows; the console localizes labels by template id (`v2.connections.tpl.<id>`).
 # `discovery_hint` is a placeholder only, never a default.
 TEMPLATES: tuple[dict[str, Any], ...] = (
-    {
-        "id": "cognito",
-        "kind": KIND_OAUTH2,
-        "vendor": "CustomOauth2",
-        "fields": ["client_id", "client_secret", "discovery_url", "scopes"],
-        "discovery_hint": (
-            "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>"
-            "/.well-known/openid-configuration"
-        ),
-    },
     {
         "id": "custom_oidc",
         "kind": KIND_OAUTH2,
@@ -123,8 +116,6 @@ TEMPLATES: tuple[dict[str, Any], ...] = (
             "fields": ["client_id", "client_secret", "scopes"],
         }
         for vendor in (
-            "GithubOauth2",
-            "GoogleOauth2",
             "SlackOauth2",
             "SalesforceOauth2",
             "MicrosoftOauth2",
@@ -204,6 +195,39 @@ def referencing_agents(db: Session, workspace_id: str, name: str) -> list[dict[s
     return hits
 
 
+# N13-obs22: the 409 names at most this many referencing ids (`total` carries the real count)
+MODEL_CREDENTIAL_REFS_MAX = 20
+
+
+def model_credential_references(
+    db: Session, workspace_id: str, name: str
+) -> tuple[list[dict[str, str]], int]:
+    """What uses `name` as a MODEL credential (not a tool auth): non-deleted agents of this
+    workspace whose stored spec pins ``model_credential`` (`model-credential.md`) and model
+    registry providers whose ``credential_provider`` is the name (hub-wide rows — the
+    registry is not per workspace). Online evaluation configs carry no credential reference.
+    Returns ``(first MODEL_CREDENTIAL_REFS_MAX refs, total)``; read from the stored spec JSON
+    like `referencing_agents`, so a legacy / discovered row without the key is not counted."""
+    refs: list[dict[str, str]] = []
+    agents = (
+        db.query(Agent)
+        .filter(Agent.workspace_id == workspace_id, Agent.status != "deleted")
+        .order_by(Agent.created_at, Agent.id)
+        .all()
+    )
+    for agent in agents:
+        if (agent.spec or {}).get("model_credential") == name:
+            refs.append({"type": "agent", "id": agent.id, "name": agent.name})
+    providers = (
+        db.query(ModelProvider)
+        .filter(ModelProvider.credential_provider == name)
+        .order_by(ModelProvider.name)
+        .all()
+    )
+    refs.extend({"type": "model_provider", "id": p.id, "name": p.name} for p in providers)
+    return refs[:MODEL_CREDENTIAL_REFS_MAX], len(refs)
+
+
 def _references(
     db: Session,
     workspace_id: str,
@@ -229,7 +253,7 @@ def _item(
 ) -> dict[str, Any]:
     """One Connection in the API shape. `aws is None` means the vault lacks it."""
     aws = aws or {}
-    system = name in SYSTEM_PROVIDER_NAMES
+    system = name in system_provider_names()
     return {
         "name": name,
         "kind": kind,
@@ -241,7 +265,9 @@ def _item(
         "template": row.template if row else None,
         "description": row.description if row else None,
         "created_at": _iso(aws.get("createdTime")) or (_iso(row.created_at) if row else ""),
-        "created_by": row.created_by if row else "",
+        # who created it through Launchpad (`services.creators`): nulls for a system /
+        # external provider and for a legacy row whose username had no account
+        **creators.fields(row),
         "system": system,
         # who manages it: the platform, Launchpad (audit row), or someone else
         "source": "system" if system else ("launchpad" if row else "external"),
@@ -268,13 +294,6 @@ def obo_config_out(aws: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
-# Vendors whose reported issuer does not sign the tokens a caller would present.
-# GitHub's GetOauth2CredentialProvider output names
-# https://token.actions.githubusercontent.com (read live 2026-09-29): the GitHub
-# Actions OIDC issuer, while GitHub OAuth-app tokens are opaque, not JWTs.
-NON_OIDC_ISSUER_VENDORS = frozenset({"GithubOauth2"})
-
-
 def oidc_discovery(aws: dict[str, Any] | None) -> dict[str, str] | None:
     """The OIDC discovery URL a provider's stored config yields, or None.
 
@@ -286,8 +305,6 @@ def oidc_discovery(aws: dict[str, Any] | None) -> dict[str, str] | None:
     neither yields None.
     """
     aws = aws or {}
-    if aws.get("credentialProviderVendor") in NON_OIDC_ISSUER_VENDORS:
-        return None
     for config in ((aws.get("oauth2ProviderConfigOutput") or {}).values()):
         discovery = (config or {}).get("oauthDiscovery") or {}
         url = str(discovery.get("discoveryUrl") or "")
@@ -308,14 +325,14 @@ def oidc_discovery(aws: dict[str, Any] | None) -> dict[str, str] | None:
 def list_oidc_sources(control: Any) -> list[dict[str, str]]:
     """The OAuth2 Connections an inbound JWT config can take its discovery URL from.
 
-    System providers are left out (the workspace Cognito pool has its own
-    preset). A provider that cannot be read is skipped, not fatal: this feeds
-    a picker, and the discovery URL stays typeable by hand.
+    System providers are left out (never a member-facing IdP). A provider that
+    cannot be read is skipped, not fatal: this feeds a picker, and the
+    discovery URL stays typeable by hand.
     """
     sources: list[dict[str, str]] = []
     for summary in _paginate(control.list_oauth2_credential_providers):
         name = summary.get("name") or ""
-        if not name or name in SYSTEM_PROVIDER_NAMES:
+        if not name or name in system_provider_names():
             continue
         try:
             aws = _get_aws(control, KIND_OAUTH2, name)
@@ -504,11 +521,6 @@ def validate_tool_auth(control: Any, spec: Any) -> None:
         )
 
 
-def _is_cognito(url: str | None) -> bool:
-    host = urlparse(url or "").hostname or ""
-    return host.startswith("cognito-idp.") or host.endswith(".amazoncognito.com")
-
-
 def obo_config_input(obo: dict[str, Any]) -> dict[str, Any]:
     """`onBehalfOfTokenExchangeConfig` for CreateOauth2CredentialProvider."""
     grant = obo.get("grant_type") or "TOKEN_EXCHANGE"
@@ -549,24 +561,12 @@ def check_obo_idp(
 ) -> None:
     """422 `identity.obo_unsupported` when the IdP cannot do the exchange.
 
-    Amazon Cognito user pools accept only authorization_code / refresh_token /
-    client_credentials at /oauth2/token (no RFC 8693 or RFC 7523 grant), and
-    their discovery document declares no grant_types_supported, so they are
-    refused by host (docs/identity.md §8.3). Any other IdP is refused when its
-    discovery document declares grant_types_supported without the grant; an IdP
-    that declares nothing is let through (the exchange then fails at call time).
+    An IdP is refused when its discovery document declares
+    grant_types_supported without the grant; an IdP that declares nothing is
+    let through (the exchange then fails at call time) — see docs/identity.md
+    §8.3.
     """
     urn = OBO_GRANT_URNS[grant]
-    if _is_cognito(discovery_url) or _is_cognito(token_endpoint):
-        raise AppError(
-            "identity.obo_unsupported",
-            "Amazon Cognito user pools do not support OAuth token exchange "
-            f"({urn}) — on-behalf-of needs an IdP that implements RFC 8693 or "
-            "RFC 7523 (e.g. Okta, Auth0, Keycloak, Microsoft Entra ID); see "
-            "docs/identity.md §8.3",
-            detail={"required_grant": urn, "idp": "cognito"},
-            status_code=422,
-        )
     if not discovery_url:
         return
     # the same SSRF-guarded fetch + generic 422 as the inbound JWT probe
@@ -681,7 +681,7 @@ def _record(
     scopes: list[str],
     template: str | None,
     description: str | None,
-    created_by: str,
+    creator: creators.Creator | None,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     row = IdentityProvider(
@@ -695,8 +695,8 @@ def _record(
         scopes=scopes or None,
         template=template,
         description=description,
-        created_by=created_by,
     )
+    creators.stamp(row, creator)
     db.add(row)
     db.commit()
     return _item(
@@ -730,7 +730,7 @@ def create_oauth2_connection(
     scopes: list[str] | None = None,
     template: str | None = None,
     description: str | None = None,
-    created_by: str = "",
+    creator: creators.Creator | None = None,
     obo: dict[str, Any] | None = None,
     probe: Any = None,
 ) -> dict[str, Any]:
@@ -777,7 +777,7 @@ def create_oauth2_connection(
         scopes=list(scopes or []),
         template=template,
         description=description,
-        created_by=created_by,
+        creator=creator,
         config=config,
     )
 
@@ -790,7 +790,7 @@ def create_api_key_connection(
     name: str,
     api_key: str,
     description: str | None = None,
-    created_by: str = "",
+    creator: creators.Creator | None = None,
 ) -> dict[str, Any]:
     _refuse_duplicate(control, db, workspace_id, KIND_API_KEY, name)
     try:
@@ -810,7 +810,7 @@ def create_api_key_connection(
         scopes=[],
         template="api_key",
         description=description,
-        created_by=created_by,
+        creator=creator,
     )
 
 
@@ -824,7 +824,7 @@ def delete_connection(
     bound_targets: list[dict[str, Any]] | None = None,
 ) -> None:
     """Delete from the vault + drop the audit row; refuses system, referenced
-    and external Connections.
+    (tool auth / gateway target), in-use (model credential) and external Connections.
 
     Only a provider Launchpad created — one with a ledger row in THIS workspace
     — is deleted from the vault. A vault-only provider (``source="external"``
@@ -834,7 +834,7 @@ def delete_connection(
     gone from the vault is still cleaned up.
     """
     _require_kind(kind)
-    if name in SYSTEM_PROVIDER_NAMES:
+    if name in system_provider_names():
         raise AppError(
             "identity.system_connection",
             f"{name!r} is a system connection managed by bootstrap and cannot be "
@@ -848,6 +848,24 @@ def delete_connection(
             f"connection {name!r} is referenced by {len(refs)} agent(s) or gateway "
             "target(s); detach it first",
             detail={"referenced_by": refs},
+            status_code=409,
+        )
+    pins, total = model_credential_references(db, workspace_id, name)
+    if pins:
+        # N13-obs22 (E08 §7): a provider that is some agent's `model_credential` or a model
+        # registry provider's credential (`launchpad-global-bedrock` is both) is in use —
+        # checked before the external rule, so the shared Global Bedrock key answers this
+        # rather than "delete it in AgentCore Identity".
+        raise AppError(
+            "identity.in_use",
+            f"{name!r} is the model credential of {total} agent(s) / model provider(s) — "
+            "repoint them (an agent's model_credential pin, a model registry provider's "
+            "credential) before deleting it",
+            detail={
+                "referenced_by": pins,
+                "total": total,
+                "truncated": total > len(pins),
+            },
             status_code=409,
         )
     row = _ledger_row(db, workspace_id, kind, name)

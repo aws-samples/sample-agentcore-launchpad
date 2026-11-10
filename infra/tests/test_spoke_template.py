@@ -41,7 +41,6 @@ SCOPED_SIDS = frozenset(
         "S3Launchpad",
         "EcrLaunchpad",
         "CodeBuildLaunchpad",
-        "BedrockKnowledgeBases",
     }
 )
 
@@ -138,7 +137,6 @@ def test_pass_role_names_the_services_it_may_pass_to(statements: list[dict[str, 
     assert pass_role["Condition"] == {
         "StringEquals": {
             "iam:PassedToService": [
-                "bedrock.amazonaws.com",
                 "bedrock-agentcore.amazonaws.com",
                 "codebuild.amazonaws.com",
             ]
@@ -146,11 +144,27 @@ def test_pass_role_names_the_services_it_may_pass_to(statements: list[dict[str, 
     }
 
 
+def test_no_managed_knowledge_base_grant_survives(statements: list[dict[str, Any]]):
+    """The CN build's Knowledge Bases are self-hosted over OpenSearch (N6): no
+    statement may still grant the AWS-managed-Bedrock-KB control/data plane
+    (`bedrock:*KnowledgeBase*`, `bedrock:Retrieve`, `bedrock:*DataSource*`), and
+    the spoke role may no longer pass a launchpad-* role to `bedrock.amazonaws.com`."""
+    text = str(statements)
+    assert "knowledge-base/" not in text
+    assert "bedrock:Retrieve" not in text
+    assert "bedrock:CreateKnowledgeBase" not in text
+    assert "bedrock.amazonaws.com" not in text
+    for statement in statements:
+        for action in statement["Action"]:
+            assert not action.startswith("bedrock:"), f"unexpected managed-KB action: {action}"
+
+
 def test_service_linked_roles_are_limited_to_an_allowlist(statements: list[dict[str, Any]]):
     slr = next(s for s in statements if s["Sid"] == "CreateServiceLinkedRoles")
     services = slr["Condition"]["StringLike"]["iam:AWSServiceName"]
     assert "bedrock-agentcore.amazonaws.com" in services
-    assert "agent-registry.amazonaws.com" in services
+    # the Registry is local in the CN build (N4)
+    assert "agent-registry.amazonaws.com" not in services
     assert all(name.endswith(".amazonaws.com") for name in services)
 
 
@@ -173,19 +187,25 @@ def test_the_role_cannot_push_images(statements: list[dict[str, Any]]):
 
 
 def test_only_the_preview_services_are_action_wildcarded(statements: list[dict[str, Any]]):
-    """`bedrock-agentcore:*` and `agent-registry:*` are argued for in the template:
-    every `List*`/`Create*` in those preview APIs is account-scoped, so an ARN list
-    would grant nothing while breaking on the next API. Every other service's
-    actions are enumerated from the hub's own call sites — a spoke account holds
-    resources that are none of Launchpad's business (a production Cognito pool, for
-    one), so a new `<service>:*` has to be argued for here first."""
+    """`bedrock-agentcore:*` is argued for in the template: every `List*`/`Create*`
+    in that preview API is account-scoped, so an ARN list would grant nothing while
+    breaking on the next API. Every other service's actions are enumerated from the
+    hub's own call sites — a spoke account holds resources that are none of
+    Launchpad's business (a production Cognito pool, for one), so a new
+    `<service>:*` has to be argued for here first."""
     wildcards = {
         action
         for statement in statements
         for action in statement["Action"]
         if action.endswith(":*")
     }
-    assert wildcards == {"agent-registry:*", "bedrock-agentcore:*"}
+    assert wildcards == {"bedrock-agentcore:*"}
+
+
+def test_no_agent_registry_grant_survives(statements: list[dict[str, Any]]):
+    """The CN build's Registry is the local ledger (N4): no action, service principal or
+    Sid may still name the AWS Agent Registry."""
+    assert "agent-registry" not in str(statements)
 
 
 def test_the_hub_can_prove_which_account_it_landed_in(statements: list[dict[str, Any]]):
@@ -199,3 +219,23 @@ def test_the_hub_can_prove_which_account_it_landed_in(statements: list[dict[str,
 def test_the_role_arn_is_an_output(template: dict[str, Any]):
     """It is what the operator pastes back into the console."""
     assert template["Outputs"]["RoleArn"]["Value"] == {"Fn::GetAtt": ["WorkspaceRole", "Arn"]}
+
+
+def test_the_evaluation_worker_runs_on_the_existing_grants(statements: list[dict[str, Any]]):
+    """N12 (D14): through this role the hub dispatches evaluation jobs to the account's
+    `launchpad-eval-worker*` Runtime (`InvokeAgentRuntime` / `StopRuntimeSession`) and reads
+    the worker's artefacts under `evaluations/*` + the dataset snapshots under
+    `eval-datasets/*` of the workspace artifacts bucket (`launchpad-artifacts-<account>-
+    <region>`). Both ride on statements that already exist (`bedrock-agentcore:*` is
+    argued for above; the bucket matches `launchpad-*`), so no new statement is added —
+    this pins the coverage so a later narrowing fails here, not in a spoke account."""
+    by_sid = {statement["Sid"]: statement for statement in statements}
+    agentcore = by_sid["AgentCore"]
+    assert "bedrock-agentcore:*" in agentcore["Action"] and agentcore["Resource"] == "*"
+    s3 = by_sid["S3Launchpad"]
+    assert {"s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"} <= set(
+        s3["Action"]
+    )
+    patterns = [resource["Fn::Sub"] for resource in s3["Resource"]]
+    assert any(pattern.endswith(":s3:::launchpad-*") for pattern in patterns)
+    assert any(pattern.endswith(":s3:::launchpad-*/*") for pattern in patterns)

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../../lib/api";
+import { onlineQualityFoot } from "../../lib/online-quality";
 import { fmtTime } from "../format";
 import { useLoad } from "../hooks";
 import { sortTasks, STATUS_TONE, statusLabel, taskFromOnline, taskFromRun, type V2Task } from "../tasks";
@@ -126,7 +127,7 @@ export function V2Home() {
                 ? t("overview.tiles.onlineQualityNone")
                 : qual.scores === 0
                   ? t("overview.tiles.onlineQualityPending")
-                  : t("overview.tiles.onlineQualityFoot", { sessions: qual.sessions, agents: qual.agents })
+                  : onlineQualityFoot(t, qual.sessions, qual.agents)
           }
           testId="v2-kpi-quality"
         />
@@ -185,20 +186,5 @@ export function V2Home() {
         </aside>
       </div>
     </>
-  );
-}
-
-export function V2NotFound() {
-  const { t } = useTranslation();
-  return (
-    <Card>
-      <div className="v2-table-empty">
-        <h2 style={{ fontSize: 18, marginBottom: 8, color: "var(--v2-ink)" }}>{t("v2.notFound.title")}</h2>
-        <p style={{ marginBottom: 16 }}>{t("v2.notFound.desc")}</p>
-        <Link to="/v2" className="v2-btn primary">
-          {t("v2.notFound.home")}
-        </Link>
-      </div>
-    </Card>
   );
 }

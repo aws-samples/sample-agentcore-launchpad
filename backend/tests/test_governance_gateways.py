@@ -1,18 +1,12 @@
 from datetime import UTC, datetime
-from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import MagicMock
-
-from botocore.exceptions import ClientError
 
 from app.core.config import Settings
 from app.services import governance
-from app.services.agentcore import policy
+from app.services.agentcore import gateway as gateway_api
 
 from .conftest import ws_ctx
-
-
-class _NotFound(Exception):
-    """Stands in for the preview SDK's ResourceNotFoundException."""
 
 
 def _gateway(
@@ -69,46 +63,26 @@ def _control(gateways: list[dict]) -> MagicMock:
     return control
 
 
-def test_discovery_is_read_only_and_reports_shared_engine():
-    engine_arn = "arn:aws:bedrock-agentcore:us-west-2:123:policy-engine/pe-1"
-    control = _control(
-        [
-            _gateway("gw-1", "alpha", engine_arn=engine_arn),
-            _gateway("gw-2", "beta", engine_arn=engine_arn),
-        ]
-    )
-    governance.invalidate_gateway_cache()
-    views = governance.list_gateway_views(
-        control,
-        ws_ctx({"registry_id": ""}),
-        refresh=True,
-    )
-
-    assert len(views) == 2
-    assert views[0]["shared_engine"] is True
-    assert {item["id"] for item in views[0]["shared_gateways"]} == {"gw-1", "gw-2"}
-    control.tag_resource.assert_not_called()
-    control.untag_resource.assert_not_called()
-    control.update_gateway.assert_not_called()
-
-
 def test_manage_and_unmanage_touch_only_launchpad_tags():
     control = _control([_gateway("gw-1", "alpha")])
     governance.manage_gateway(control, "gw-1")
     control.tag_resource.assert_called_once_with(
         resourceArn="arn:aws:bedrock-agentcore:us-west-2:123:gateway/gw-1",
-        tags=policy.MANAGED_TAGS,
+        tags=gateway_api.MANAGED_TAGS,
     )
 
     governance.unmanage_gateway(control, "gw-1")
     control.untag_resource.assert_called_once_with(
         resourceArn="arn:aws:bedrock-agentcore:us-west-2:123:gateway/gw-1",
-        tagKeys=list(policy.MANAGED_TAGS),
+        tagKeys=list(gateway_api.MANAGED_TAGS),
     )
     control.update_gateway.assert_not_called()
 
 
-def test_attachability_keeps_external_custom_jwt_catalog_only():
+def test_attachability_has_no_oauth_arm_for_custom_jwt_gateways():
+    """N8: the CN build writes no `oauth_provider_arn` and no runtime honours an OAuth
+    gateway, so a CUSTOM_JWT authorizer is catalog-only even on the workspace's own gateway
+    — a stale `oauth_provider_arn` key in the resource map changes nothing."""
     launchpad = _gateway("managed", "launchpad-gw", authorizer="CUSTOM_JWT")
     external = _gateway("external", "partner-gw", authorizer="CUSTOM_JWT")
     control = _control([launchpad, external])
@@ -118,21 +92,22 @@ def test_attachability_keeps_external_custom_jwt_catalog_only():
         ws_ctx({
                 "gateway_id": "managed",
                 "gateway_url": launchpad["gatewayUrl"],
-                "oauth_provider_arn": "arn:oauth",
+                "oauth_provider_arn": "arn:oauth",  # stale key: must be ignored
                 "registry_id": "",
             }),
         refresh=True,
     )
     by_id = {view["id"]: view for view in views}
-    assert by_id["managed"]["attachability"]["attachable"] is True
-    assert by_id["managed"]["attachability"]["auth_type"] == "oauth"
-    assert by_id["managed"]["policy_test_available"] is True
-    assert by_id["external"]["attachability"] == {
+    unmanaged = {
         "attachable": False,
         "reason": "custom_jwt_provider_unmanaged",
         "auth_type": "oauth",
     }
+    assert by_id["managed"]["attachability"] == unmanaged
+    assert by_id["managed"]["policy_test_available"] is True  # independent of attachability
+    assert by_id["external"]["attachability"] == unmanaged
     assert by_id["external"]["policy_test_available"] is False
+    assert "oauth_provider_arn" not in Path(governance.__file__).read_text(encoding="utf-8")
 
 
 def test_policy_test_availability_requires_configured_gateway_id_and_url():
@@ -182,14 +157,12 @@ def test_external_custom_jwt_detail_offers_token_free_tools_list_template():
     settings = Settings(
         resources={
             "gateway_id": "managed",
-            "oauth_provider_arn": "arn:oauth",
             "registry_id": "",
         }
     )
 
     command = governance.gateway_detail(
         control,
-        MagicMock(),
         "external",
         ws_ctx(settings.resources),
     )["external_tools_list_command"]
@@ -202,54 +175,11 @@ def test_external_custom_jwt_detail_offers_token_free_tools_list_template():
         assert (
             governance.gateway_detail(
                 control,
-                MagicMock(),
                 gateway_id,
                 ws_ctx(settings.resources),
             )["external_tools_list_command"]
             is None
         )
-
-
-def test_iam_preflight_pass_fail_and_unknown():
-    iam = MagicMock()
-    iam.simulate_principal_policy.return_value = {
-        "EvaluationResults": [
-            {"EvalActionName": action, "EvalDecision": "allowed"}
-            for action in governance.POLICY_IAM_ACTIONS
-        ]
-    }
-    passed = governance.iam_preflight(
-        iam,
-        role_arn="arn:role",
-        engine_arn="arn:engine",
-        gateway_arn="arn:gateway",
-    )
-    assert passed["status"] == "pass"
-
-    iam.simulate_principal_policy.return_value["EvaluationResults"][0][
-        "EvalDecision"
-    ] = "implicitDeny"
-    failed = governance.iam_preflight(
-        iam,
-        role_arn="arn:role",
-        engine_arn="arn:engine",
-        gateway_arn="arn:gateway",
-    )
-    assert failed["status"] == "fail"
-    assert failed["missing_actions"] == [governance.POLICY_IAM_ACTIONS[0]]
-
-    iam.simulate_principal_policy.side_effect = ClientError(
-        {"Error": {"Code": "AccessDenied", "Message": "no"}},
-        "SimulatePrincipalPolicy",
-    )
-    unknown = governance.iam_preflight(
-        iam,
-        role_arn="arn:role",
-        engine_arn="arn:engine",
-        gateway_arn="arn:gateway",
-    )
-    assert unknown["status"] == "unknown"
-    assert unknown["operator_error"] == "AccessDenied"
 
 
 def test_action_discovery_uses_exact_control_plane_names():
@@ -297,45 +227,24 @@ def test_action_discovery_uses_exact_control_plane_names():
     assert all(action["verified"] for action in actions)
 
 
-def test_dangling_engine_reference_degrades_views_instead_of_raising():
-    """A Gateway keeps its reference after the Engine is deleted out-of-band.
-
-    Before this was handled, one dangling reference made the whole Gateway list
-    answer 500 for every Gateway.
-    """
-    engine_arn = "arn:aws:bedrock-agentcore:us-west-2:123:policy-engine/pe-gone"
-    control = _control([_gateway("gw-1", "alpha", engine_arn=engine_arn)])
-    control.exceptions = SimpleNamespace(ResourceNotFoundException=_NotFound)
-    control.get_policy_engine.side_effect = _NotFound("deleted")
-    iam = MagicMock()
-    iam.simulate_principal_policy.return_value = {
-        "EvaluationResults": [
-            {"EvalActionName": action, "EvalDecision": "allowed"}
-            for action in governance.POLICY_IAM_ACTIONS
-        ]
-    }
-
-    governance.invalidate_gateway_cache()
-    [view] = governance.list_gateway_views(
-        control,
-        ws_ctx({"registry_id": ""}),
-        refresh=True,
-    )
-    assert view["policy_engine"] == {
-        "id": "pe-gone",
-        "arn": engine_arn,
-        "name": None,
-        "status": "DELETED",
-        "status_reasons": [governance.DANGLING_ENGINE_REASON],
-        "updated_at": None,
-        "mode": "LOG_ONLY",
-        "missing": True,
-    }
+def test_launchpad_gateway_detail_shows_aws_iam_clearly():
+    """The shared launchpad-gw is always AWS_IAM since N1; gateway_detail's
+    generic authorizer_type field already surfaces that with no special-casing
+    needed (R6) — this pins the display so a future change notices."""
+    launchpad = _gateway("managed", "launchpad-gw")  # authorizer defaults to AWS_IAM
+    control = _control([launchpad])
 
     detail = governance.gateway_detail(
         control,
-        iam,
-        "gw-1",
-        ws_ctx({"registry_id": ""}),
+        "managed",
+        ws_ctx({
+            "gateway_id": "managed",
+            "gateway_url": launchpad["gatewayUrl"],
+            "registry_id": "",
+        }),
     )
-    assert detail["policy_engine"]["missing"] is True
+    assert detail["authorizer_type"] == "AWS_IAM"
+    assert detail["attachability"] == {"attachable": True, "reason": None, "auth_type": "aws_iam"}
+    assert detail["authorizer_configuration"] is None
+
+

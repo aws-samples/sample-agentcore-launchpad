@@ -12,11 +12,11 @@ the descriptor describes.
 Ownership is a server-owned ledger row (``SystemSkillRecord``, one per workspace and
 preset), never a descriptor field or tag a client could send — descriptor metadata is
 copyable and proves nothing. The only proof that a record is ours is that **our own
-CreateRegistryRecord returned its id**: the complete create request (token, name,
-version, descriptors, timestamp, tags) is persisted before the call, a crash between
-the call and the ledger commit is recovered by replaying exactly those bytes with the
-same token (the service answers the same record), and a same-name record the replay
-cannot account for is refused — never bound, never overwritten. An id AWS accepted but
+create produced it**: the create intent (name, version, content digest, ``imported_at``)
+is persisted before the write; a crash between the write and the ledger commit is
+recovered on the next run by finding the same-name record and matching its content
+against that intent — a same-name record the intent cannot account for is refused,
+never bound, never overwritten. An id AWS accepted but
 whose read-back has not verified yet is ``accepted``/``pending_record_id`` (protected,
 not registered); only a verified read-back makes it ``registered``. Re-registering
 identical content is a no-op that keeps the record's approval; a new release commits
@@ -37,23 +37,23 @@ import json
 import os
 import secrets
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
 
-from botocore.exceptions import ClientError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import DATA_DIR
 from app.core.db import SessionLocal
-from app.core.errors import AppError
+from app.core.errors import AppError, NotFoundError
 from app.models.ledger import Agent, SystemSkillRecord
-from app.services.agentcore import registry as reg
-from app.services.agentcore.client import registry_control_client
+from app.services import registry_backend
+from app.services.registry_backend import RegistryBackend, bump_minor_version
 from app.services.skill_ingest import parse_frontmatter
 from app.services.workspace import WorkspaceContext
 from app.system_agents import presets as catalogue
@@ -78,8 +78,6 @@ INITIAL_RECORD_VERSION = "1.0.0-skill"  # type-qualified, like every platform Sk
 PROTECTED_ACTIONS: tuple[str, ...] = ("edit", "replace", "reimport", "delete")
 # Lifecycle actions an administrator (and only an administrator) may still run.
 ADMIN_LIFECYCLE_ACTIONS: tuple[str, ...] = ("submit", "approve", "publish", "reject", "disable")
-_CONFLICT_CODES = ("ConflictException", "ResourceConflictException", "AlreadyExistsException")
-_NOT_FOUND_CODES = ("ResourceNotFoundException", "NotFoundException")
 
 
 # ---------------------------------------------------------------------------
@@ -126,8 +124,13 @@ def find_mapping(db: Session, workspace_id: str, preset_key: str) -> SystemSkill
     )
 
 
-def _registry_of(workspace: WorkspaceContext) -> str | None:
-    return str((workspace.resources or {}).get("registry_id") or "") or None
+def _registry_of(workspace: WorkspaceContext) -> str:
+    """The registry identity mapping rows are scoped to: the resource map's
+    ``registry_id`` when bootstrap wrote one, else the local backend's own
+    ``local-<workspace_id>`` (N4)."""
+    from app.services.registry_local import registry_id_for
+
+    return str((workspace.resources or {}).get("registry_id") or "") or registry_id_for(workspace)
 
 
 def protected_record(
@@ -247,6 +250,59 @@ def refuse_protected_mutation(
     raise protection_error(row, action)
 
 
+def _gone(exc: BaseException) -> bool:
+    """A delete/get that found no record: the registry's own 404 or an AWS not-found."""
+    return getattr(exc, "status_code", None) == 404 or any(
+        marker in f"{type(exc).__name__}{exc}" for marker in ("ResourceNotFound", "NotFound")
+    )
+
+
+def unregister_system_skill(
+    db: Session, workspace: WorkspaceContext, preset_key: str, log: Callable[[str], None]
+) -> str:
+    """Remove the preset's protected Skill record and its mapping row — the preset
+    uninstall's registry step (N10v3-bug6 / N11-r4-bug1: the record outlived the preset
+    and, being system-protected, nobody but this path could delete it).
+
+    This IS the maintenance path that owns the protected record, so the protection guard
+    does not apply; every other caller still gets 403. Idempotent: no mapping → skipped;
+    a record already gone → the mapping is dropped; a mapping left by a replaced registry
+    (``registry_id`` differs from the workspace's current one) names no record here and
+    is dropped. A registry error other than not-found propagates so the uninstall job
+    fails at this step and a later attempt retries it.
+    """
+    row = find_mapping(db, workspace.id, preset_key)
+    if row is None:
+        return "skipped: no system skill record mapped"
+    current = _registry_of(workspace)
+    ids = [rid for rid in (row.record_id, row.pending_record_id) if rid]
+    if row.registry_id != current:
+        db.delete(row)
+        db.commit()
+        return (f"stale mapping {', '.join(ids) or '(no record id)'} for registry "
+                f"{row.registry_id} dropped (current registry is {current})")
+    backend = registry_backend.backend_or_none()
+    if backend is None:
+        db.delete(row)
+        db.commit()
+        return "skipped: no registry backend in this build (mapping dropped)"
+    deleted: list[str] = []
+    for rid in ids:
+        try:
+            backend.delete_record(workspace, rid)
+        except Exception as exc:  # noqa: BLE001 — not-found is "already gone"
+            if _gone(exc):
+                log(f"system skill record {rid} already gone")
+                continue
+            raise
+        deleted.append(rid)
+        log(f"deleted system skill record {rid}")
+    db.delete(row)
+    db.commit()
+    return (f"skill record {', '.join(deleted)} deleted; mapping removed" if deleted
+            else f"skill record {', '.join(ids) or '(none)'} already gone; mapping removed")
+
+
 def refuse_reserved_skill_name(name: str) -> None:
     """The preset's Skill name is reserved for the platform: an ordinary register /
     import / import-with-rename is refused before any S3 or Registry write. Only the
@@ -284,7 +340,9 @@ class Registration:
         return f"s3://{self.bucket}/{self.prefix}"
 
     def descriptors(self) -> dict[str, Any]:
-        return reg.build_skills_descriptors(skill_md=self.skill_md, definition=self.definition)
+        return registry_backend.build_skills_descriptors(
+            skill_md=self.skill_md, definition=self.definition
+        )
 
     def content_digest(self) -> str:
         return content_digest(self.definition, self.skill_md)
@@ -436,22 +494,26 @@ def verify_published_release(
 
 @dataclass
 class RegistrationOutcome:
-    row: SystemSkillRecord
-    record: dict[str, Any]  # the record as read back from AWS after the operation
+    row: SystemSkillRecord | None
+    record: dict[str, Any]  # the record as read back from the backend after the operation
     created: bool
-    changed: bool  # a CreateRegistryRecord or UpdateRegistryRecord was issued
-    submitted: bool  # SubmitRegistryRecordForApproval issued (new records only)
+    changed: bool  # a create or update was issued against the backend
+    submitted: bool  # submit_record issued (new records only)
     note: str | None = None
+    # No registry backend is registered in this build: nothing was claimed or written.
+    skipped: bool = False
 
     @property
     def record_id(self) -> str:
-        return str(self.record.get("recordId") or self.row.record_id)
+        return str(self.record.get("recordId") or (self.row.record_id if self.row else None))
 
     @property
     def status(self) -> str:
         return str(self.record.get("status") or "")
 
     def summary(self) -> str:
+        if self.skipped:
+            return f"system skill record skipped · {self.note or 'registry unavailable'}"
         verb = "created" if self.created else ("updated" if self.changed else "verified · no-op")
         tail = (
             " · submitted for approval" if self.submitted
@@ -480,7 +542,7 @@ def _lock(workspace_id: str, preset_key: str):
 
 
 def _new_token() -> str:
-    # CreateRegistryRecord clientToken: 33–256 chars, [A-Za-z0-9-]
+    # durable intent id of this registration attempt; opaque, never sent anywhere (N4)
     return f"lp-sysskill-{secrets.token_hex(16)}"
 
 
@@ -650,10 +712,6 @@ def _refuse_stale(
             )
 
 
-def _client_error_code(exc: ClientError) -> str:
-    return str(exc.response.get("Error", {}).get("Code") or "")
-
-
 def _record_verified(
     db: Session,
     row: SystemSkillRecord,
@@ -677,11 +735,16 @@ def _record_verified(
 
 
 def _readback(
-    client: Any, registry_id: str, record_id: str, registration: Registration, sleeper: Any
+    backend: RegistryBackend,
+    workspace: WorkspaceContext,
+    record_id: str,
+    registration: Registration,
+    sleeper: Any,
 ) -> dict[str, Any]:
-    """The complete record as AWS holds it, matched against what we wrote. Raises the
-    AWS error (a denied read stays a denied read) or ``readback_mismatch``."""
-    record = reg.wait_record_settled(client, registry_id, record_id, sleeper=sleeper)
+    """The complete record as the backend holds it, matched against what we wrote.
+    Raises the backend's error (a denied read stays a denied read) or
+    ``readback_mismatch``."""
+    record = backend.wait_record_settled(workspace, record_id, sleeper=sleeper)
     if (
         record.get("name") != registration.name
         or record.get("descriptorType") != DESCRIPTOR_TYPE
@@ -699,45 +762,39 @@ def _readback(
 def _create_request(
     row: SystemSkillRecord, registry_id: str, registration: Registration, workspace_id: str
 ) -> dict[str, Any]:
+    """The persisted create intent: enough to replay the identical registration
+    (``imported_at`` is the only non-deterministic input) and to recognise it."""
     return {
         "registryId": registry_id,
+        "workspaceId": workspace_id,
         "name": registration.name,
-        "displayName": registration.name,
         "description": registration.description(),
-        "recordType": "SKILL",
-        "descriptors": reg.to_ga_descriptors(DESCRIPTOR_TYPE, registration.descriptors()),
         "recordVersion": INITIAL_RECORD_VERSION,
-        "clientToken": row.client_token,
-        "tags": {
-            "launchpad:system-preset": registration.preset.key,
-            "launchpad:workspace": workspace_id,
-        },
+        "imported_at": str(
+            ((registration.definition.get("source") or {}).get("imported_at")) or ""
+        ),
+        "contentDigest": registration.content_digest(),
     }
 
 
 def _request_registration(
     stored: dict[str, Any], registration: Registration
 ) -> Registration | None:
-    """The registration a persisted create request describes (same bytes), or ``None``
-    when the persisted request is for another release than the one now current."""
-    try:
-        ga = stored["descriptors"]["agentSkillsDefinition"]
-        definition = json.loads(ga["data"])
-        imported_at = str(((definition.get("source") or {}).get("imported_at")) or "")
-    except (KeyError, TypeError, ValueError):
-        return None
+    """The registration a persisted intent describes (same bytes), or ``None`` when the
+    intent was for another release than the one now current."""
+    imported_at = str(stored.get("imported_at") or "")
     replay = build_registration(
         registration.preset, registration.snapshot, registration.bucket, registration.prefix,
         imported_at=imported_at or None,
     )
-    if reg.to_ga_descriptors(DESCRIPTOR_TYPE, replay.descriptors()) != stored["descriptors"]:
+    if replay.content_digest() != str(stored.get("contentDigest") or ""):
         return None
     return replay
 
 
 def _create(
     db: Session,
-    client: Any,
+    backend: RegistryBackend,
     registry_id: str,
     row: SystemSkillRecord,
     registration: Registration,
@@ -766,7 +823,7 @@ def _create(
         _reset_intent(row)
         db.commit()
     if stored is None:
-        existing = reg.find_record(client, registry_id, registration.name, DESCRIPTOR_TYPE)
+        existing = backend.find_record(workspace, registration.name, DESCRIPTOR_TYPE)
         if existing is not None:
             raise _error(
                 "foreign_record",
@@ -784,43 +841,51 @@ def _create(
         replay = registration
     else:
         request = stored
-    try:
-        created = client.create_registry_record(**request)
-    except ClientError as exc:
-        if _client_error_code(exc) in _CONFLICT_CODES:
-            raise _error(
-                "foreign_record",
-                f"a Skill record named '{registration.name}' exists that this platform cannot "
-                "prove it created (the persisted create request was not accepted as a "
-                "replay) — inspect the Registry; nothing was bound or written",
-                client_token=row.client_token,
-            ) from exc
-        raise
-    record_id = str(created["recordArn"]).split("/")[-1]
+    created, is_new = backend.upsert_record(
+        workspace,
+        name=str(request["name"]),
+        description=str(request["description"]),
+        descriptor_type=DESCRIPTOR_TYPE,
+        descriptors=replay.descriptors(),
+        record_version=str(request.get("recordVersion") or INITIAL_RECORD_VERSION),
+    )
+    if not is_new and not (stored is not None and _same_content(created, replay)):
+        # A same-name record this platform cannot account for: either it appeared between
+        # our lookup and the write, or it is not the record our lost create made (its
+        # content differs from the persisted intent). Refused, nothing bound.
+        raise _error(
+            "foreign_record",
+            f"a Skill record named '{registration.name}' exists that this platform cannot "
+            "prove it created — inspect the Registry; nothing was bound or written",
+            record_id=str(created.get("recordId") or ""),
+        )
+    record_id = str(created.get("recordId") or str(created.get("recordArn", "")).split("/")[-1])
     # accepted, not verified: protected as ours, never projected as registered
     row.pending_record_id = record_id
-    row.record_arn = str(created["recordArn"])
+    arn = created.get("recordArn") or created.get("arn")
+    row.record_arn = str(arn) if arn else None
     row.status = STATUS_ACCEPTED
     db.commit()
-    record = _readback(client, registry_id, record_id, replay, sleeper)
+    record = _readback(backend, workspace, record_id, replay, sleeper)
     _record_verified(db, row, record, replay)
     # New records enter the existing review workflow (submit → an administrator
     # approves in the Registry). A failed submit leaves an honest DRAFT, never a
     # claimed approval.
     submitted, note = False, None
     try:
-        reg.submit_record(client, registry_id, record_id)
+        backend.submit_record(workspace, record_id)
         submitted = True
-        record = reg.get_record(client, registry_id, record_id)
-    except ClientError as exc:
-        note = f"created but not submitted: {_client_error_code(exc) or exc}"
+        record = backend.get_record(workspace, record_id)
+    except AppError as exc:
+        code = exc.code
+        note = f"created but not submitted: {code or exc}"
     return RegistrationOutcome(row=row, record=record, created=True, changed=True,
                                submitted=submitted, note=note)
 
 
 def _verify_pending(
     db: Session,
-    client: Any,
+    backend: RegistryBackend,
     registry_id: str,
     row: SystemSkillRecord,
     registration: Registration,
@@ -834,13 +899,11 @@ def _verify_pending(
     stored = row.create_request if isinstance(row.create_request, dict) else None
     replay = _request_registration(stored, registration) if stored else None
     try:
-        record = _readback(client, registry_id, record_id, replay or registration, sleeper)
-    except ClientError as exc:
-        if _client_error_code(exc) not in _NOT_FOUND_CODES:
-            raise
+        record = _readback(backend, workspace, record_id, replay or registration, sleeper)
+    except NotFoundError:
         _reset_intent(row)
         db.commit()
-        outcome = _create(db, client, registry_id, row, registration, workspace, sleeper)
+        outcome = _create(db, backend, registry_id, row, registration, workspace, sleeper)
         outcome.note = f"accepted record {record_id} was gone; registered anew"
         return outcome
     _record_verified(db, row, record, replay or registration)
@@ -850,7 +913,7 @@ def _verify_pending(
 
 def _reconcile(
     db: Session,
-    client: Any,
+    backend: RegistryBackend,
     registry_id: str,
     row: SystemSkillRecord,
     registration: Registration,
@@ -860,15 +923,13 @@ def _reconcile(
 ) -> RegistrationOutcome:
     record_id = str(row.record_id)
     try:
-        record = reg.get_record(client, registry_id, record_id)
-    except ClientError as exc:
-        if _client_error_code(exc) not in _NOT_FOUND_CODES:
-            raise
+        record = backend.get_record(workspace, record_id)
+    except NotFoundError:
         # Removed outside the console (the console refuses deleting it). Honest
         # recovery: a fresh intent + create; the old id is gone for good.
         _reset_intent(row)
         db.commit()
-        outcome = _create(db, client, registry_id, row, registration, workspace, sleeper)
+        outcome = _create(db, backend, registry_id, row, registration, workspace, sleeper)
         outcome.note = f"record {record_id} was gone; {outcome.note or 'registered anew'}"
         return outcome
     if _same_content(record, registration):
@@ -909,7 +970,7 @@ def _reconcile(
             "record_deprecated",
             f"registry record {record_id} is DEPRECATED — the service treats that as terminal, "
             "so the new release cannot be written onto it. Recovery: delete the deprecated "
-            "record in the AWS console, then register again (a new record, reviewed anew)",
+            "record in the Registry console, then register again (a new record, reviewed anew)",
             record_id=record_id,
         )
     # the update INTENT is committed first: if the update is accepted and its response
@@ -918,30 +979,21 @@ def _reconcile(
     row.intent_digest = registration.snapshot.digest
     row.intent_content_digest = registration.content_digest()
     db.commit()
-    client.update_registry_record(
-        registryId=registry_id,
-        recordId=record_id,
-        name=registration.name,
-        displayName={"optionalValue": registration.name},
-        description={"optionalValue": registration.description()},
-        recordType="SKILL",
-        descriptors=reg.wrap_descriptors_for_update(
-            registration.descriptors(), descriptor_type=DESCRIPTOR_TYPE
+    backend.update_record(
+        workspace,
+        record_id,
+        description=registration.description(),
+        descriptors=registration.descriptors(),
+        record_version=bump_minor_version(
+            str(record.get("recordVersion") or INITIAL_RECORD_VERSION)
         ),
-        recordVersion=_bump_minor(str(record.get("recordVersion") or INITIAL_RECORD_VERSION)),
     )
-    record = _readback(client, registry_id, record_id, registration, sleeper)
+    record = _readback(backend, workspace, record_id, registration, sleeper)
     _record_verified(db, row, record, registration)
     # UpdateRegistryRecord resets the record to DRAFT; re-entering review is the
     # administrator's explicit decision (parity with the A2A refresh path).
     return RegistrationOutcome(row=row, record=record, created=False, changed=True,
                                submitted=False)
-
-
-def _bump_minor(version: str) -> str:
-    from app.services.registry_console import _bump_minor as bump
-
-    return bump(version)
 
 
 def register_system_skill(
@@ -950,7 +1002,6 @@ def register_system_skill(
     preset: SystemPreset,
     agent: Agent,
     *,
-    client: Any | None = None,
     s3: Any | None = None,
     sleeper: Any = time.sleep,
 ) -> RegistrationOutcome:
@@ -968,13 +1019,17 @@ def register_system_skill(
     the durable ledger claim → staleness → S3 read-back of the published release →
     then create / verify-pending / no-op / update as described in the module docstring.
     """
-    from app.services.registry_console import _registry_id
-
+    backend = registry_backend.backend_or_none()
+    if backend is None:
+        return RegistrationOutcome(
+            row=None, record={}, created=False, changed=False, submitted=False,
+            note="registry unavailable in this build", skipped=True,
+        )
     if not agent.system_key or agent.system_key != preset.key:
         raise _error("not_a_preset", f"agent {agent.id} is not the {preset.key} preset", 400)
     # the requested identity, immutable from here on — whatever is re-read later
     requested = catalogue.skill_release_from_spec(agent.spec or {})
-    registry_id = _registry_id(workspace)  # RegistryUnavailableError (503) when disabled
+    registry_id = _registry_of(workspace)
     bucket = str((workspace.resources or {}).get("artifacts_bucket") or "")
     if not bucket:
         raise _error(
@@ -989,11 +1044,12 @@ def register_system_skill(
         row = _claim(db, workspace.id, preset, registry_id)
         _refuse_stale(row, registration, installed, requested)
         verify_published_release(s3 or workspace.client("s3"), bucket, prefix, snapshot)
-        client = client or registry_control_client(workspace)
         if row.record_id is not None:
             return _reconcile(
-                db, client, registry_id, row, registration, workspace, sleeper, installed
+                db, backend, registry_id, row, registration, workspace, sleeper, installed
             )
         if row.pending_record_id is not None:
-            return _verify_pending(db, client, registry_id, row, registration, workspace, sleeper)
-        return _create(db, client, registry_id, row, registration, workspace, sleeper)
+            return _verify_pending(
+                db, backend, registry_id, row, registration, workspace, sleeper
+            )
+        return _create(db, backend, registry_id, row, registration, workspace, sleeper)

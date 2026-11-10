@@ -1,0 +1,417 @@
+from typing import Any
+from collections import OrderedDict
+from strands import Agent, tool
+from strands import AgentSkills
+from skills.fetcher import resolve_s3_skills, resolve_git_skills
+import asyncio
+from strands.tools.executors import SequentialToolExecutor
+from strands.types.exceptions import EventLoopException
+from hooks.execution_limits import ExecutionLimitExceeded, ExecutionLimitsHook
+import os
+from strands.agent.conversation_manager.sliding_window_conversation_manager import SlidingWindowConversationManager
+from bedrock_agentcore.runtime import BedrockAgentCoreApp
+from model.load import load_model
+from memory.session import get_memory_session_manager
+
+app = BedrockAgentCoreApp()
+log = app.logger
+
+# Define MCP clients for all configured MCP servers (gateways and/or remote MCP)
+mcp_clients = []
+
+DEFAULT_SYSTEM_PROMPT = """__LAUNCHPAD_REFERENCE_PROMPT__"""
+
+
+# Define a collection of tools used by the model
+tools = []
+
+_INLINE_FUNCTION_NAMES = set()
+
+
+
+# Add MCP clients to tools
+for mcp_client in mcp_clients:
+    if mcp_client:
+        tools.append(mcp_client)
+
+
+def _make_conversation_manager():
+    return SlidingWindowConversationManager(**{"window_size":150}, per_turn=True)
+
+def agent_factory():
+    cache = {}
+    def get_or_create_agent(session_id, user_id, skill_plugins=None):
+        _actor_id = user_id
+        key = f"{session_id}/{_actor_id}"
+        if key not in cache:
+            cache[key] = Agent(
+                model=load_model(),
+                session_manager=get_memory_session_manager(session_id, _actor_id),
+                conversation_manager=_make_conversation_manager(),
+                system_prompt=DEFAULT_SYSTEM_PROMPT,
+                tools=tools,
+                plugins=skill_plugins or None,
+                tool_executor=SequentialToolExecutor(),
+                callback_handler=None,
+                hooks=[
+                    ExecutionLimitsHook(
+                        max_iterations=10,
+                        
+                        timeout_seconds=300,
+                    ),
+                ],
+            )
+        return cache[key]
+    return get_or_create_agent
+get_or_create_agent = agent_factory()
+
+
+# <launchpad-max-tokens:v1>  # --- CN N-SCN-bug4 ---
+# Strands raises MaxTokensReachedException (unwrapped) when one completion stops on
+# `max_tokens`; the partial assistant message is already in the agent's history, so the
+# documented recovery is to call the agent again. Without this the AgentCore SDK turns
+# the exception into a terminal `{"error": ...}` frame and the console loses the turn
+# (two tool rows, no agent bubble). The already-streamed partial text stays; a marker
+# frame separates it from the continuation; a turn that still cannot finish ends with a
+# visible notice and a `truncated: true` marker instead of an error. Bounded by
+# LAUNCHPAD_MAX_TOKENS_CONTINUATIONS (default 1; 0 = notice only, never continue).
+LAUNCHPAD_MAX_TOKENS_CONTINUATION_PROMPT = (
+    "Your previous answer was cut off at the token limit. "
+    "Finish it concisely - final answer only."
+)
+LAUNCHPAD_MAX_TOKENS_NOTICE = "[response truncated at the model's token limit]"
+
+
+def _launchpad_max_tokens_continuations() -> int:
+    raw = os.environ.get("LAUNCHPAD_MAX_TOKENS_CONTINUATIONS", "1")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 1
+
+
+def _launchpad_is_max_tokens(exc: BaseException) -> bool:
+    """Matched by class name: the exception lives in strands.types.exceptions today and
+    the SDK is a moving preview target, so no import is required to recognise it."""
+    return any(klass.__name__ == "MaxTokensReachedException" for klass in type(exc).__mro__)
+
+
+def _launchpad_continuation_max_tokens() -> int:
+    """N-SCN-bug4 (5): the lower output cap a continuation call uses; 0 = the model's own."""
+    raw = os.environ.get("LAUNCHPAD_CONTINUATION_MAX_TOKENS", "0")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
+def _launchpad_cap_max_tokens(agent, cap: int):
+    """Lower the agent model's max_tokens to `cap` for one continuation; returns the
+    callable that restores the previous value (agents are cached per session here).
+    Works on both Strands model families: BedrockModel keeps `max_tokens` at the top of
+    its config, OpenAIModel inside `params`. Any other model is left untouched."""
+    model = getattr(agent, "model", None)
+    get_config = getattr(model, "get_config", None)
+    update_config = getattr(model, "update_config", None)
+    if cap <= 0 or get_config is None or update_config is None:
+        return lambda: None
+    try:
+        config = dict(get_config() or {})
+        if isinstance(config.get("params"), dict):
+            before = dict(config["params"])
+            update_config(params={**before, "max_tokens": cap})
+            return lambda: update_config(params=before)
+        before_cap = config.get("max_tokens")
+        update_config(max_tokens=cap)
+        return lambda: update_config(max_tokens=before_cap)
+    except Exception as exc:  # a model that refuses the update keeps its own cap
+        log.warning("continuation cap not applied: %s: %s", type(exc).__name__, exc)
+        return lambda: None
+
+
+class _LaunchpadTurnTrace:
+    """What the console already received this turn (text chars) and the last usage the
+    model reported (output tokens) - for the recovery decision and the WARN line."""
+
+    def __init__(self):
+        self.text_chars = 0
+        self.output_tokens = None
+
+    def observe(self, event):
+        if not isinstance(event, dict) or not isinstance(event.get("event"), dict):
+            return
+        inner = event["event"]
+        delta = inner.get("contentBlockDelta", {}).get("delta", {})
+        text = delta.get("text") if isinstance(delta, dict) else None
+        if isinstance(text, str):
+            self.text_chars += len(text)
+        usage = inner.get("metadata", {}).get("usage", {})
+        if isinstance(usage, dict) and isinstance(usage.get("outputTokens"), int):
+            self.output_tokens = usage["outputTokens"]
+
+
+def _launchpad_text_delta(text: str) -> dict:
+    return {"event": {"contentBlockDelta": {"delta": {"text": text}, "contentBlockIndex": 0}}}
+
+
+async def _launchpad_recover_max_tokens(agent, trace: _LaunchpadTurnTrace):
+    """Continue the cut-off turn up to the configured number of times; yields the
+    marker frame(s), the continuation's own Converse events and, when the turn still
+    cannot finish, the notice text plus the `truncated: true` marker."""
+    budget = _launchpad_max_tokens_continuations()
+    cap = _launchpad_continuation_max_tokens()
+    attempts = 0
+    truncated = True
+    while truncated and attempts < budget:
+        attempts += 1
+        log.warning(
+            "max_tokens stop: stop_reason=max_tokens output_tokens=%s "
+            "continuation=%d/%d streamed_chars=%d continuation_cap=%d",
+            trace.output_tokens, attempts, budget, trace.text_chars, cap,
+        )
+        yield {"event": "truncated", "truncated": False, "stop_reason": "max_tokens",
+               "continuations": attempts}
+        if trace.text_chars:
+            yield _launchpad_text_delta("\n")
+        restore_cap = _launchpad_cap_max_tokens(agent, cap)
+        try:
+            async for event in agent.stream_async(LAUNCHPAD_MAX_TOKENS_CONTINUATION_PROMPT):
+                trace.observe(event)
+                for tool_frame in _launchpad_tool_frames(event):  # N16-obs85
+                    yield tool_frame
+                if not isinstance(event, dict) or "event" not in event:
+                    continue
+                cbs = event["event"].get("contentBlockStart")
+                if cbs is not None and not cbs.get("start"):
+                    continue
+                yield event
+            truncated = False
+        except Exception as exc:
+            if not _launchpad_is_max_tokens(exc):
+                raise
+        finally:
+            try:  # a failing restore must never mask the turn's own outcome
+                restore_cap()
+            except Exception as restore_exc:
+                log.warning("continuation cap not restored: %s: %s",
+                            type(restore_exc).__name__, restore_exc)
+    if not truncated:
+        # the continuation finished on its own stop (end_turn) - a normal turn even when it
+        # produced no text (r7-e): the notice and `truncated: true` are for a max_tokens stop only
+        return
+    if attempts == 0:
+        log.warning(
+            "max_tokens stop: stop_reason=max_tokens output_tokens=%s continuation=0/%d "
+            "streamed_chars=%d",
+            trace.output_tokens, budget, trace.text_chars,
+        )
+    yield _launchpad_text_delta(
+        ("\n\n" if trace.text_chars else "") + LAUNCHPAD_MAX_TOKENS_NOTICE
+    )
+    yield {"event": "truncated", "truncated": True, "stop_reason": "max_tokens",
+           "continuations": attempts}
+# </launchpad-max-tokens:v1>
+
+
+# <launchpad-tool-summaries:v1>  # --- CN N16-obs85 ---
+# Bounded tool-call summaries for the console. Strands yields one `message` event when the
+# assistant message (its `toolUse` blocks carry the complete arguments) and the tool-result
+# message (`toolResult` blocks) join the conversation; each block becomes one additive
+# `tool_input` / `tool_result` frame. Every field is cut at a fixed size - never a tool's
+# full output, never a page's text (the browser builtin's result is reduced to its title,
+# final URL and text length). A hub that does not know these frames ignores them.
+import json as _launchpad_json
+import re as _launchpad_re
+
+LAUNCHPAD_TOOL_INPUT_CHARS = 512
+LAUNCHPAD_TOOL_RESULT_CHARS = 256
+# C4 (rev-r16): a `<name>=<value>` / `<name>: <value>` pair whose name smells like a credential
+# is reduced to `<name>=[redacted]` before anything is cut; the native shell / file tools get
+# NO result summary at all (their output is arbitrary host text) - status only.
+_LAUNCHPAD_SECRET_RE = _launchpad_re.compile(
+    r"\b(\w*(?:token|secret|password|bearer|credential|authorization)\w*|\w*key)\b"
+    r"[\"']?\s*[=:]\s*(?:[\"'][^\"']*[\"']|\S+)"
+    r"|\b(bearer)\s+\S+",
+    _launchpad_re.IGNORECASE,
+)
+LAUNCHPAD_UNSUMMARISED_TOOLS = frozenset({"shell", "file_operations"})
+_LAUNCHPAD_TOOL_NAMES = {}  # toolUseId -> tool name, from the assistant's toolUse blocks
+
+
+def _launchpad_redact(text):
+    return _LAUNCHPAD_SECRET_RE.sub(lambda m: f"{m.group(1) or m.group(2)}=[redacted]", text)
+
+
+def _launchpad_bounded(text, limit):
+    text = _launchpad_redact(" ".join(str(text if text is not None else "").split()))
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"... [+{len(text) - limit} chars]"
+
+
+def _launchpad_result_text(result):
+    parts = []
+    for item in result.get("content") or []:
+        if not isinstance(item, dict):
+            continue
+        if isinstance(item.get("text"), str):
+            parts.append(item["text"])
+        elif "json" in item:
+            parts.append(_launchpad_json.dumps(item["json"], ensure_ascii=False, default=str))
+        elif "image" in item:
+            parts.append("[image]")
+        elif "document" in item:
+            parts.append("[document]")
+    return "\n".join(parts)
+
+
+def _launchpad_result_summary(result):
+    """`title: ... | url: ... | text: N chars` for the browser builtin's `title / url /
+    blank / text` result shape (the page text itself is never summarised); otherwise the
+    first LAUNCHPAD_TOOL_RESULT_CHARS characters of the result text."""
+    text = _launchpad_result_text(result)
+    lines = text.split("\n", 3)
+    if len(lines) >= 3 and lines[0].startswith("title: ") and lines[1].startswith("url: "):
+        body = lines[3] if len(lines) > 3 else ""
+        return _launchpad_bounded(
+            f"{lines[0]} | {lines[1]} | text: {len(body)} chars", LAUNCHPAD_TOOL_RESULT_CHARS
+        )
+    return _launchpad_bounded(text, LAUNCHPAD_TOOL_RESULT_CHARS)
+
+
+def _launchpad_tool_frames(event):
+    """The `tool_input` / `tool_result` frames one Strands stream event carries (0..n)."""
+    message = event.get("message") if isinstance(event, dict) else None
+    if not isinstance(message, dict):
+        return []
+    frames = []
+    for block in message.get("content") or []:
+        if not isinstance(block, dict):
+            continue
+        use = block.get("toolUse")
+        if isinstance(use, dict) and use.get("name"):
+            arguments = _launchpad_json.dumps(use.get("input"), ensure_ascii=False, default=str)
+            tool_id = str(use.get("toolUseId") or "") or None
+            if tool_id:
+                _LAUNCHPAD_TOOL_NAMES[tool_id] = str(use["name"])
+            frames.append({
+                "event": "tool_input", "id": tool_id, "name": str(use["name"]),
+                "input": _launchpad_bounded(arguments, LAUNCHPAD_TOOL_INPUT_CHARS),
+            })
+        result = block.get("toolResult")
+        if isinstance(result, dict):
+            tool_id = str(result.get("toolUseId") or "") or None
+            name = _LAUNCHPAD_TOOL_NAMES.pop(tool_id, "") if tool_id else ""
+            frames.append({
+                "event": "tool_result", "id": tool_id, "name": name,
+                "status": str(result.get("status") or ""),
+                "summary": (
+                    "" if name in LAUNCHPAD_UNSUMMARISED_TOOLS
+                    else _launchpad_result_summary(result)
+                ),
+            })
+    return frames
+# </launchpad-tool-summaries:v1>
+
+
+def _extract_prompt(payload: dict):
+    """Accept harness-style messages[], tool_results[], or plain prompt string payloads."""
+    if "messages" in payload:
+        return payload["messages"]
+    if "tool_results" in payload:
+        return [{"role": "user", "content": [{"toolResult": {
+            "toolUseId": tr["toolUseId"],
+            "status": tr.get("status", "success"),
+            "content": tr.get("content", []),
+        }} for tr in payload["tool_results"]]}]
+    return payload.get("prompt", "")
+
+
+def _has_inline_function_call(messages) -> bool:
+    """Return True if messages contains an assistant toolUse for an inline function tool."""
+    if not _INLINE_FUNCTION_NAMES or not isinstance(messages, list):
+        return False
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            for block in msg.get("content", []):
+                if isinstance(block, dict) and block.get("toolUse", {}).get("name") in _INLINE_FUNCTION_NAMES:
+                    return True
+    return False
+
+
+def _is_inline_function_call(event: dict) -> bool:
+    """Check if a contentBlockStart event is for an inline function tool."""
+    if not _INLINE_FUNCTION_NAMES:
+        return False
+    cbs = event.get("contentBlockStart", {})
+    start = cbs.get("start", {})
+    tool_use = start.get("toolUse") if isinstance(start, dict) else None
+    return tool_use is not None and tool_use.get("name") in _INLINE_FUNCTION_NAMES
+
+
+
+@app.entrypoint
+async def invoke(payload, context):
+    log.info("Invoking Agent.....")
+
+    skill_paths = []
+    s3_skill_sources = ["s3://__LAUNCHPAD_SKILLS__/"]
+    skill_paths.extend(await asyncio.to_thread(resolve_s3_skills, s3_skill_sources, None))
+    _skill_plugins = [AgentSkills(skills=skill_paths)] if skill_paths else []
+
+    session_id = getattr(context, 'session_id', 'default-session')
+    user_id = getattr(context, 'user_id', 'default-user')
+    agent = get_or_create_agent(session_id, user_id, _skill_plugins)
+
+    prompt = _extract_prompt(payload)
+
+
+    timeout_seconds = 300
+    timeout_fired = False
+    watchdog_task = None
+    if timeout_seconds is not None:
+        async def _timeout_watchdog():
+            nonlocal timeout_fired
+            await asyncio.sleep(timeout_seconds)
+            timeout_fired = True
+            agent.cancel()
+        watchdog_task = asyncio.create_task(_timeout_watchdog())
+
+    trace = _LaunchpadTurnTrace()
+    try:
+        async for event in agent.stream_async(
+            prompt,
+        ):
+            trace.observe(event)
+            for tool_frame in _launchpad_tool_frames(event):  # N16-obs85
+                yield tool_frame
+            if not isinstance(event, dict) or "event" not in event:
+                continue
+            cbs = event["event"].get("contentBlockStart")
+            if cbs is not None and not cbs.get("start"):
+                continue
+            yield event
+
+        if timeout_fired:
+            yield {"event": {"messageStop": {"stopReason": "timeout_exceeded"}}}
+    except EventLoopException as e:
+        if isinstance(e.original_exception, ExecutionLimitExceeded):
+            yield {"event": {"messageStop": {"stopReason": str(e.original_exception)}}}
+            return
+        raise
+    except Exception as e:  # N-SCN-bug4: a max_tokens stop is recovered, never raised
+        if not _launchpad_is_max_tokens(e):
+            raise
+        async for event in _launchpad_recover_max_tokens(agent, trace):
+            yield event
+    finally:
+        if watchdog_task is not None:
+            watchdog_task.cancel()
+            try:
+                await watchdog_task
+            except asyncio.CancelledError:
+                pass
+
+
+if __name__ == "__main__":
+    app.run()

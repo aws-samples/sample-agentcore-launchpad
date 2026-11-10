@@ -5,7 +5,7 @@
  * classic                              → V2
  * ?view=edit&record=<id>               → ?view=edit&id=<id>
  * ?record=<id>        (list selection) → ?view=detail&id=<id>
- * ?view=register[&type=MCP|AGENT_SKILLS], ?view=discoverable, ?view=a2a-demo → unchanged
+ * ?view=register[&type=MCP|AGENT_SKILLS], ?view=discoverable → unchanged
  */
 export function classicRegistryToV2(search: string): string {
   const params = new URLSearchParams(search);
@@ -19,7 +19,7 @@ export function classicRegistryToV2(search: string): string {
     out.set("view", "register");
     const type = params.get("type");
     if (type === "MCP" || type === "AGENT_SKILLS") out.set("type", type);
-  } else if (view === "discoverable" || view === "a2a-demo") {
+  } else if (view === "discoverable") {
     out.set("view", view);
   } else if (!view && record) {
     out.set("view", "detail");

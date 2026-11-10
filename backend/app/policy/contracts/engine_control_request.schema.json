@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/engine_control_request/v1",
+  "title": "I5 engine control request (one JSON line on the hub-only Unix socket)",
+  "type": "object",
+  "oneOf": [
+    {
+      "properties": {
+        "op": {"const": "install"},
+        "ws": {"type": "string", "minLength": 1},
+        "policy_set_version": {"type": "string", "minLength": 1},
+        "temporal_set_version": {"type": "integer", "minimum": 0},
+        "policies": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "version": {"type": "integer", "minimum": 1},
+              "mode": {"enum": ["active", "log_only"]},
+              "stage": {"enum": ["a", "bt"]},
+              "kind": {"enum": ["stateless", "temporal"]},
+              "text": {"type": "string", "minLength": 1, "maxLength": 10240}
+            },
+            "required": ["id", "version", "mode", "stage", "kind", "text"],
+            "additionalProperties": false
+          }
+        },
+        "schema": {"type": "string", "minLength": 1, "maxLength": 409600},
+        "event_schema": {"type": "string"}
+      },
+      "required": ["op", "ws", "policy_set_version", "temporal_set_version", "policies", "schema", "event_schema"],
+      "additionalProperties": false
+    },
+    {
+      "properties": {
+        "op": {"const": "authorize_stateless"},
+        "ws": {"type": "string", "minLength": 1},
+        "requests": {"type": "array", "maxItems": 500, "items": {"type": "object"}}
+      },
+      "required": ["op", "ws", "requests"],
+      "additionalProperties": false
+    },
+    {
+      "properties": {"op": {"const": "status"}},
+      "required": ["op"],
+      "additionalProperties": false
+    }
+  ]
+}

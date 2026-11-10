@@ -1,134 +1,33 @@
-"""Inbound authentication of an agent's Runtime: IAM (SigV4) or JWT bearer.
+"""Inbound authentication of an agent's Runtime: AWS_IAM (SigV4) only in this
+build (GRAPH-LOOP-SPEC N3 / decision D9).
 
-One Runtime supports exactly one inbound mode at a time (service constraint, see
-docs/identity.md). The workspace carries a default (`Workspace.settings
-["inbound_auth_default"]`), every `AgentSpec` may override it, and
-`resolve_inbound_auth` is the single place the two are folded together — the
-deployer, the invoke path and the UI all consume its result rather than
-re-deriving precedence.
+The CUSTOM_JWT authorizer this model used to also carry is not offered: the
+China Gateway/Runtime disallow the managed-user-pool JWT authorizer this build
+previously relied on, and it mints no bearer token of its own to present to
+any other IdP's authorizer either — so there is nothing a JWT mode here could
+serve. See
+``docs/cn/interfaces/gateway-iam.md`` for the shared-gateway shape this
+pairs with.
 
-Pure models + pure functions only. The discovery-document probe (network) and
-the ledger reads live in `app.services.inbound_auth`.
+The OIDC issuer helpers below are unrelated to inbound Runtime auth — they
+back the *outbound* Connection → discovery derivation (identity_providers,
+identity_gateway_targets) and stay for that.
 """
 
-import re
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, model_validator
-
-# The service model's CustomJWTAuthorizerConfiguration.discoveryUrl pattern
-# (bedrock-agentcore-control 1.43.x), plus an https requirement: a pasted
-# hostname fails at validation rather than at the first invoke, and the save-time
-# probe (``services.public_fetch``) only ever fetches https — a discovery
-# document served over plain HTTP could be swapped in transit, along with the
-# jwks_uri every token signature is checked against.
-DISCOVERY_URL_RE = re.compile(r"^https://.+/\.well-known/openid-configuration$")
-
-# customClaims patterns from the same service model: inboundTokenClaimName
-# `[A-Za-z0-9_.-:]+` and matchValueString `[A-Za-z0-9_.-]+` (1.43.103). A
-# value outside them fails CreateAgentRuntime with a ValidationException deep
-# in the deploy job — checked here so the request fails with the field name.
-CLAIM_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-:]+$")
-CLAIM_VALUE_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
+from pydantic import BaseModel
 
 DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
-# Same shape as `schemas.agent.CONNECTION_NAME_RE` (not imported: agent imports us).
-SOURCE_CONNECTION_RE = r"^[a-zA-Z0-9\-_]{1,128}$"
-
-InboundMode = Literal["iam", "jwt"]
-
-# Methods whose agents are AgentCore *Runtimes* and can therefore carry a JWT
-# authorizer. The managed Harness is invoked via InvokeHarness (SigV4 only in
-# Launchpad) and a discovered resource is externally owned — both resolve to IAM
-# regardless of the workspace default.
-JWT_CAPABLE_METHODS = frozenset({"zip_runtime", "studio", "container", "byoc"})
-
-
-class CustomClaim(BaseModel):
-    """One required-claim rule of the JWT authorizer.
-
-    Maps onto the service model's customClaims entry: {inboundTokenClaimName,
-    inboundTokenClaimValueType, authorizingClaimMatchValue {claimMatchValue,
-    claimMatchOperator}}.
-    """
-
-    name: str = Field(min_length=1, max_length=256)
-    value_type: Literal["STRING", "STRING_ARRAY"] = "STRING"
-    match_operator: Literal["EQUALS", "CONTAINS", "CONTAINS_ANY"] = "EQUALS"
-    match_values: list[str] = Field(min_length=1, max_length=32)
-
-    @model_validator(mode="after")
-    def _values_shape(self) -> "CustomClaim":
-        if not CLAIM_NAME_RE.match(self.name):
-            raise ValueError(
-                "claim name may use only letters, digits and _ . - : characters"
-            )
-        for value in self.match_values:
-            if not value or len(value) > 512:
-                raise ValueError("each claim match value must be 1-512 characters")
-            if not CLAIM_VALUE_RE.match(value):
-                raise ValueError(
-                    "claim match values may use only letters, digits and _ . - characters"
-                )
-        if self.match_operator == "EQUALS" and len(self.match_values) != 1:
-            raise ValueError("match_operator=EQUALS takes exactly one match value")
-        return self
-
-
-class JwtInboundConfig(BaseModel):
-    """The JWT authorizer half of an inbound-auth choice."""
-
-    discovery_url: str = Field(min_length=1, max_length=1024)
-    allowed_clients: list[str] = Field(default_factory=list, max_length=16)
-    allowed_audience: list[str] = Field(default_factory=list, max_length=16)
-    allowed_scopes: list[str] = Field(default_factory=list, max_length=16)
-    custom_claims: list[CustomClaim] = Field(default_factory=list, max_length=8)
-    # Display only: the Connection the console filled `discovery_url` from. It
-    # never reaches `authorizer_configuration`, so it cannot change what the
-    # Runtime accepts.
-    source_connection: str | None = Field(default=None, pattern=SOURCE_CONNECTION_RE)
-
-    @model_validator(mode="after")
-    def _shape(self) -> "JwtInboundConfig":
-        if not DISCOVERY_URL_RE.match(self.discovery_url):
-            raise ValueError(
-                "discovery_url must be an https OpenID Connect discovery URL "
-                "ending in /.well-known/openid-configuration"
-            )
-        for field_name in ("allowed_clients", "allowed_audience", "allowed_scopes"):
-            for entry in getattr(self, field_name):
-                if not entry or len(entry) > 512:
-                    raise ValueError(f"each {field_name} entry must be 1-512 characters")
-        if not (
-            self.allowed_clients
-            or self.allowed_audience
-            or self.allowed_scopes
-            or self.custom_claims
-        ):
-            # A discovery URL alone admits EVERY token the issuer ever minted;
-            # requiring at least one restriction makes "open to the whole IdP"
-            # impossible to configure by accident.
-            raise ValueError(
-                "a JWT inbound config must restrict callers: set at least one of "
-                "allowed_clients, allowed_audience, allowed_scopes or custom_claims"
-            )
-        return self
 
 
 class InboundAuth(BaseModel):
-    """One inbound-auth choice: how callers must authenticate to this Runtime."""
+    """One inbound-auth choice: how callers must authenticate to this Runtime.
 
-    mode: InboundMode = "iam"
-    jwt: JwtInboundConfig | None = None
+    AWS_IAM (SigV4) is the only mode this build offers."""
 
-    @model_validator(mode="after")
-    def _jwt_required(self) -> "InboundAuth":
-        if self.mode == "jwt" and self.jwt is None:
-            raise ValueError("mode='jwt' requires the jwt config block")
-        if self.mode == "iam" and self.jwt is not None:
-            raise ValueError("the jwt config block applies to mode='jwt' only")
-        return self
+    mode: Literal["iam"] = "iam"
 
 
 IAM_INBOUND = InboundAuth(mode="iam")
@@ -171,9 +70,10 @@ def discovery_url_for_issuer(issuer: str | None) -> str | None:
 def parse_inbound_auth(value: Any) -> InboundAuth | None:
     """A stored/blob value → model, or None for absent/invalid.
 
-    Lenient on purpose for the read path: a settings blob written by a future
-    release (or hand-edited) must not make every agent list 500 — an unreadable
-    default simply behaves like no default.
+    Lenient on purpose for the read path: a settings blob written by an older
+    release (e.g. a pre-N3 ``{"mode": "jwt", "jwt": {...}}`` snapshot) must not
+    make every agent list 500 — an unreadable value simply behaves like no
+    value (the caller treats that as IAM).
     """
     if not isinstance(value, dict):
         return None
@@ -181,61 +81,3 @@ def parse_inbound_auth(value: Any) -> InboundAuth | None:
         return InboundAuth(**value)
     except ValueError:
         return None
-
-
-def resolve_inbound_auth(
-    spec_inbound: InboundAuth | None,
-    workspace_default: InboundAuth | None,
-    *,
-    method: str = "",
-    protocol: str = "http",
-) -> InboundAuth:
-    """The effective inbound auth for one agent: spec > workspace default > IAM.
-
-    Methods that are not Runtime-backed (harness, discovered imports) and A2A
-    runtimes resolve to IAM even under a JWT workspace default — they have no
-    bearer invoke path in Launchpad, and inheriting a mode they cannot serve
-    would deploy an agent nothing can call. An *explicit* spec-level JWT request
-    for those is refused earlier, at AgentSpec validation.
-    """
-    if method not in JWT_CAPABLE_METHODS or protocol == "a2a":
-        return IAM_INBOUND
-    if spec_inbound is not None:
-        return spec_inbound
-    if workspace_default is not None:
-        return workspace_default
-    return IAM_INBOUND
-
-
-def _claim_match_value(claim: CustomClaim) -> dict[str, Any]:
-    if claim.match_operator == "EQUALS":
-        return {"matchValueString": claim.match_values[0]}
-    return {"matchValueStringList": list(claim.match_values)}
-
-
-def authorizer_configuration(auth: InboundAuth) -> dict[str, Any] | None:
-    """The CreateAgentRuntime/UpdateAgentRuntime authorizerConfiguration param,
-    or None for IAM (the field is omitted, which is the SigV4 default)."""
-    if auth.mode != "jwt" or auth.jwt is None:
-        return None
-    jwt = auth.jwt
-    config: dict[str, Any] = {"discoveryUrl": jwt.discovery_url}
-    if jwt.allowed_clients:
-        config["allowedClients"] = list(jwt.allowed_clients)
-    if jwt.allowed_audience:
-        config["allowedAudience"] = list(jwt.allowed_audience)
-    if jwt.allowed_scopes:
-        config["allowedScopes"] = list(jwt.allowed_scopes)
-    if jwt.custom_claims:
-        config["customClaims"] = [
-            {
-                "inboundTokenClaimName": claim.name,
-                "inboundTokenClaimValueType": claim.value_type,
-                "authorizingClaimMatchValue": {
-                    "claimMatchValue": _claim_match_value(claim),
-                    "claimMatchOperator": claim.match_operator,
-                },
-            }
-            for claim in jwt.custom_claims
-        ]
-    return {"customJWTAuthorizer": config}

@@ -1,34 +1,42 @@
-"""Evidence for a 3rd-party recommendation: what one completed batch evaluation
-scored, per session, joined with the conversation each session had.
+"""Evidence for a recommendation: what one completed evaluation run scored, per session,
+joined with the conversation each session had (N12 E2-4).
 
-Scores come from the batch's own results log stream
-(``GetBatchEvaluation.outputConfig.cloudWatchConfig`` → ``run-<batchId>`` in the
-account-wide ``…/batch-evaluations/results/default`` group — live-verified
-2026-09-03, see the task's research notes). Records are the same
-``gen_ai.evaluation.result`` family the online-evaluation queries read. The
-conversation is rebuilt by ``observability.session_transcript`` (memory → OTEL
-content logs for eval-run sessions).
+Scores are the run's ``eval_results`` rows (``source="run"``) — the Strands engine wrote
+them where the Global batch evaluation used to stream its ``gen_ai.evaluation.result``
+records. The conversation is rebuilt by ``observability.session_transcript`` (memory →
+OTEL content logs for eval-run sessions); tool evidence by the content-log tool turns and
+the tool spans. The backend collects all of it and ships plain dicts in the job spec:
+the worker has no ledger.
 
-Sampling is deliberate: the optimizer reads the WORST sessions first (that is
-where the prompt's failure modes are), but keeps a minority of the best ones so
-it can see what the current prompt already gets right and preserve it.
+Sampling is deliberate: the optimizer reads the WORST sessions first (that is where the
+prompt's failure modes are), but keeps a minority of the best ones so it can see what the
+current prompt already gets right and preserve it.
 """
 
 from __future__ import annotations
 
 import json
 import math
-import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from app.evaluation import agentcore_eval as ac
-from app.evaluation.agentcore_eval import read_result_records
-from app.optimization.providers.base import EvaluatorRecord, EvidenceStats, SessionEvidence
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
+from app.evaluation.models import EvalResult
+from app.evaluation.online_evaluators import evaluator_polarity
+from app.optimization.providers.base import (
+    EvaluatorRecord,
+    EvidenceStats,
+    SessionEvidence,
+    evidence_dict,
+    stats_dict,
+)
+from app.services.strands_eval.jobs_recommend import tool_mentions
 from app.services.workspace import WorkspaceContext
 
-MAX_EVENTS = ac.RESULT_RECORDS_MAX  # hard stop on the stream read
 MAX_TURN_CHARS = 1500
 _HEAD, _TAIL = 1200, 300
 CONTRAST_SHARE = 0.2  # share of the selection reserved for best-scoring sessions
@@ -44,11 +52,15 @@ ToolTurnsFn = Callable[[str], list[dict[str, Any]]]
 # session ids → {session id: [{"id", "name", "status", "description"}]} from tool spans
 ToolSpansFn = Callable[[list[str]], dict[str, list[dict[str, Any]]]]
 
+__all__ = [
+    "MAX_TOOL_TURNS", "ToolSpansFn", "ToolTurnsFn", "TranscriptFn", "collect_evidence",
+    "default_tool_spans", "default_tool_turns", "default_transcript", "evidence_payload",
+    "group_records", "insight_feedback", "mean_polarized", "read_run_records",
+    "select_sessions", "tool_mentions", "tool_spans_query", "truncate_text",
+]
 
-# ─── results stream ──────────────────────────────────────────────────────────
-# `read_result_records` lives in agentcore_eval (the run-results view reads the
-# same stream) and is imported above under its original name, so callers and
-# tests keep `evidence.read_result_records`.
+
+# ─── result records (eval_results rows of one run) ───────────────────────────
 
 
 def _num(value: Any) -> float | None:
@@ -58,20 +70,38 @@ def _num(value: Any) -> float | None:
         return None
 
 
-def group_records(attrs_list: list[dict[str, Any]]) -> dict[str, list[EvaluatorRecord]]:
+def read_run_records(
+    db: Session, run_id: str, workspace_id: str | None = None
+) -> list[dict[str, Any]]:
+    """The run's ``eval_results`` rows as plain dicts, oldest first."""
+    query = select(EvalResult).where(EvalResult.source == "run", EvalResult.run_id == run_id)
+    if workspace_id is not None:
+        query = query.where(EvalResult.workspace_id == workspace_id)
+    return [
+        {
+            "session_id": row.session_id, "trace_id": row.trace_id,
+            "evaluator_id": row.evaluator_id, "level": row.level, "score": row.score,
+            "label": row.label, "explanation": row.explanation,
+            "error_type": row.error_type, "error_message": row.error_message,
+        }
+        for row in db.scalars(query.order_by(EvalResult.created_at.asc()))
+    ]
+
+
+def group_records(records: list[dict[str, Any]]) -> dict[str, list[EvaluatorRecord]]:
     grouped: dict[str, list[EvaluatorRecord]] = {}
-    for attrs in attrs_list:
-        sid = attrs.get("session.id")
+    for rec in records:
+        sid = rec.get("session_id")
         if not sid:
             continue
         grouped.setdefault(str(sid), []).append(
             EvaluatorRecord(
-                evaluator_id=str(attrs.get("gen_ai.evaluation.name")),
-                score=_num(attrs.get("gen_ai.evaluation.score.value")),
-                label=attrs.get("gen_ai.evaluation.score.label"),
-                explanation=attrs.get("gen_ai.evaluation.explanation"),
-                level=attrs.get("aws.bedrock_agentcore.evaluation_level"),
-                error=attrs.get("error.message"),
+                evaluator_id=str(rec.get("evaluator_id")),
+                score=_num(rec.get("score")),
+                label=rec.get("label"),
+                explanation=rec.get("explanation"),
+                level=rec.get("level"),
+                error=rec.get("error_message") or rec.get("error"),
             )
         )
     return grouped
@@ -79,10 +109,10 @@ def group_records(attrs_list: list[dict[str, Any]]) -> dict[str, list[EvaluatorR
 
 def mean_polarized(records: list[EvaluatorRecord]) -> float | None:
     """Mean of ``polarity × score`` so "lower" always means "worse" — a penalty
-    evaluator (Refusal, Harmfulness, Stereotyping) scores high when the agent
-    misbehaved, and must not make a bad session look good."""
+    evaluator (Refusal) scores high when the agent misbehaved, and must not make a
+    bad session look good."""
     vals = [
-        ac.evaluator_polarity(r.evaluator_id) * r.score
+        evaluator_polarity(r.evaluator_id) * r.score
         for r in records
         if r.score is not None
     ]
@@ -224,18 +254,6 @@ def default_tool_spans(
     return _fn
 
 
-_WORD = r"(?<![A-Za-z0-9_]){}(?![A-Za-z0-9_])"
-
-
-def tool_mentions(text: str | None, names: list[str]) -> list[str]:
-    """Tool names an evaluator explanation mentions (word-boundary match,
-    backticks/quotes tolerated). Best effort — TOOL_CALL records carry no tool
-    id, so this is the only link from a judgement to a call."""
-    if not text:
-        return []
-    return [n for n in names if n and re.search(_WORD.format(re.escape(n)), text)]
-
-
 def _tool_turns_from_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Span-only fallback: calls without arguments or results."""
     return [
@@ -290,7 +308,7 @@ def _merge_turns(
         t.get("at") for t in tool_turns if t["role"] != "note"
     ):
         keyed = [(t["at"], 0, i, t) for i, t in enumerate(text_turns)] + [
-            (t.get("at") or "\uffff", 1, i, t) for i, t in enumerate(tool_turns)
+            (t.get("at") or "￿", 1, i, t) for i, t in enumerate(tool_turns)
         ]
         return [t for _, _, _, t in sorted(keyed, key=lambda k: (k[0], k[1], k[2]))]
     return text_turns + tool_turns
@@ -311,7 +329,7 @@ def insight_feedback(insights: dict[str, Any] | None) -> list[str]:
                 if not isinstance(rc, dict):
                     continue
                 cause = rc.get("rootCause") or rc.get("description") or ""
-                rec = rc.get("recommendation") or ""
+                rec = rc.get("recommendation") or rc.get("fix_recommendation") or ""
                 label = " / ".join(p for p in (cat, sub_name) if p)
                 text = f"{label}: {cause}".strip(": ")
                 if rec:
@@ -326,26 +344,39 @@ def insight_feedback(insights: dict[str, Any] | None) -> list[str]:
 # ─── entry point ─────────────────────────────────────────────────────────────
 def collect_evidence(
     *,
-    workspace: WorkspaceContext,
-    log_group: str,
-    log_stream: str,
+    records: list[dict[str, Any]] | None = None,
     transcript: TranscriptFn,
     max_sessions: int,
-    logs: Any = None,
     progress: Callable[[str], None] | None = None,
     tool_turns: ToolTurnsFn | None = None,
     tool_spans: ToolSpansFn | None = None,
+    workspace: WorkspaceContext | None = None,
+    log_group: str | None = None,
+    log_stream: str | None = None,
+    logs: Any = None,
 ) -> tuple[list[SessionEvidence], EvidenceStats]:
-    """``tool_turns`` / ``tool_spans`` are given only when tool evidence is wanted
-    (a provider producing tool descriptions). Content-log turns are the primary
-    source (arguments + results); spans fill in sessions whose content records
-    carry no tool parts and record the description the model actually saw."""
-    attrs = read_result_records(
-        logs or workspace.client("logs"), log_group, log_stream
-    )
-    grouped = group_records(attrs)
+    """``records`` are the run's ``eval_results`` rows (:func:`read_run_records`). A
+    caller may pass the run's *results identity* instead — ``results_log_group`` /
+    ``results_log_stream``, where the stream **is the run id** — and the rows are read
+    here; ``log_group`` / ``logs`` (the optional CloudWatch mirror) are accepted for
+    call-compatibility and never read.
+    ``tool_turns`` / ``tool_spans`` are given only when tool evidence is wanted (a
+    provider producing tool descriptions). Content-log turns are the primary source
+    (arguments + results); spans fill in sessions whose content records carry no tool
+    parts and record the description the model actually saw."""
+    if records is None:
+        if not log_stream:
+            raise ValueError("collect_evidence needs `records` or the run id as `log_stream`")
+        session = SessionLocal()
+        try:
+            records = read_run_records(
+                session, str(log_stream), getattr(workspace, "id", None) or DEFAULT_WORKSPACE_ID
+            )
+        finally:
+            session.close()
+    grouped = group_records(records)
     stats = EvidenceStats(
-        records=len(attrs),
+        records=len(records),
         sessions_scored=sum(1 for recs in grouped.values() if mean_polarized(recs) is not None),
     )
     chosen = select_sessions(grouped, max_sessions)
@@ -410,3 +441,10 @@ def collect_evidence(
             )
         )
     return evidence, stats
+
+
+def evidence_payload(
+    evidence: list[SessionEvidence], stats: EvidenceStats
+) -> dict[str, Any]:
+    """The job-spec slice the worker-side reflection reads (``evidence`` + ``stats``)."""
+    return {"evidence": [evidence_dict(ev) for ev in evidence], "stats": stats_dict(stats)}

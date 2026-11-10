@@ -32,7 +32,7 @@ own legs (pending → authorized → revoked).
 """
 
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -49,46 +49,12 @@ SESSION_TTL_S = 900
 
 GRANT_STATUSES = ("pending", "authorized", "revoked")
 
-# Who the Runtime saw as the caller of the turn that asked for consent (P3).
-# IAM runtimes key the vault user on runtimeUserId (the Launchpad username);
-# JWT-inbound runtimes key it on the inbound JWT (iss + sub), so the binding
-# leg must present ``userToken`` — a fresh JWT of the same subject.
+# Who the Runtime saw as the caller of the turn that asked for consent. Every
+# Runtime inbound is AWS_IAM-only in this build (GRAPH-LOOP-SPEC N3 / D9), so
+# this is always "iam" — kept as a named constant (and the ledger column
+# backing it, see models/ledger.py) only because a future external-IdP node
+# might reintroduce a caller kind that needs its own vault-binding identifier.
 CALLER_IAM = "iam"
-CALLER_USER_JWT = "user_jwt"
-CALLER_M2M = "m2m"
-CALLER_KINDS = (CALLER_IAM, CALLER_USER_JWT, CALLER_M2M)
-
-# An as_user ask raised on a JWT-inbound agent by a call that presented the
-# workspace M2M token. The vault would key that consent on the ONE machine
-# subject every M2M caller shares (Chat with "invoke as me" off, every /v1 key
-# holder, direct invoke, evaluation runs), so completing it would hand one
-# member's downstream token to all of them. Such an ask is never recorded and
-# such a session is never completed.
-AS_USER_REQUIRES_USER_JWT = "identity.as_user_requires_user_jwt"
-
-
-def as_user_requires_user_jwt(
-    *, provider: str = "", tool: str = "", agent_id: str = "", console: bool = False
-) -> AppError:
-    """The named refusal for an as_user consent over the shared M2M subject."""
-    if console:
-        message = (
-            "this tool acts as you, and this turn called the agent with the "
-            "workspace machine token — turn on \"invoke as me\" and retry"
-        )
-    else:
-        message = (
-            "as_user tools on a JWT-inbound agent need a user JWT — this call "
-            "presented the workspace machine (M2M) token, whose subject every "
-            "M2M caller shares, so no consent is started for it"
-        )
-    return AppError(
-        AS_USER_REQUIRES_USER_JWT,
-        message,
-        {"provider": provider, "tool": tool, "agent_id": agent_id, "caller": CALLER_M2M},
-        status_code=409,
-    )
-
 
 # An as_user ask raised on a call with no signed-in console user (the public
 # /v1 API). Leg 4 (CompleteResourceTokenAuth) is completed by the console's
@@ -202,18 +168,14 @@ def record_pending(
     agent_id: str = "",
     tool: str = "",
     scopes: Iterable[str] = (),
-    caller_kind: str = CALLER_IAM,
 ) -> None:
     """Remember which user a forwarded ``auth_required`` ask belongs to, and
     mark that user's grant pending.
 
     Best-effort on purpose: a failure here must not break the turn (the user
     still sees the Authorize card, and a retry mints a new session).
-
-    An ask over the shared M2M subject is never recorded (see
-    ``AS_USER_REQUIRES_USER_JWT``); the invoke layer refuses it before this.
     """
-    if not (session_uri and provider and user_id) or caller_kind == CALLER_M2M:
+    if not (session_uri and provider and user_id):
         return
     try:
         existing = (
@@ -233,7 +195,7 @@ def record_pending(
                     user_id=user_id,
                     agent_id=agent_id,
                     tool=tool,
-                    caller_kind=caller_kind if caller_kind in CALLER_KINDS else CALLER_IAM,
+                    caller_kind=CALLER_IAM,
                 )
             )
         grant = _grant(db, workspace_id, user_id, provider, agent_id)
@@ -262,33 +224,14 @@ def _expired(row: OauthPendingSession) -> bool:
     return _now() - created > timedelta(seconds=SESSION_TTL_S)
 
 
-def _user_identifier(
-    row: OauthPendingSession, user_token: Callable[[str], str | None] | None
-) -> dict[str, str]:
+def _user_identifier(row: OauthPendingSession) -> dict[str, str]:
     """``CompleteResourceTokenAuth.userIdentifier`` for one recorded session.
 
-    The service model's union is ``{userToken | userId}``. A session the
-    Runtime asked under a JWT authorizer belongs to the JWT subject, so it is
-    completed with a fresh token of that subject — never the bare username,
-    which would bind the consent to an identity the runtime never uses.
+    Every session in this build is asked under an AWS_IAM Runtime, so the
+    service model's ``{userToken | userId}`` union always resolves to the
+    bare ``userId``.
     """
-    kind = getattr(row, "caller_kind", None) or CALLER_IAM
-    if kind == CALLER_IAM:
-        return {"userId": row.user_id}
-    if kind != CALLER_USER_JWT:
-        # checked by ``complete`` before this; never present the M2M token
-        raise as_user_requires_user_jwt(provider=row.provider, tool=row.tool or "")
-    token = user_token(kind) if user_token is not None else None
-    if not token:
-        raise AppError(
-            "identity.session_token_unavailable",
-            "this authorization was started over a JWT-inbound agent, and no "
-            "token of the same caller could be minted to complete it — sign in "
-            "to the console with its user pool, or retry the request",
-            {"provider": row.provider, "caller_kind": kind},
-            status_code=409,
-        )
-    return {"userToken": token}
+    return {"userId": row.user_id}
 
 
 def complete(
@@ -298,18 +241,13 @@ def complete(
     *,
     caller: str,
     data_client: Any,
-    user_token: Callable[[str], str | None] | None = None,
 ) -> dict[str, Any]:
     """Bind the consented token to its recorded user (leg 3), then mark the
     grant authorized and drop the session row.
 
     ``caller`` is the signed-in console user; it must equal the recorded user.
     ``data_client`` is the workspace's ``bedrock-agentcore`` data-plane client
-    (injected so tests need no AWS). ``user_token`` mints the JWT a session
-    asked over a JWT-inbound runtime must be completed with (called with the
-    recorded caller kind); an IAM-asked session completes with ``userId``.
-    A session asked over the shared M2M subject (a row written before that ask
-    was refused) is dropped with 409 and never reaches the identity service.
+    (injected so tests need no AWS).
     """
     row = (
         db.query(OauthPendingSession)
@@ -344,13 +282,7 @@ def complete(
             status_code=409,
         )
     provider, agent_id, tool = row.provider, row.agent_id, row.tool
-    if row.caller_kind == CALLER_M2M:
-        db.delete(row)
-        db.commit()
-        raise as_user_requires_user_jwt(
-            provider=provider, tool=tool or "", agent_id=agent_id or "", console=True
-        )
-    identifier = _user_identifier(row, user_token)
+    identifier = _user_identifier(row)
     try:
         data_client.complete_resource_token_auth(
             userIdentifier=identifier, sessionUri=session_uri

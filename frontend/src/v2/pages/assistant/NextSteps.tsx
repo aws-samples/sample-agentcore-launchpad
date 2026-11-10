@@ -12,22 +12,29 @@ import {
   errorMessage,
 } from "../../../lib/api";
 import { asRecord, type DeployedAgent } from "../../../lib/assistant";
-import { type EvaluationRunInfo, evaluationRunPresentation, RUN_TERMINAL_STATUSES, runMeanScore } from "../../../lib/evaluation";
+import {
+  coverageInfo,
+  type EvaluationRunInfo,
+  RUN_TERMINAL_STATUSES,
+  runCoverage,
+  runMeanScore,
+  runRecommendable,
+} from "../../../lib/evaluation";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
-import { Alert, Button, Card, Confirm, LinkButton, Select, Tag } from "../../ui";
+import { Alert, Button, Card, Confirm, Select, Tag } from "../../ui";
 import { RunRecommendations } from "../tasks/RunRecommendations";
-import { CHIP_TAG, shortId } from "./common";
-import { HarnessCanary } from "./HarnessCanary";
+import { shortId, useReadOnly } from "./common";
 import { RecommendationHistory } from "./RecommendationHistory";
+import { RunHistory } from "./RunHistory";
+import { awsStatusLabel } from "../../awsStatus";
 
 /**
  * NEXT STEPS — shown under the evaluation assets once the creation operation has
  * SUCCEEDED: guidance with deep links, plus START EVALUATION (the same
  * `POST /api/eval/runs` New Run sends: agent + created Dataset + created evaluators),
  * AI RECOMMENDATIONS from the first clean run (accepting one re-publishes the Harness
- * as a new version) and a HARNESS CANARY (that new version vs an earlier one) — each
- * billable action behind a confirm.
+ * as a new version) — each billable action behind a confirm.
  */
 
 const MAX_BATCH_EVALUATORS = 10;
@@ -107,7 +114,6 @@ export function NextStepsCard({
   const agentReady = agent
     ? agent.status === "active"
     : !!deployed?.agentId && deployed.jobStatus === "succeeded" && deployed.agentStatus === "active";
-  const isHarness = (agent?.method ?? "harness") === "harness";
 
   const runParams = new URLSearchParams({ view: "new" });
   if (targetId) runParams.set("agent", targetId);
@@ -115,7 +121,10 @@ export function NextStepsCard({
   if (evaluators.length) runParams.set("evaluators", evaluators.map((e) => e.id).join(","));
   const runLink = `/v2/eval/tasks?${runParams.toString()}`;
 
-  const canRun = can("eval.run");
+  // a read-only viewer (admin on an unshared conversation) follows the next steps
+  // but starts no run and accepts no recommendation
+  const readOnly = useReadOnly();
+  const canRun = can("eval.run") && !readOnly;
   // StartBatchEvaluation applies at most this many evaluators per run (service limit).
   const tooMany = evaluators.length > MAX_BATCH_EVALUATORS;
   const startable = agentReady && !!targetId && !!datasetId && evaluators.length > 0 && !tooMany;
@@ -196,16 +205,41 @@ export function NextStepsCard({
     }
   };
 
-  // Recommendations are seeded from one cleanly completed run with a batch — the newest
+  // A partial run predating the per-session summary (N12-obs47): re-checking it folds its
+  // stored results into which sessions were not scored and why (reads only).
+  const [reading, setReading] = useState<string | null>(null);
+  const readDetail = async (run: EvaluationRunInfo) => {
+    setReading(run.id);
+    try {
+      await api.recheckEvaluationRun(run.id);
+      toast("success", t("v2.runCoverage.readDetailDone"));
+      await loadRuns();
+    } catch (err) {
+      toast("error", t("common.actionFailed", { msg: errorMessage(err) }));
+    } finally {
+      setReading(null);
+    }
+  };
+
+  // Recommendations are seeded from one usable completed run with a job — clean, or one
+  // that only lost a minority of sessions to incomplete telemetry (N12-obs47) — the newest
   // by default; the operator may pick an earlier one, and the other runs' recommendations
   // (an accepted one included) stay listed instead of vanishing behind a newer run.
-  const completedRuns = (agentRuns ?? runs ?? []).filter(
-    (r) => evaluationRunPresentation(r).status === "completed" && !!r.batch_eval_id,
-  );
+  const candidateRuns = agentRuns ?? runs ?? [];
+  const completedRuns = candidateRuns.filter((r) => runRecommendable(r).ok);
+  // why no run qualifies yet, when a partial one exists (newest first)
+  const blockedReason = completedRuns.length === 0
+    ? candidateRuns.map((r) => runRecommendable(r).reason).find((r) => r && r !== "not_completed") ?? null
+    : null;
   const [sourceRunId, setSourceRunId] = useState<string | null>(null);
   const baseline = completedRuns.find((r) => r.id === sourceRunId) ?? completedRuns[0] ?? null;
   const otherRuns = completedRuns.filter((r) => r.id !== baseline?.id);
   const baselineMean = baseline ? meanScore(baseline) : null;
+  const baselineCoverage = baseline ? runCoverage(baseline) : null;
+  const coverageLabel = (r: EvaluationRunInfo) => {
+    const c = runCoverage(r);
+    return c ? t("assistantNext.recommend.sourceCoverage", { scored: c.scored, total: c.total }) : null;
+  };
 
   let n = 0;
   return (
@@ -229,23 +263,31 @@ export function NextStepsCard({
               ? t("assistantNext.chat.failed", { name: agentName })
               : t("assistantNext.chat.waiting", {
                 name: agentName,
-                status: String(agent?.status ?? deployed?.jobStatus ?? deployed?.agentStatus ?? "—"),
+                status: agent?.status
+                  ? t(`status.${agent.status}`, { defaultValue: agent.status })
+                  : deployed?.jobStatus
+                    ? awsStatusLabel(t, String(deployed.jobStatus))
+                    : deployed?.agentStatus
+                      ? t(`status.${deployed.agentStatus}`, { defaultValue: String(deployed.agentStatus) })
+                      : "—",
               })}
         </Step>
 
         <Step
           n={++n}
           testId="v2-assistant-next-run"
-          title={t("assistantNext.run.title")}
+          title={(runs?.length ?? 0) > 0 ? t("assistantNext.run.titleAgain") : t("assistantNext.run.title")}
           actions={
             <>
-              <Button kind="primary" size="sm" disabled={!startable || !canRun || starting || runLive}
-                title={startReason} onClick={() => setConfirmStart(true)} testId="v2-assistant-next-start-run">
-                {starting ? t("assistantNext.run.starting")
-                  : (runs?.length ?? 0) > 0 ? t("assistantNext.run.startAgain") : t("assistantNext.run.start")}
-              </Button>
-              <Link className="v2-btn sm" to={runLink}>{t("assistantNext.run.open")}</Link>
-              {startReason && <span className="v2-muted" style={{ fontSize: 12.5 }}>{startReason}</span>}
+              {!readOnly && (
+                <Button kind="primary" size="sm" disabled={!startable || !canRun || starting || runLive}
+                  title={startReason} onClick={() => setConfirmStart(true)} testId="v2-assistant-next-start-run">
+                  {starting ? t("assistantNext.run.starting")
+                    : (runs?.length ?? 0) > 0 ? t("assistantNext.run.startAgain") : t("assistantNext.run.start")}
+                </Button>
+              )}
+              {!readOnly && <Link className="v2-btn sm" to={runLink}>{t("assistantNext.run.open")}</Link>}
+              {!readOnly && startReason && <span className="v2-muted" style={{ fontSize: 12.5 }}>{startReason}</span>}
             </>
           }
         >
@@ -266,41 +308,18 @@ export function NextStepsCard({
               {t("assistantNext.run.referenceDependent", { n: referenceDependent })}
             </div>
           )}
-          {runs && runs.length > 0 && (
-            <div className="v2-assistant-sub-rows" data-testid="v2-assistant-next-runs" data-live={runLive ? "true" : "false"}>
-              <div className="v2-muted" style={{ fontSize: 12.5 }}>{t("assistantNext.run.historyTitle", { n: runs.length })}</div>
-              {runs.map((run) => {
-                const live = !RUN_TERMINAL_STATUSES.has(run.status);
-                const presentation = evaluationRunPresentation(run);
-                const mean = meanScore(run);
-                return (
-                  <div key={run.id} className="v2-assistant-sub-row" data-run-status={run.status}>
-                    <span className="mono">{t("assistantNext.run.runLine", { id: run.id.slice(0, 8) })}</span>
-                    <Tag tone={CHIP_TAG[presentation.tone] ?? "gray"}>
-                      {t(`expPage.readiness.runStatus.${presentation.status}`)}
-                    </Tag>
-                    {run.created_at && <span className="v2-muted">{fmtTime(run.created_at)}</span>}
-                    {run.queue_position != null && live && (
-                      <span className="v2-muted">{t("assistantNext.run.queued", { n: run.queue_position })}</span>
-                    )}
-                    {mean != null && (
-                      <span className="v2-muted">
-                        {t("assistantNext.run.meanScore", { mean: mean.toFixed(2), n: run.scores.length })}
-                      </span>
-                    )}
-                    <Link to={`/v2/eval/tasks?view=detail&id=${encodeURIComponent(run.id)}`}>{t("assistantNext.run.openRuns")} ›</Link>
-                    {canRun && (run.status === "failed" || run.status === "stopped") && (
-                      <LinkButton danger disabled={removing === run.id} onClick={() => void removeRun(run)}>
-                        {t("assistantNext.run.remove")}
-                      </LinkButton>
-                    )}
-                    {run.error && (
-                      <div className={presentation.status === "completed_with_errors" ? "err warn" : "err"}>{run.error}</div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+          {targetId && datasetId && runs && runs.length > 0 && (
+            <RunHistory
+              agentId={targetId}
+              datasetId={datasetId}
+              runs={runs}
+              reloadKey={`${agent?.version ?? ""}:${agent?.status ?? ""}`}
+              canRun={canRun}
+              removing={removing}
+              onRemove={(run) => void removeRun(run)}
+              reading={reading}
+              onReadDetail={(run) => void readDetail(run)}
+            />
           )}
           {runError && <div style={{ marginTop: 8 }}><Alert tone="error">{runError}</Alert></div>}
         </Step>
@@ -323,16 +342,24 @@ export function NextStepsCard({
                         t("assistantNext.run.runLine", { id: shortId(r.id) }),
                         r.dataset_id && r.dataset_id !== datasetId ? (r.dataset_name ?? r.dataset_id) : null,
                         r.created_at ? fmtTime(r.created_at) : null,
+                        coverageLabel(r),
                         i === 0 ? t("assistantNext.recommend.newest") : null,
                       ].filter(Boolean).join(" · "),
                     }))}
                   />
                 ) : (
-                  <Tag tone="green">{t("assistantNext.run.runLine", { id: shortId(baseline.id) })}</Tag>
+                  <Tag tone={!baselineCoverage ? "green" : coverageInfo(baselineCoverage) ? "blue" : "orange"}>
+                    {[t("assistantNext.run.runLine", { id: shortId(baseline.id) }), coverageLabel(baseline)].filter(Boolean).join(" · ")}
+                  </Tag>
                 )}
                 {baselineMean != null && (
                   <span className="v2-muted">
-                    {t("assistantNext.run.meanScore", { mean: baselineMean.toFixed(2), n: baseline.scores.length })}
+                    {baselineCoverage
+                      ? t("assistantNext.run.meanScoreCoverage", {
+                        mean: baselineMean.toFixed(2), n: baseline.scores.length,
+                        scored: baselineCoverage.scored, total: baselineCoverage.total,
+                      })
+                      : t("assistantNext.run.meanScore", { mean: baselineMean.toFixed(2), n: baseline.scores.length })}
                   </span>
                 )}
                 {agent?.version && <span className="v2-muted">{t("assistantNext.recommend.version", { v: agent.version })}</span>}
@@ -345,14 +372,19 @@ export function NextStepsCard({
                   key={baseline.id}
                   run={baseline}
                   embedded
-                  acceptable={isHarness && agentReady}
+                  readOnly={readOnly}
+                  // N12-obs44: the method predicate is the backend's (accept_eligible on the
+                  // inputs read model); this parent only withholds ACCEPT until the agent is active
+                  acceptable={agentReady ? undefined : false}
                   onAccepted={() => setAgentTick((k) => k + 1)}
                 />
               </div>
               {otherRuns.length > 0 && <RecommendationHistory runs={otherRuns} onOpen={setSourceRunId} />}
             </>
           ) : (
-            <div className="v2-muted" style={{ marginTop: 6 }}>{t("assistantNext.recommend.waiting")}</div>
+            <div className="v2-muted" style={{ marginTop: 6 }} data-testid="v2-assistant-next-rec-waiting">
+              {blockedReason ? t(`assistantNext.recommend.blocked.${blockedReason}`) : t("assistantNext.recommend.waiting")}
+            </div>
           )}
         </Step>
 
@@ -368,16 +400,6 @@ export function NextStepsCard({
           }
         >
           <div>{t("assistantNext.iterate.body")}</div>
-          {targetId && isHarness && (
-            <HarnessCanary
-              agentId={targetId}
-              agentName={agentName}
-              agentActive={agentReady}
-              versionsKey={`${agent?.version ?? ""}:${agent?.status ?? ""}`}
-              account={operation.account_id}
-              region={operation.region}
-            />
-          )}
         </Step>
 
         {manualTasks.length > 0 && (

@@ -1,0 +1,1279 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  AgentCore Launchpad CN control-plane host: an ARM64 Ubuntu Server 24.04 LTS
+  EC2 instance in cn-northwest-1, reachable only from AllowedCidr (no CloudFront,
+  no public ALB — spec C6/§3.K decision). Clones the repo, runs `cdk bootstrap`
+  + `make bootstrap`, and starts the console under systemd + nginx.
+
+Parameters:
+  AllowedCidr:
+    Type: String
+    Description: >
+      CIDR allowed to reach the console on 80/443 (office/VPN egress, or your
+      current public IP as a /32). No default — an operator must choose one;
+      0.0.0.0/0 is refused by AllowedPattern.
+    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([1-9]|[12][0-9]|3[0-2])$"
+    ConstraintDescription: a specific CIDR block with a /1-/32 prefix, not 0.0.0.0/0 or any /0
+  InstanceType:
+    Type: String
+    Default: m7g.large
+    Description: Graviton (arm64) instance type for the control plane.
+    AllowedValues:
+      - m7g.large
+      - m7g.xlarge
+      - m6g.large
+      - m6g.xlarge
+  RootVolumeSize:
+    Type: Number
+    Default: 60
+    MinValue: 40
+    MaxValue: 200
+    Description: Root EBS volume size in GiB.
+  GitRepoUrl:
+    Type: String
+    Default: https://github.com/aws-samples/sample-agentcore-launchpad.git
+    Description: >
+      Git repository containing the CN build of AgentCore Launchpad. Either an
+      https:// URL (anonymous clone) or an SSH form (git@host:owner/repo.git
+      or ssh://git@host/owner/repo.git) — the latter requires
+      GitDeployKeyParameter to be set, since there is otherwise no credential
+      to authenticate the SSH connection.
+    AllowedPattern: "^(https://[A-Za-z0-9._/-]+(\\.git)?|git@[A-Za-z0-9.-]+:[A-Za-z0-9._/-]+(\\.git)?|ssh://git@[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+(\\.git)?)$"
+    ConstraintDescription: >
+      an https:// git URL, or an SSH form (git@host:owner/repo.git or
+      ssh://git@host/owner/repo.git) — no shell metacharacters
+  GitBranch:
+    Type: String
+    Default: cn-region
+    Description: Branch or tag to check out (the CN fork's baseline — spec D11).
+    AllowedPattern: "^[A-Za-z0-9._/-]+$"
+  GitCloneTimeout:
+    Type: Number
+    Default: 1800
+    MinValue: 300
+    MaxValue: 3000
+    Description: >-
+      Total seconds the first boot may spend fetching the repository — the
+      initial clone, every sparse-checkout stage and every retry together
+      (N11-r5-bug2: GitHub from cn-northwest-1 measured ~36 KB/s; the old fixed
+      600 s per command killed the blob fetch at 10 MB and each retry restarted
+      from zero). Each git network command runs under `timeout <remaining budget>`,
+      so the fetch phase never exceeds this value however many attempts it takes.
+      It must leave room for the bootstrap that follows (~15 min pre-provisioned,
+      ~35-40 min cold) inside the Instance CreationPolicy's PT60M: the default
+      1800 fits the pre-provisioned path on a ~36 KB/s link (~14 MB checked out).
+  PipIndexUrl:
+    Type: String
+    Default: https://pypi.tuna.tsinghua.edu.cn/simple
+    Description: >-
+      PyPI index mirror for the HOST's own uv/pip (China network — spec §3.F, I5).
+      Not used by CodeBuild — see CodeBuildPipIndexUrl (N11-r3-bug7).
+  CodeBuildPipIndexUrl:
+    Type: String
+    Default: https://mirror.nju.edu.cn/pypi/web/simple
+    Description: >-
+      PyPI index the CodeBuild projects (hub + spokes) and the Skill Lab worker image
+      resolve from (N11-r3-bug7): tuna answers CodeBuild's NAT egress with an immediate
+      4xx while this host gets 200 from it, so the build mirror is its own knob. Must be
+      uv-complete (NJU is; mirrors.aliyun.com is NOT). Written to /etc/launchpad/env as
+      LAUNCHPAD_CODEBUILD_PIP_INDEX_URL and passed to the hub stack through
+      LAUNCHPAD_CDK_CONTEXT. docs/cn/interfaces/deploy.md §6.2.
+  CodeBuildPipFallbackIndexUrl:
+    Type: String
+    Default: https://mirrors.cloud.tencent.com/pypi/simple
+    Description: >-
+      Fallback PyPI index for CodeBuild (N11-r3-bug7): the worker Dockerfile retries
+      on it when CodeBuildPipIndexUrl refuses the build egress; the buildspec pre-flight
+      fails fast only when neither answers. Written as
+      LAUNCHPAD_CODEBUILD_PIP_FALLBACK_INDEX_URL + the CDK context.
+  PipExtraIndexUrl:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional secondary PyPI index (N11-obs25): consulted when the primary mirror
+      has an outage. Must be uv-complete (serves the PEP 658 metadata it advertises) —
+      https://mirror.nju.edu.cn/pypi/web/simple is; mirrors.aliyun.com is NOT (uv 404s
+      on its .metadata files). Empty = primary only. docs/cn/interfaces/deploy.md §6.1.
+  NpmRegistry:
+    Type: String
+    Default: https://registry.npmmirror.com
+    Description: npm registry mirror (China network — spec §3.F, I5).
+  GlobalBedrockApiKeyParameter:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9_.-]+$"
+    ConstraintDescription: flat SSM parameter name without slashes (the IAM resource is parameter/<name>)
+    Description: >
+      Name of an SSM SecureString parameter (in this region) holding the Global
+      Bedrock API key (spec C4). UserData reads it with the instance role and
+      writes it to /etc/launchpad/env (mode 600) — never logged, never passed as
+      a CloudFormation parameter value (those are visible in the console/CLI).
+      Must be a flat name (no leading "/") — the IAM resource below is built as
+      the literal string "parameter/" plus this value, which only matches a
+      non-hierarchical parameter's real ARN (docs/cn/interfaces/deploy.md §1).
+  SiliconFlowApiKeyParameter:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[A-Za-z0-9_.-]+$"
+    ConstraintDescription: >
+      empty (SiliconFlow models not offered), or a flat SSM parameter name without
+      slashes (the IAM resource is parameter/<name>)
+    Description: >
+      N-R6, optional. Name of an SSM SecureString parameter (in this region)
+      holding the SiliconFlow API key (the OpenAI-compatible model provider,
+      docs/cn/interfaces/model-providers.md). UserData reads it with the
+      instance role and writes it to /etc/launchpad/env (mode 600) exactly like
+      the Bedrock key — never logged, never passed as a CloudFormation parameter
+      value. Empty (the default) means no SiliconFlow key: `make bootstrap`
+      logs the provider as "not configured" and the catalog's SiliconFlow
+      models stay unavailable; everything else works. Same flat-name
+      constraint as GlobalBedrockApiKeyParameter (deploy.md §1).
+  ConsolePasswordParameter:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9_.-]+$"
+    ConstraintDescription: flat SSM parameter name without slashes (the IAM resource is parameter/<name>)
+    Description: >
+      Name of an SSM SecureString parameter (in this region) holding the
+      console admin password. Required: UserData
+      sets LAUNCHPAD_RUN_MODE=prod, and
+      app.main._assert_production_is_authenticated refuses to even build the
+      app without a password configured — an unauthenticated production
+      launch is a boot failure here, not an open console. UserData reads it
+      with the instance role and writes it to /etc/launchpad/env (mode 600)
+      — never logged, never passed as a CloudFormation parameter value.
+  AuthPasswordPolicy:
+    Type: String
+    Default: strict
+    AllowedValues: [strict, relaxed]
+    Description: Password rules for registration and member password changes.
+  AuthPasswordMinLength:
+    Type: Number
+    Default: 12
+    MinValue: 6
+    MaxValue: 128
+    Description: Minimum password length for registration and member password changes.
+  GitDeployKeyParameter:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^[A-Za-z0-9_.-]+$"
+    ConstraintDescription: >
+      empty (anonymous https clone), or a flat SSM parameter name without
+      slashes (the IAM resource is parameter/<name>)
+    Description: >
+      Name of an SSM SecureString parameter (in this region) holding a
+      read-only SSH deploy key for a private Git repository (GitRepoUrl in
+      its SSH form). UserData reads it with the instance role and writes it
+      to /home/ubuntu/.ssh/id_ed25519 (mode 600, owner ubuntu) — never
+      logged, never passed as a CloudFormation parameter value. Empty
+      (the default) means GitRepoUrl is cloned anonymously over https,
+      unchanged from before this parameter existed. Must be a flat name (no
+      leading "/") — same ARN-construction constraint as
+      GlobalBedrockApiKeyParameter/ConsolePasswordParameter
+      (docs/cn/interfaces/deploy.md §1).
+  ConsolePort:
+    Type: Number
+    Default: 8443
+    MinValue: 1024
+    MaxValue: 65535
+    Description: >
+      TCP port nginx serves the console on and the only inbound port the
+      security group opens (from AllowedCidr). N11-bug12 (live, 2026-10-10):
+      in the China partition inbound 80/443 to an EC2 public IP is blocked
+      unless the site has an ICP filing (备案) - the console was unreachable on
+      443 and immediately reachable on 8443 - so the default is a high port
+      and 80/443 are rejected by the template.
+  TlsMode:
+    Type: String
+    Default: none
+    AllowedValues:
+      - none
+      - selfsigned
+    Description: >
+      "none": nginx listens on ConsolePort plain HTTP (AllowedCidr is assumed to be a
+      trusted private network). Note: the session cookie is always Secure in
+      production (routers/auth.py::cookie_secure() is `auth_cookie_secure OR
+      run_mode=="prod"`, and this template always sets run_mode=prod), so
+      sign-in over plain HTTP only works through an SSM port-forward to
+      localhost (a browser-trusted secure context even without TLS) — never
+      a direct http://<public-ip> visit, which silently drops the cookie.
+      "selfsigned": nginx generates a self-signed cert and listens on ConsolePort (TLS);
+      the browser must be told to trust it once.
+  EnvName:
+    Type: String
+    Default: ""
+    # Must stay identical to infra/stacks/naming.py::ENV_NAME_PATTERN and
+    # backend/app/core/config.py::Settings.env_name — the three layers validate
+    # the same regex so a bad value fails fast everywhere (N11). Three characters
+    # because the OpenSearch domain name (28 max) is the binding limit.
+    AllowedPattern: "^[a-z0-9]{0,3}$"
+    ConstraintDescription: >
+      empty (the default), or 1-3 lowercase letters/digits — appended as
+      "-<EnvName>" to every fixed launchpad-* resource and stack name
+    Description: >
+      Optional environment suffix so a second, parallel Launchpad environment
+      can coexist with the default one in this account+region (N11). Empty
+      (the default) leaves every name exactly as before. "t1" renames this
+      template's ops role to launchpad-cn-ops-<region>-t1 and is handed to the
+      host as LAUNCHPAD_ENV_NAME plus `-c env_name=t1` for `cdk deploy`, so the
+      CDK stacks become launchpad-base-t1 / launchpad-memory-t1 and the backend
+      looks up / creates launchpad-gw-t1, launchpad-agents-t1, etc. The IAM
+      Resource patterns below are launchpad-* prefixes, so they match the
+      suffixed names unchanged. The SSM parameter names above are independent
+      of EnvName: two environments may share them or not, as the operator
+      chooses (docs/cn/interfaces/deploy.md §3). MemoryDomainMode selects the
+      legacy shared domain or a dedicated suffixed domain; "kb" is reserved (D17).
+
+  MemoryDomainMode:
+    Type: String
+    Default: shared
+    AllowedValues: [shared, dedicated]
+    Description: >
+      dedicated creates this named environment's own OpenSearch domain, admin role
+      and SSM discovery parameters. shared preserves the legacy account/region domain.
+
+  HubAdminAccess:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: >
+      N17-obs112. "true" attaches the AWS-managed AdministratorAccess policy to the
+      instance role, the way the upstream (Global) sample runs its hub: the host
+      can then provision same-account workspaces in ANY region of the partition
+      (the scoped launchpad-bootstrap policy below is pinned to this stack's
+      region, so a workspace in another region fails at validate-access with
+      AccessDenied). "false" (the default) keeps the least-privilege role. Operator
+      decision 2026-10-20; the scoped policy stays attached either way so flipping
+      back to "false" is a plain stack update.
+  AllocateElasticIp:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: >
+      N11-obs47. "true" (the default) allocates an Elastic IP (AWS::EC2::EIP,
+      Domain vpc) and associates it with the instance, so the console address
+      survives a stop/start and the in-place UserData update path (deploy.md
+      §8.2), which otherwise re-assign the auto-assigned public IPv4. The
+      Instance resource is untouched by the association — enabling this on an
+      existing stack is an UPDATE without replacement; the public address
+      changes ONCE (auto-assigned IP -> EIP) and /etc/launchpad/env's
+      LAUNCHPAD_PUBLIC_BASE_URL must then be refreshed with
+      `scripts/host-update.sh` (step 12b reads IMDSv2 public-ipv4, which reports
+      the associated EIP). "false" keeps the pre-obs47 behaviour (auto-assigned
+      public IPv4 only); switching an EIP stack back to "false" releases the
+      address and leaves the instance WITHOUT a public IPv4 until its next
+      stop/start — do not do that on a live host.
+
+  PolicyInterceptorNetwork:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: >
+      Per-user policy stream B4 (plans/DESIGN-POLICY-USER-PRINCIPAL.md §13.6). "true"
+      adds what the gateway policy interceptor Lambda needs to reach the policy
+      engine on this host: two private subnets (two AZs, no internet route), their
+      route table with an S3 gateway endpoint (free; GetObject on the artifacts
+      bucket's policy/gateway/ prefix only), the interceptor security group (egress
+      TCP 7443-7444 to this host + HTTPS for S3) and this host's ingress on
+      7443-7444 from that group only. No NAT gateway, no interface endpoint, nothing
+      world-accessible. "false" (the default) creates none of it, so an update with
+      the defaults changes nothing. Enabling it is an UPDATE without replacement
+      (pass AmiId=<running AMI>, deploy.md §3).
+
+  PolicyPrincipalSigningKey:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: >
+      Per-user policy stream A1 (plans/DESIGN-POLICY-USER-PRINCIPAL.md section 13.1). "true"
+      creates the principal-token signing key: an asymmetric KMS key (ECC_NIST_P256,
+      SIGN_VERIFY) plus the alias alias/launchpad-principal[-<EnvName>]. Only this host's
+      ops role may kms:Sign with it (the key policy names the role; the account root keeps
+      key administration but not Sign). The key is retained on stack delete and on
+      replacement. Set the PolicyPrincipalKeyArn output as policy_principal_kms_key_id in
+      config/launchpad.yaml. "false" (the default) creates nothing, so an update with the
+      defaults changes nothing. Enabling it is an UPDATE without replacement (pass
+      AmiId=<running AMI>, deploy.md section 3).
+
+  AmiId:
+    Type: String
+    Default: ""
+    # Type String, not AWS::EC2::Image::Id: that type cannot default to "" and the
+    # empty default is what keeps `aws cloudformation deploy` of a NEW stack
+    # parameter-free (the latest AMI is looked up once, at create time).
+    AllowedPattern: "^(|ami-[0-9a-f]{8,17})$"
+    ConstraintDescription: >
+      empty (the default), or one AMI id — "ami-" followed by 8 to 17 lowercase
+      hex digits — as printed by `aws ec2 describe-instances`
+    Description: >
+      N11-obs48b. Pin the AMI; empty = resolve the latest Canonical Ubuntu 24.04
+      arm64 AMI at create time only. ALWAYS pass the running AMI on updates. With
+      the empty default ImageId is a dynamic SSM reference that CloudFormation
+      re-resolves on EVERY stack update, so every change set marks the Instance
+      "Replacement: Conditional" and the first newer Canonical AMI turns any
+      unrelated update (an Elastic IP add, an IAM statement) into an instance
+      REPLACEMENT — new host, local SQLite ledger and /etc/launchpad lost. Read
+      the running AMI with `aws ec2 describe-instances --instance-ids <id>
+      --query 'Reservations[0].Instances[0].ImageId'` and pass it as
+      AmiId=<running AMI> with every update (the first time this turns the
+      ImageId diff into a no-op); a change set that shows a Replacement on the
+      Instance must never be executed (docs/cn/interfaces/deploy.md §3 "AMI pin",
+      §8.2).
+
+Rules:
+  DedicatedMemoryRequiresEnv:
+    RuleCondition: !Equals [!Ref MemoryDomainMode, dedicated]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref EnvName, ""]]
+        AssertDescription: A dedicated OpenSearch domain requires a nonempty EnvName.
+  EnvNameIsNotReserved:
+    # D17: every environment shares one OpenSearch domain and prefixes its indices
+    # `launchpad-<EnvName>-`; "kb" would collide with the default environment's
+    # `launchpad-kb-<id>` indices. Same reserved set as infra/stacks/naming.py and
+    # backend/app/core/naming.py (RESERVED_ENV_NAMES); a Rule because the three layers
+    # share the AllowedPattern literal, which cannot express a negative match.
+    Assertions:
+      - Assert: !Not [!Equals [!Ref EnvName, "kb"]]
+        AssertDescription: >
+          EnvName "kb" is reserved: its OpenSearch index prefix launchpad-kb- would
+          overlap the default environment's launchpad-kb-* indices (D17).
+  ConsolePortIsNotAnIcpGatedPort:
+    Assertions:
+      - Assert: !Not [!Or [!Equals [!Ref ConsolePort, "80"], !Equals [!Ref ConsolePort, "443"]]]
+        AssertDescription: >
+          Ports 80 and 443 are not reachable on China-partition public IPs
+          without an ICP filing; choose a high port (default 8443).
+
+Conditions:
+  UseTls: !Equals [!Ref TlsMode, selfsigned]
+  UseGitDeployKey: !Not [!Equals [!Ref GitDeployKeyParameter, ""]]
+  UseSiliconFlowKey: !Not [!Equals [!Ref SiliconFlowApiKeyParameter, ""]]
+  HasEnvName: !Not [!Equals [!Ref EnvName, ""]]
+  UseElasticIp: !Equals [!Ref AllocateElasticIp, "true"]
+  GrantHubAdmin: !Equals [!Ref HubAdminAccess, "true"]
+  UseLatestAmi: !Equals [!Ref AmiId, ""]
+  UsePolicyInterceptorNetwork: !Equals [!Ref PolicyInterceptorNetwork, "true"]
+  UsePolicyPrincipalKey: !Equals [!Ref PolicyPrincipalSigningKey, "true"]
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.44.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - "launchpad-cn-ops${EnvSuffix}"
+            - EnvSuffix: !If [HasEnvName, !Sub "-${EnvName}", ""]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref Vpc
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.44.0.0/24
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - "launchpad-cn-ops-public${EnvSuffix}"
+            - EnvSuffix: !If [HasEnvName, !Sub "-${EnvName}", ""]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+  ConsoleSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub
+        - "Launchpad console${EnvLabel} - inbound ConsolePort from AllowedCidr only."
+        - EnvLabel: !If [HasEnvName, !Sub " (${EnvName})", ""]
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ConsolePort
+          ToPort: !Ref ConsolePort
+          CidrIp: !Ref AllowedCidr
+          Description: console (HTTP when TlsMode=none, HTTPS when selfsigned)
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: package mirrors, AWS API, Global Bedrock
+      VpcId: !Ref Vpc
+
+  PolicyPrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Condition: UsePolicyInterceptorNetwork
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.44.10.0/24
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - "launchpad-cn-policy-a${EnvSuffix}"
+            - EnvSuffix: !If [HasEnvName, !Sub "-${EnvName}", ""]
+
+  PolicyPrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Condition: UsePolicyInterceptorNetwork
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: 10.44.11.0/24
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - "launchpad-cn-policy-b${EnvSuffix}"
+            - EnvSuffix: !If [HasEnvName, !Sub "-${EnvName}", ""]
+
+  PolicyPrivateRouteTable:
+    # local route only (no internet / NAT route): the interceptor reaches this host's
+    # private IP inside the VPC and S3 through the gateway endpoint below
+    Type: AWS::EC2::RouteTable
+    Condition: UsePolicyInterceptorNetwork
+    Properties:
+      VpcId: !Ref Vpc
+
+  PolicyPrivateSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: UsePolicyInterceptorNetwork
+    Properties:
+      RouteTableId: !Ref PolicyPrivateRouteTable
+      SubnetId: !Ref PolicyPrivateSubnetA
+
+  PolicyPrivateSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: UsePolicyInterceptorNetwork
+    Properties:
+      RouteTableId: !Ref PolicyPrivateRouteTable
+      SubnetId: !Ref PolicyPrivateSubnetB
+
+  PolicyS3GatewayEndpoint:
+    # A gateway endpoint has no hourly charge; its policy admits only the bundle reads
+    Type: AWS::EC2::VPCEndpoint
+    Condition: UsePolicyInterceptorNetwork
+    Properties:
+      VpcId: !Ref Vpc
+      VpcEndpointType: Gateway
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      RouteTableIds:
+        - !Ref PolicyPrivateRouteTable
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PolicyGatewayBundleReads
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub
+              - "arn:${AWS::Partition}:s3:::launchpad-artifacts-${AWS::AccountId}-${AWS::Region}${EnvSuffix}/policy/gateway/*"
+              - EnvSuffix: !If [HasEnvName, !Sub "-${EnvName}", ""]
+
+  PolicyInterceptorSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: UsePolicyInterceptorNetwork
+    Properties:
+      GroupDescription: !Sub
+        - "Launchpad policy interceptor${EnvLabel} - engine on the hub host + S3 only."
+        - EnvLabel: !If [HasEnvName, !Sub " (${EnvName})", ""]
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: S3 through the gateway endpoint (the subnets have no other route)
+      VpcId: !Ref Vpc
+      Tags:
+        # the policy-interceptor bootstrap stage finds the subnets / group by Name tag
+        - Key: Name
+          Value: !Sub
+            - "launchpad-cn-policy-interceptor${EnvSuffix}"
+            - EnvSuffix: !If [HasEnvName, !Sub "-${EnvName}", ""]
+
+  PolicyInterceptorToEngineEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Condition: UsePolicyInterceptorNetwork
+    Properties:
+      GroupId: !Ref PolicyInterceptorSecurityGroup
+      IpProtocol: tcp
+      FromPort: 7443
+      ToPort: 7444
+      DestinationSecurityGroupId: !Ref ConsoleSecurityGroup
+      Description: policy engine shards 0 / 1 on the hub host
+
+  PolicyEngineFromInterceptorIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: UsePolicyInterceptorNetwork
+    Properties:
+      GroupId: !Ref ConsoleSecurityGroup
+      IpProtocol: tcp
+      FromPort: 7443
+      ToPort: 7444
+      SourceSecurityGroupId: !Ref PolicyInterceptorSecurityGroup
+      Description: policy engine shards 0 / 1, from the interceptor Lambda only
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      # N11: `-<EnvName>` is appended at the END, after the region, so the name
+      # keeps the `launchpad-` prefix every IAM wildcard below is scoped to.
+      RoleName: !Sub
+        - "launchpad-cn-ops-${AWS::Region}${EnvSuffix}"
+        - EnvSuffix: !If [HasEnvName, !Sub "-${EnvName}", ""]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com  # cn-lint: allow — EC2 principal, unchanged in aws-cn
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        # N17-obs112: opt-in only (HubAdminAccess=true); see the parameter.
+        - !If
+          - GrantHubAdmin
+          - !Sub "arn:${AWS::Partition}:iam::aws:policy/AdministratorAccess"
+          - !Ref AWS::NoValue
+      Policies:
+        # Scoped to what `cdk bootstrap` + `make bootstrap` need to provision the
+        # launchpad-base substrate from the host itself (spec R9: this is a
+        # deployment identity, not a runtime identity — it provisions IAM roles,
+        # S3 buckets, an ECR repo and a CodeBuild project, so it necessarily holds
+        # the IAM/S3/ECR/CodeBuild/CloudFormation control-plane actions those
+        # services gate behind; it does NOT get AdministratorAccess by default (the
+        # HubAdminAccess parameter opts in, N17-obs112) and every
+        # resource-level ARN is scoped to the launchpad-* naming convention this
+        # repo's bootstrap uses throughout).
+        - PolicyName: launchpad-bootstrap
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CdkAndStackLifecycle
+                Effect: Allow
+                Action:
+                  - cloudformation:*
+                  - s3:*
+                Resource: "*"
+              - Sid: CdkAssumeBootstrapRoles
+                # CDK v2's modern bootstrap has `cdk deploy` assume the
+                # bootstrap's own deploy/file-publishing/lookup roles
+                # (cdk-<qualifier>-deploy-role-..., etc.) so that CloudFormation
+                # actually executes under cdk-<qualifier>-cfn-exec-role-...
+                # Without this grant, that AssumeRole is denied, the CLI falls
+                # back to this role's own credentials, and CloudFormation then
+                # needs every target-resource permission directly on this role
+                # instead of on the cfn-exec role — which it does not have
+                # (docs/cn/interfaces/deploy.md §0).
+                Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-*"
+              - Sid: MemoryAdminAssume
+                # D17: the OpenSearch domain is shared by every EnvName environment
+                # (CDK stack launchpad-memory-domain) and its FGAC master is the
+                # stack-owned role launchpad-memory-admin-<region>, which this
+                # host's backend assumes for every OpenSearch call (bootstrap of
+                # its own indices + FGAC role, console reads/writes). Replaces the
+                # pre-D17 `memory_master_arn=<this role>` CDK context, which would
+                # have tied the shared domain's master to whichever environment
+                # created it. Scoped to that one role-name prefix, not role/*.
+                Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/launchpad-memory-admin-*"
+              - Sid: IamForLaunchpadRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:TagRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  # N11 r2-B: agent_iam.delete_role lists inline/attached policies before
+                  # DeleteRole; without these the listing is denied and the role leaks.
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  # N11 r3-B (bug5): workspace_iam.ensure_role verifies the ownership tag
+                  # of a role it adopts (GetRole carries Tags; ListRoleTags is the fallback).
+                  - iam:ListRoleTags
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PassRole
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:AddRoleToInstanceProfile
+                  - iam:RemoveRoleFromInstanceProfile
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/launchpad-*"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-*"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/launchpad-*"
+              - Sid: LambdaForCodeEvaluators
+                # N17-obs395: with eval_code_evaluators_enabled the evaluation-assets
+                # materializer (backend/app/assistant/evaluation_assets.py) creates, reads,
+                # publishes and cleans up the reviewed code-evaluator Lambdas, tagged at
+                # create (TagResource), and the hub invokes their published versions itself
+                # (SCORE NOW / in-process executor). Confined to the one name prefix
+                # agent_iam.CODE_EVALUATOR_FUNCTION_PREFIX (launchpad-evalfn-; the pattern
+                # also covers the function:<name>:<version> qualifiers). Their log groups are
+                # LogsForCodeEvaluators below; their execution roles (role/launchpad-evalfn-*:
+                # CreateRole / TagRole / PutRolePolicy / PassRole / DeleteRole …) fall under
+                # IamForLaunchpadRoles (role/launchpad-*).
+                # backend/tests/test_code_evaluator_enablement.py checks every call of the
+                # materializer against these three statements alone.
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:PublishVersion
+                  - lambda:TagResource
+                  - lambda:DeleteFunction
+                  - lambda:InvokeFunction
+                Resource:
+                  # any region of the account: a workspace may live outside the hub region
+                  # (the function sits in the workspace region); the name prefix narrows it
+                  - !Sub "arn:${AWS::Partition}:lambda:*:${AWS::AccountId}:function:launchpad-evalfn-*"
+              - Sid: LambdaForPolicyInterceptor
+                # Per-user policy stream B3: the policy-interceptor bootstrap stage
+                # (backend/app/services/policy_interceptor.py) creates and updates the
+                # gateway interceptor Lambda in this region only. Its role
+                # (role/launchpad-policy-interceptor*) falls under IamForLaunchpadRoles; the
+                # gateway role's invoke grant is a PutRolePolicy there too. Attaching it to
+                # the gateway is UpdateGateway (AgentCoreControlPlane), run only by
+                # scripts/attach_policy_interceptor.py with the user's go.
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:TagResource
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:launchpad-policy-interceptor*"
+              - Sid: Ec2DescribeForPolicyInterceptorVpc
+                # CreateFunction / UpdateFunctionConfiguration with a VpcConfig check the
+                # caller can describe the subnets / security group / VPC (the Lambda VPC
+                # guide's caller list); these take no resource-level permission
+                Effect: Allow
+                Action:
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcs
+                  - ec2:GetSecurityGroupsForVpc
+                Resource: "*"
+              - Sid: LogsForCodeEvaluators
+                # N17-obs395: the code-evaluator Lambdas' own log groups, created up front with
+                # bounded retention and tags, read back and deleted on cleanup — named
+                # /aws/lambda/<function> with the same launchpad-evalfn- prefix. Explicit, so the
+                # chain does not depend on ObservabilityForBootstrap's logs:* staying as broad.
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:TagResource
+                  - logs:TagLogGroup
+                  - logs:DescribeLogGroups
+                  - logs:DeleteLogGroup
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/lambda/launchpad-evalfn-*"
+              - Sid: IamAdoptAgentRoles
+                # N11 r3-B (N10v2-bug1): a deploy resumed after a backend restart adopts
+                # the agent's existing execution role (agent_iam.ensure_role) and
+                # refreshes its trust policy when — and only when — the stored document
+                # differs. That write is confined to the per-agent roles
+                # (launchpad-agent-<name>-<id8>[-env]). N17-obs201: agent_iam.ensure_role
+                # tags every role it creates with launchpad:agent-id in the CreateRole call
+                # itself, so the Condition lets IAM enforce what the name pattern alone
+                # could not — the hub's CDK-made launchpad-agent-execution-role-<region>
+                # (tagged launchpad:managed only) and any other untagged launchpad-agent-*
+                # role are never rewritten through this path.
+                Effect: Allow
+                Action: iam:UpdateAssumeRolePolicy
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/launchpad-agent-*"
+                Condition:
+                  StringLike:
+                    iam:ResourceTag/launchpad:agent-id: "*"
+              - Sid: IamAdoptWorkspaceRoles
+                # The roles the WORKSPACE bootstrap makes and re-adopts on a resumed run
+                # with the same trust refresh (workspace_iam.ensure_role, regional_role_name):
+                # the regional execution role, the Skill Lab worker role (bug5), and —
+                # N17-obs131 — the gateway role launchpad-gateway-role-<region>[-env] and
+                # the CodeBuild role launchpad-codebuild-role-<region>[-env], which were
+                # denied the moment their trust document changed between two runs.
+                # N17-obs201: workspace_iam.ensure_role tags every role it creates with
+                # launchpad:workspace in the CreateRole call (before any trust write) and
+                # refuses to adopt an untagged twin (ForeignResourceError); the Condition
+                # makes IAM enforce the same rule, so the hub's CDK-made twins of these
+                # names (launchpad-gateway-role-<region>, launchpad-agent-execution-role-
+                # <region> — tagged launchpad:managed only) are denied here even if a
+                # code path ever reached the write. The ops / memory-admin / CDK roles
+                # stay out of this host's reach.
+                Effect: Allow
+                Action: iam:UpdateAssumeRolePolicy
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/launchpad-agent-execution-role-*"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/launchpad-skill-lab-worker-*"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/launchpad-gateway-role-*"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/launchpad-codebuild-role-*"
+                Condition:
+                  StringLike:
+                    iam:ResourceTag/launchpad:workspace: "*"
+              - Sid: EcrAuthToken
+                # Not resource-scopable: GetAuthorizationToken only ever accepts
+                # Resource "*" (it authenticates docker against the whole
+                # registry endpoint, not a single repository).
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: EcrForLaunchpadRepos
+                Effect: Allow
+                Action: ecr:*
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/launchpad-*"
+              - Sid: EcrForCdkBootstrapRepo
+                # N11-bug3-r1 (live): a cold `cdk bootstrap` from this host creates
+                # the CDKToolkit stack's own container-assets repository
+                # (`cdk-<qualifier>-container-assets-<account>-<region>`) under
+                # THIS role (the CDKToolkit stack is what creates the cfn-exec
+                # role, so nothing else can act for it yet). The launchpad-*
+                # grant above never matched it and the stack rolled back. Only the
+                # lifecycle actions the bootstrap template issues, on `cdk-*`
+                # repositories only — no push/pull, no `ecr:*`.
+                Effect: Allow
+                Action:
+                  - ecr:CreateRepository
+                  - ecr:DeleteRepository
+                  - ecr:DescribeRepositories
+                  - ecr:SetRepositoryPolicy
+                  - ecr:DeleteRepositoryPolicy
+                  - ecr:PutLifecyclePolicy
+                  - ecr:DeleteLifecyclePolicy
+                  - ecr:PutImageTagMutability
+                  - ecr:PutImageScanningConfiguration
+                  - ecr:TagResource
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/cdk-*"
+              - Sid: CodeBuildForLaunchpadProjects
+                Effect: Allow
+                Action: codebuild:*
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/launchpad-*"
+              - Sid: AgentCoreControlPlane
+                Effect: Allow
+                Action:
+                  # The IAM action namespace is `bedrock-agentcore` for both data-
+                  # and control-plane calls; `bedrock-agentcore-control` is only
+                  # the botocore *client* name (see backend/app/services/
+                  # agentcore/client.py) and is not a valid IAM action prefix.
+                  - bedrock-agentcore:*
+                Resource: "*"
+              - Sid: IdentityCredentialProviderSecrets
+                # N11-bug7 (live): AgentCore Identity stores every API-key /
+                # OAuth2 credential provider as a Secrets Manager secret in the
+                # caller's account under the reserved
+                # `bedrock-agentcore-identity!` prefix, and
+                # CreateApiKeyCredentialProvider is authorised against the
+                # CALLER for secretsmanager:CreateSecret on that secret. The
+                # `model-credential` bootstrap stage (Global Bedrock key
+                # provider) failed with exactly that AccessDenied.
+                Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:UpdateSecret
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:TagResource
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:bedrock-agentcore-identity!*"
+              - Sid: ApiGatewayReadOfficeFactsApiKey
+                # N11-bug8 (live): the `gateway` bootstrap stage reads the
+                # office-facts sample's API key value (GetApiKey includeValue)
+                # to register it as the Gateway target credential; API Gateway
+                # authorises that as apigateway:GET on the /apikeys resource
+                # (no account id in API Gateway ARNs).
+                Effect: Allow
+                Action: apigateway:GET
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/apikeys"
+                  - !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/apikeys/*"
+              - Sid: ObservabilityForBootstrap
+                # N11-bug9 (live): enabling CloudWatch Transaction Search
+                # (UpdateTraceSegmentDestination -> CloudWatchLogs) is
+                # authorised against the caller for application-signals:
+                # StartDiscovery as well, and may create the Application
+                # Signals service-linked role; the API itself is available in
+                # cn-northwest-1 (verified 2026-10-10).
+                Effect: Allow
+                Action:
+                  - logs:*
+                  - xray:GetTraceSegmentDestination
+                  - xray:UpdateTraceSegmentDestination
+                  - xray:GetIndexingRules
+                  - xray:UpdateIndexingRule
+                  - application-signals:StartDiscovery
+                Resource: "*"
+              - Sid: ApplicationSignalsServiceLinkedRole
+                Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource:
+                  # service-linked-role paths use the partition-invariant
+                  # service principal name (see N11-bug5)
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/application-signals.cloudwatch.amazonaws.com/*"  # cn-lint: allow
+              - Sid: ApplicationSignalsCloudTrailChannel
+                # N11-bug9 r2 (live): the same UpdateTraceSegmentDestination
+                # call then needs cloudtrail:CreateServiceLinkedChannel —
+                # Application Signals discovery provisions a CloudTrail
+                # service-linked channel in the caller's account.
+                Effect: Allow
+                Action:
+                  - cloudtrail:CreateServiceLinkedChannel
+                  - cloudtrail:GetChannel
+                  - cloudtrail:ListChannels
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:channel/aws-service-channel/*"
+              - Sid: ReadLaunchpadSecretParameters
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${GlobalBedrockApiKeyParameter}"
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ConsolePasswordParameter}"
+                  # D21 (M1-b): every model-provider key the registry may name —
+                  # the hub reads `launchpad-<provider>-api-key` itself and hands
+                  # it to AgentCore Identity (docs/cn/interfaces/model-registry.md
+                  # §8); the two explicit parameters above stay for the boot path.
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/launchpad-*-api-key"
+                  - !If
+                    # N9: only grant this when GitDeployKeyParameter is actually
+                    # set — AWS::NoValue drops the list entry entirely rather
+                    # than resolving to an empty-name ARN that matches nothing.
+                    - UseGitDeployKey
+                    - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${GitDeployKeyParameter}"
+                    - !Ref "AWS::NoValue"
+                  - !If
+                    # N-R6: the optional SiliconFlow key, same pattern
+                    - UseSiliconFlowKey
+                    - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${SiliconFlowApiKeyParameter}"
+                    - !Ref "AWS::NoValue"
+              - Sid: SsmWriteLaunchpadSecretParameters
+                # N17-obs203 (2026-10-21): a model-provider API key typed in the console is
+                # written to its SSM SecureString BY THE CONSOLE HOST (PutParameter
+                # Overwrite=True; tagged launchpad:managed) and deleted with the provider —
+                # the same `launchpad-*-api-key` family the read statement above grants,
+                # never the two boot-path parameters (they do not match the pattern). The
+                # default `alias/aws/ssm` key encrypts SecureStrings without a KMS grant, as
+                # the read statement already relies on (docs/cn/interfaces/model-registry.md
+                # §8.1, deploy.md §8.9).
+                Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:DeleteParameter
+                  - ssm:AddTagsToResource
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/launchpad-*-api-key"
+              - Sid: SsmForCdkBootstrapVersion
+                # N11-bug3-r1 (live): the same cold `cdk bootstrap` writes the
+                # CDKToolkit version marker `/cdk-bootstrap/<qualifier>/version`
+                # (PutParameter denied -> rollback), and the rollback itself then
+                # needs DeleteParameter, without which the stack sticks in
+                # ROLLBACK_FAILED and only an admin can unblock it. Scoped to the
+                # `cdk-bootstrap/` hierarchy only — the three secret parameters
+                # above stay read-only under their own Sid.
+                Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:DeleteParameter
+                  - ssm:AddTagsToResource
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cdk-bootstrap/*"
+              - Sid: MemoryQueueSend
+                # N8: once the N6 Memory stack merges, this host (running as
+                # this role) is itself the SQS producer — it sends
+                # `knowledge_selfhosted.start_sync` (KB ingest) and
+                # `memory_selfhosted.create_turn_event` messages to the
+                # extraction queue the N6 CDK stack creates
+                # (`launchpad-memory-extract-<region>`, plus its DLQ). Scoped
+                # to sqs:SendMessage on the queue-name prefix only — this
+                # grants nothing on the DLQ or any other SQS action/resource,
+                # and does not cover the Lambda consumer's own
+                # receive/delete/DLQ-redrive permissions (those live on the
+                # memory-extractor Lambda's own role, not here).
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:launchpad-memory-extract-*"
+
+  PolicyPrincipalKey:
+    Type: AWS::KMS::Key
+    Condition: UsePolicyPrincipalKey
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Launchpad per-user policy principal-token signing key (ES256)
+      KeySpec: ECC_NIST_P256
+      KeyUsage: SIGN_VERIFY
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          # key administration for the account, listed action by action: no kms:Sign, no
+          # kms:CreateGrant, no wildcards - no IAM policy (AdministratorAccess included)
+          # can mint a principal token or hand out a grant. An administrator CAN still
+          # rewrite this policy (kms:PutKeyPolicy stays, or the key would be unmanageable),
+          # so a new signer is possible but audit-visible in CloudTrail, never silent.
+          - Sid: AccountAdministersTheKey
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action:
+              - kms:DescribeKey
+              - kms:GetKeyPolicy
+              - kms:PutKeyPolicy
+              - kms:ListKeyPolicies
+              - kms:GetKeyRotationStatus
+              - kms:GetPublicKey
+              - kms:ListResourceTags
+              - kms:ListGrants
+              - kms:RevokeGrant
+              - kms:EnableKey
+              - kms:DisableKey
+              - kms:UpdateKeyDescription
+              - kms:TagResource
+              - kms:UntagResource
+              - kms:CreateAlias
+              - kms:UpdateAlias
+              - kms:DeleteAlias
+              - kms:ScheduleKeyDeletion
+              - kms:CancelKeyDeletion
+            Resource: "*"
+          - Sid: HubSignsPrincipalTokens
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt InstanceRole.Arn
+            Action:
+              - kms:Sign
+              - kms:GetPublicKey
+              - kms:DescribeKey
+            Resource: "*"
+      Tags:
+        - Key: launchpad:purpose
+          Value: policy-principal-token
+
+  PolicyPrincipalKeyAlias:
+    Type: AWS::KMS::Alias
+    Condition: UsePolicyPrincipalKey
+    Properties:
+      AliasName: !Sub
+        - "alias/launchpad-principal${EnvSuffix}"
+        - EnvSuffix: !If [HasEnvName, !Sub "-${EnvName}", ""]
+      TargetKeyId: !Ref PolicyPrincipalKey
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref InstanceRole
+
+  ElasticIp:
+    # N11-obs47: a fixed console address. Allocated in the VPC scope and associated
+    # below; the Instance's own NIC keeps AssociatePublicIpAddress=true (first boot
+    # needs egress before this association exists), and the association simply
+    # supersedes the auto-assigned address. Released with the stack.
+    Type: AWS::EC2::EIP
+    Condition: UseElasticIp
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - "launchpad-cn-ops${EnvSuffix}"
+            - EnvSuffix: !If [HasEnvName, !Sub "-${EnvName}", ""]
+
+  ElasticIpAssociation:
+    # A separate association resource (not EIP.InstanceId) so that adding or
+    # removing the EIP on an existing stack never touches the Instance resource:
+    # the change set shows Add/Remove on these two resources only, Replacement
+    # False everywhere else (deploy.md §8.2 "Elastic IP").
+    Type: AWS::EC2::EIPAssociation
+    Condition: UseElasticIp
+    Properties:
+      AllocationId: !GetAtt ElasticIp.AllocationId
+      InstanceId: !Ref Instance
+
+  Instance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - DefaultRoute
+      - PublicSubnetRouteTableAssociation
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        # N11-obs15 (live): a cold environment (EnvName set, nothing
+        # pre-provisioned) needs ~5 min launchpad-base + ~16 min
+        # launchpad-memory-domain (OpenSearch domain) + clone/installs/
+        # bootstrap/frontend build ≈ 35-40 min; PT30M only fits the runbook §2
+        # pre-provisioned path. D17: the domain is shared, so every environment
+        # after the first skips those ~16 min (≈ 12 min cold start) — the
+        # timeout stays sized for the first one.
+        Timeout: PT60M
+    Properties:
+      IamInstanceProfile: !Ref InstanceProfile
+      # N11-obs48b: the SSM dynamic reference is re-resolved on EVERY stack update,
+      # which marks this resource "Replacement: Conditional" on every change set and
+      # really replaces it (new host, ledger + /etc/launchpad gone) the day Canonical
+      # publishes a newer 24.04 arm64 AMI. So the lookup runs only when AmiId is
+      # empty — i.e. at create time — and every update pins the running AMI
+      # (deploy.md §3 "AMI pin", §8.2). infra/tests/test_ec2_template.py asserts
+      # this is the template's only dynamic reference.
+      ImageId: !If
+        - UseLatestAmi
+        - "{{resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id}}"
+        - !Ref AmiId
+      InstanceType: !Ref InstanceType
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 1
+        HttpTokens: required
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            DeleteOnTermination: true
+            Encrypted: true
+            VolumeSize: !Ref RootVolumeSize
+            VolumeType: gp3
+      NetworkInterfaces:
+        # A public IP is required for outbound internet access (apt/npm/pip
+        # mirrors, GitHub, SSM, cfn-signal) — this template has no NAT gateway
+        # (cost) and no VPC endpoints. Inbound exposure is still fully gated by
+        # ConsoleSecurityGroup's AllowedCidr-only ingress (spec C6); a public IP
+        # on its own grants no reachability without a matching SG rule.
+        - AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+          DeviceIndex: "0"
+          GroupSet:
+            - !Ref ConsoleSecurityGroup
+          SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - "launchpad-cn-ops${EnvSuffix}"
+            - EnvSuffix: !If [HasEnvName, !Sub "-${EnvName}", ""]
+      # N11-r5-bug1: EC2 caps instance user data at 16384 bytes and the inline
+      # bootstrap had outgrown it (17,680 B raw), so UserData is now a STUB: install
+      # the AWS CLI, write /etc/launchpad/bootstrap.env, fetch the deploy key, clone
+      # the repo and `exec` infra/ec2/bootstrap-host.sh from the fresh checkout —
+      # the body of the first boot lives there (no size limit, shellcheck-gated).
+      # bootstrap.env (root:root 0600) carries every parameter/pseudo parameter the
+      # body needs as one LAUNCHPAD_BOOT_*=value line each and NO secrets: only the
+      # SSM parameter *names*; the body reads the values with the instance role.
+      # infra/tests/test_ec2_template.py renders this block with worst-case
+      # parameter values and asserts the size margin, that the stub writes exactly
+      # the keys the body declares, and shellchecks the rendered stub.
+      # Boot-order invariants kept from the inline version: region exported before
+      # the first `aws ` call (N11-bug2); awscli from PipIndexUrl via pip, never the
+      # global installer endpoint (N11-bug1); deploy key read into a variable and
+      # written only to a 0600 file, never echoed (N9); GitHub host keys pinned
+      # (GitHub's published list, fetched 2026-10-10), never ssh-keyscan'd;
+      # GIT_SSH_COMMAND travels via --whitelist-environment, never the command line;
+      # blobless sparse clone under one GitCloneTimeout budget, materialised in
+      # stages so a killed stage never discards the completed ones, re-cloned only
+      # when HEAD is missing (N11-bug6, N11-r5-bug2); the host checks out only what
+      # it runs — docs/, tests/ (Playwright e2e) and design/ are excluded (1,177
+      # blobs / 14 MB instead of ~1,740 blobs); checkout written as ubuntu (N12-bug10). The EXIT trap signals FAILURE for any stub failure —
+      # including the explicit `exit 1` paths — so a broken clone fails the stack
+      # at once instead of waiting out PT60M. No `set -x` anywhere.
+      UserData:
+        Fn::Base64:
+          Fn::Sub:
+            - |
+              #!/bin/bash
+              set -Eeuo pipefail
+              exec > >(tee /var/log/launchpad-bootstrap.log | logger -t launchpad-bootstrap -s 2>/dev/console) 2>&1
+              export LAUNCHPAD_BOOTSTRAP_LOG_ATTACHED=1
+              export DEBIAN_FRONTEND=noninteractive
+              export AWS_DEFAULT_REGION="${AWS::Region}"
+              export AWS_REGION="${AWS::Region}"
+              apt-get update
+              apt-get install -y ca-certificates curl git python3 python3-pip
+              python3 -m pip install --break-system-packages --no-cache-dir \
+                --index-url "${PipIndexUrl}" awscli
+              command -v aws >/dev/null || { echo "aws cli missing" >&2; exit 1; }
+              IMDS_TOKEN="$(curl --fail --silent --show-error --retry 10 \
+                --request PUT --header 'X-aws-ec2-metadata-token-ttl-seconds: 21600' \
+                http://169.254.169.254/latest/api/token)"
+              INSTANCE_ID="$(curl --fail --silent --show-error --retry 10 \
+                --header "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+                http://169.254.169.254/latest/meta-data/instance-id)"
+              signal_stack() {
+                aws cloudformation signal-resource --stack-name "${AWS::StackName}" \
+                  --logical-resource-id Instance --unique-id "$INSTANCE_ID" \
+                  --status "$1" --region "${AWS::Region}"
+              }
+              on_exit() { rc=$?; [ "$rc" -eq 0 ] || signal_stack FAILURE || true; }
+              trap on_exit EXIT
+              install -d -m 0700 -o root -g root /etc/launchpad
+              umask 077
+              {
+                printf 'LAUNCHPAD_BOOT_REGION=%q\n' "${AWS::Region}"
+                printf 'LAUNCHPAD_BOOT_STACK_NAME=%q\n' "${AWS::StackName}"
+                printf 'LAUNCHPAD_BOOT_SIGNAL_RESOURCE=Instance\n'
+                printf 'LAUNCHPAD_BOOT_ENV_NAME=%q\n' "${EnvName}"
+                printf 'LAUNCHPAD_BOOT_MEMORY_DOMAIN_MODE=%q\n' "${MemoryDomainMode}"
+                printf 'LAUNCHPAD_BOOT_AUTH_PASSWORD_POLICY=%q\n' "${AuthPasswordPolicy}"
+                printf 'LAUNCHPAD_BOOT_AUTH_PASSWORD_MIN_LENGTH=%q\n' "${AuthPasswordMinLength}"
+                printf 'LAUNCHPAD_BOOT_TLS=%q\n' "${UseTlsCookieFlag}"
+                printf 'LAUNCHPAD_BOOT_CONSOLE_PORT=%q\n' "${ConsolePort}"
+                printf 'LAUNCHPAD_BOOT_PIP_INDEX_URL=%q\n' "${PipIndexUrl}"
+                printf 'LAUNCHPAD_BOOT_PIP_EXTRA_INDEX_URL=%q\n' "${PipExtraIndexUrl}"
+                printf 'LAUNCHPAD_BOOT_CODEBUILD_PIP_INDEX_URL=%q\n' "${CodeBuildPipIndexUrl}"
+                printf 'LAUNCHPAD_BOOT_CODEBUILD_PIP_FALLBACK_INDEX_URL=%q\n' "${CodeBuildPipFallbackIndexUrl}"
+                printf 'LAUNCHPAD_BOOT_NPM_REGISTRY=%q\n' "${NpmRegistry}"
+                printf 'LAUNCHPAD_BOOT_BEDROCK_KEY_PARAMETER=%q\n' "${GlobalBedrockApiKeyParameter}"
+                printf 'LAUNCHPAD_BOOT_SILICONFLOW_KEY_PARAMETER=%q\n' "${SiliconFlowApiKeyParameter}"
+                printf 'LAUNCHPAD_BOOT_CONSOLE_PASSWORD_PARAMETER=%q\n' "${ConsolePasswordParameter}"
+              } > /etc/launchpad/bootstrap.env
+              chmod 0600 /etc/launchpad/bootstrap.env
+              if [ -n "${GitDeployKeyParameter}" ]; then
+                install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.ssh
+                DEPLOY_KEY="$(aws ssm get-parameter --name "${GitDeployKeyParameter}" \
+                  --with-decryption --query Parameter.Value --output text)"
+                install -m 0600 -o ubuntu -g ubuntu /dev/null /home/ubuntu/.ssh/id_ed25519
+                printf '%s\n' "$DEPLOY_KEY" > /home/ubuntu/.ssh/id_ed25519
+                unset DEPLOY_KEY
+                install -m 0644 -o ubuntu -g ubuntu /dev/null /home/ubuntu/.ssh/known_hosts
+              cat > /home/ubuntu/.ssh/known_hosts <<'KNOWN_HOSTS'
+              github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+              github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+              github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+              KNOWN_HOSTS
+                export GIT_SSH_COMMAND="ssh -i /home/ubuntu/.ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=/home/ubuntu/.ssh/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
+              fi
+              umask 022
+              REPO=/home/ubuntu/launchpad
+              DEADLINE=$((SECONDS + ${GitCloneTimeout}))
+              remaining() { local r=$((DEADLINE - SECONDS)); [ "$r" -gt 0 ] && echo "$r" || echo 1; }
+              as_ubuntu() { runuser -u ubuntu --whitelist-environment=GIT_SSH_COMMAND -- timeout "$(remaining)" "$@"; }
+              CLONE_OK=no
+              for attempt in 1 2 3; do
+                if ! as_ubuntu git -C "$REPO" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+                  rm -rf "$REPO"
+                  install -d -m 0755 -o ubuntu -g ubuntu "$REPO"
+                  as_ubuntu git clone --depth 1 --filter=blob:none --sparse --branch "${GitBranch}" "${GitRepoUrl}" "$REPO" \
+                    || { echo "git clone attempt $attempt failed; retrying in 20s" >&2; sleep 20; continue; }
+                fi
+                if as_ubuntu git -C "$REPO" sparse-checkout set --no-cone '/*' '!/docs' '!/tests' '!/design' '!/.superpowers' '!/.worktrees' '!/vendor' '!/frontend' '!/backend' \
+                  && as_ubuntu git -C "$REPO" sparse-checkout add '/vendor' \
+                  && as_ubuntu git -C "$REPO" sparse-checkout add '/frontend' \
+                  && as_ubuntu git -C "$REPO" sparse-checkout add '/backend'
+                then
+                  CLONE_OK=yes
+                  break
+                fi
+                echo "sparse-checkout attempt $attempt failed after ${!SECONDS}s; resuming in 20s" >&2
+                sleep 20
+              done
+              [ "$CLONE_OK" = yes ] || { echo "git clone failed after 3 attempts (${GitCloneTimeout}s budget)" >&2; exit 1; }
+              unset GIT_SSH_COMMAND
+              BODY=/home/ubuntu/launchpad/infra/ec2/bootstrap-host.sh
+              [ -r "$BODY" ] || { echo "$BODY missing from branch ${GitBranch}" >&2; exit 1; }
+              exec bash "$BODY"
+            - UseTlsCookieFlag: !If [UseTls, "true", "false"]
+
+Outputs:
+  PrivateIp:
+    Description: Instance private IP (for access from inside the VPC/VPN).
+    Value: !GetAtt Instance.PrivateIp
+  PublicIp:
+    Description: >
+      Console public IPv4 — the Elastic IP when AllocateElasticIp=true (fixed
+      across stop/start, N11-obs47), else the instance's auto-assigned public IP.
+      The instance has a public IP for outbound internet access (no NAT
+      gateway/VPC endpoints in this template); inbound is still gated entirely
+      by ConsoleSecurityGroup's AllowedCidr-only ingress.
+    Value: !If [UseElasticIp, !Ref ElasticIp, !GetAtt Instance.PublicIp]
+  ElasticIpAllocationId:
+    Condition: UseElasticIp
+    Description: Allocation id of the console's Elastic IP (released with the stack).
+    Value: !GetAtt ElasticIp.AllocationId
+  ConsoleUrl:
+    Description: Console URL — reachable only from AllowedCidr.
+    Value: !If
+      - UseTls
+      - !Sub
+        - "https://${Host}:${ConsolePort}"
+        - Host: !If [UseElasticIp, !Ref ElasticIp, !GetAtt Instance.PublicIp]
+      - !Sub
+        - "http://${Host}:${ConsolePort}"
+        - Host: !If [UseElasticIp, !Ref ElasticIp, !GetAtt Instance.PublicIp]
+  InstanceId:
+    Value: !Ref Instance
+  SessionManagerCommand:
+    Description: Shell access with no inbound port at all.
+    Value: !Sub "aws ssm start-session --target ${Instance} --region ${AWS::Region}"
+  BootstrapLog:
+    Value: sudo tail -n 200 /var/log/launchpad-bootstrap.log
+  EnvName:
+    Description: >
+      The EnvName suffix this environment was created with (empty = default
+      names). Pass the same value as LAUNCHPAD_ENV_NAME to scripts/teardown.py
+      so it finds this environment's launchpad-*-<EnvName> resources.
+    Value: !Ref EnvName
+  OpsRoleName:
+    Description: This host's IAM ops role (the memory stack's OpenSearch FGAC master).
+    Value: !Ref InstanceRole
+  PolicySubnetIds:
+    Condition: UsePolicyInterceptorNetwork
+    Description: The policy interceptor Lambda's private subnets (comma separated).
+    Value: !Join [",", [!Ref PolicyPrivateSubnetA, !Ref PolicyPrivateSubnetB]]
+  PolicyInterceptorSecurityGroupId:
+    Condition: UsePolicyInterceptorNetwork
+    Description: The policy interceptor Lambda's security group.
+    Value: !Ref PolicyInterceptorSecurityGroup
+  PolicyPrincipalKeyArn:
+    Condition: UsePolicyPrincipalKey
+    Description: >
+      The principal-token signing key - set as policy_principal_kms_key_id in
+      config/launchpad.yaml (per-user policy stream A1).
+    Value: !GetAtt PolicyPrincipalKey.Arn

@@ -1,3 +1,4 @@
+import { copyBrowserText } from "../../../lib/browser-compat";
 import { Upload } from "lucide-react";
 import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -12,7 +13,7 @@ import {
 import { REGISTRY_NAME_RE } from "../../../lib/registry";
 import { useLoad } from "../../hooks";
 import { Alert, Button, Card, type Column, Field, Table, Tag } from "../../ui";
-import { isStagingExpired, type RegistryRecord } from "./common";
+import { isStagingNotFound, type RegistryRecord } from "./common";
 
 const HTTPS_RE = /^https:\/\/.+/i;
 
@@ -55,7 +56,7 @@ function StagedPreview({
       }
       onImported(result.record ?? null, name);
     } catch (err) {
-      if (isStagingExpired(err)) onExpired();
+      if (isStagingNotFound(err)) onExpired();
       else setError(errorMessage(err));
     } finally {
       setImporting(false);
@@ -147,7 +148,7 @@ export function StagedSkillImport({ source, onImported }: { source: "zip" | "url
     try {
       accept(await fetcher(), noSkill);
     } catch (err) {
-      setError(isStagingExpired(err) ? t("registry.register.previewExpired") : errorMessage(err));
+      setError(isStagingNotFound(err) ? t("registry.register.previewExpired") : errorMessage(err));
     } finally {
       setInspecting(false);
     }
@@ -315,7 +316,7 @@ export function GitSkillImport({ onImported }: { onImported: OnImported }) {
         onImported(first.record ?? null, first.name);
       }
     } catch (err) {
-      if (isStagingExpired(err)) {
+      if (isStagingNotFound(err)) {
         setScanError(t("registry.register.previewExpired"));
         setSkills(null);
         setStagingId(null);
@@ -476,7 +477,7 @@ export function GitSkillImport({ onImported }: { onImported: OnImported }) {
                 {t("registry.register.gitInstallHint")}
                 <code
                   className="v2-registry-hint"
-                  onClick={() => void navigator.clipboard?.writeText(git.install?.hint ?? "").catch(() => undefined)}
+                  onClick={() => void copyBrowserText(git.install?.hint ?? "").catch(() => undefined)}
                 >
                   {git.install.hint}
                 </code>

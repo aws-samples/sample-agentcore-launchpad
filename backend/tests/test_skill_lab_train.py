@@ -79,6 +79,9 @@ print("[STEP %d done]" % len(history), flush=True)
 
 @pytest.fixture
 def lab(tmp_path, monkeypatch, client):
+    # the submit paths probe the hub's Global Bedrock bearer (N13-obs20) — hermetic, not the
+    # developer's shell env
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "test-bearer")
     stub = tmp_path / "stub_train.py"
     stub.write_text(STUB_TRAIN)
     from app.core.config import get_settings
@@ -88,8 +91,8 @@ def lab(tmp_path, monkeypatch, client):
     fake_settings = get_settings().model_copy(
         update={
             "skill_lab_python": sys.executable,
-            "skill_lab_target_model_id": "us.anthropic.claude-sonnet-5",
-            "skill_lab_judge_model_id": "us.anthropic.claude-sonnet-5",
+            "skill_lab_target_model_id": "global.moonshotai.kimi-k3",
+            "skill_lab_judge_model_id": "global.zai.glm-5.3",
         }
     )
     monkeypatch.setattr(runner, "TRAIN_SCRIPT", stub)
@@ -169,14 +172,14 @@ def test_train_config_contract_split_mode(lab):
     assert config["_base_"].endswith("configs/skilleval/default.yaml")
     assert Path(config["_base_"]).is_absolute()
     assert config["model"]["optimizer_backend"] == "bedrock_chat"
-    assert config["model"]["target_backend"] == "claude_code_exec"
+    assert config["model"]["target_backend"] == "opencode_exec"
     assert config["train"]["num_epochs"] == 2
     # Section.key placement is the contract with the vendored flatten map
     # (skillopt/config.py _FLATTEN_MAP): a param written under the wrong section
     # is silently dropped and the run quietly uses the vendored default.
     assert config["optimizer"]["learning_rate"] == 4  # → edit_budget
     assert config["evaluation"]["gate_metric"] == "soft"  # platform default
-    assert config["env"]["judge_mode"] == "auto"
+    assert config["env"]["judge_mode"] == "chat"  # N13 v1 default (spike §10a)
     assert config["env"]["skill_dir"].endswith("/skills/demo-skill")
     assert config["env"]["skill_init"].endswith("/skills/demo-skill/SKILL.md")
     assert config["env"]["workers"] == 2 and config["env"]["timeout"] == 600
@@ -416,7 +419,8 @@ def test_resume_refusals(lab):
 def registry_seam(monkeypatch):
     from app.services import registry_console
 
-    calls = SimpleNamespace(update=None, approve=0, status_before="DRAFT")
+    calls = SimpleNamespace(update=None, approve=0, is_admin=None, status_before="DRAFT",
+                            status_after_update="DRAFT")
 
     def console_get(ws, record_id):
         return {"recordId": record_id, "status": calls.status_before,
@@ -424,17 +428,22 @@ def registry_seam(monkeypatch):
 
     def update_record(record_id, ws, **kwargs):
         calls.update = (record_id, kwargs)
-        return {"recordId": record_id, "status": "DRAFT", "recordVersion": "1.1.0-skill"}
+        return {"recordId": record_id, "status": calls.status_after_update,
+                "recordVersion": "1.1.0-skill"}
 
-    def console_action(ws, record_id, action):
-        assert action == "approve"
+    def reapprove_record(ws, record_id, *, is_admin=False):
+        # N10v4-bug3: publish re-approves THROUGH the lifecycle helper (DRAFT → submit →
+        # approve), never with a bare "approve" from DRAFT (a 409 live).
+        # N17-obs248: only an administrator's request approves; a member's submits.
         calls.approve += 1
-        return {"recordId": record_id, "status": "APPROVED",
+        calls.is_admin = is_admin
+        return {"recordId": record_id,
+                "status": "APPROVED" if is_admin else "PENDING_APPROVAL",
                 "recordVersion": "1.1.0-skill"}
 
     monkeypatch.setattr(registry_console, "console_get", console_get)
     monkeypatch.setattr(registry_console, "update_record", update_record)
-    monkeypatch.setattr(registry_console, "console_action", console_action)
+    monkeypatch.setattr(registry_console, "reapprove_record", reapprove_record)
     return calls
 
 
@@ -450,6 +459,80 @@ def test_publish_happy_path(lab, registry_seam):
     assert kwargs["skill_md"].endswith("IMPROVED")
     log = lab.get(f"/api/skill-lab/jobs/{job['id']}/log").json()["content"]
     assert "[publish]" in log
+
+
+def test_publish_changed_content_mints_a_new_version(lab, registry_seam, monkeypatch):
+    """N16-obs44, the other direction: once best_skill.md differs from what the job last
+    pushed, publish writes again and the record moves on — the memo never freezes a job."""
+    from app.skill_lab import artifacts
+
+    ts = _split_taskset(lab)
+    job = _wait(lab, _submit_train(lab, ts).json()["id"])
+    first = lab.post(f"/api/skill-lab/jobs/{job['id']}/publish", json={}).json()
+    assert first["new_version"] == "1.1.0-skill" and first["unchanged"] is False
+    # the record is now at the version the job pushed → the same content is a no-op
+    registry_seam_version = {"v": "1.1.0-skill"}
+    calls = registry_seam
+
+    def console_get(ws, record_id):
+        return {"recordId": record_id, "status": calls.status_before,
+                "recordVersion": registry_seam_version["v"]}
+
+    def update_record(record_id, ws, **kwargs):
+        calls.update = (record_id, kwargs)
+        registry_seam_version["v"] = "1.2.0-skill"
+        return {"recordId": record_id, "status": calls.status_after_update,
+                "recordVersion": "1.2.0-skill"}
+
+    from app.services import registry_console
+    monkeypatch.setattr(registry_console, "console_get", console_get)
+    monkeypatch.setattr(registry_console, "update_record", update_record)
+    calls.update = None
+    again = lab.post(f"/api/skill-lab/jobs/{job['id']}/publish", json={}).json()
+    assert again["unchanged"] is True and again["new_version"] == "1.1.0-skill"
+    assert calls.update is None, "an unchanged publish must not write"
+    # a changed best_skill.md is new content → a new minor version
+    best = artifacts.out_root(job["id"]) / "best_skill.md"
+    best.write_text(best.read_text(encoding="utf-8") + "\n\nEDITED AGAIN", encoding="utf-8")
+    third = lab.post(f"/api/skill-lab/jobs/{job['id']}/publish", json={}).json()
+    assert third["unchanged"] is False and third["new_version"] == "1.2.0-skill"
+    assert calls.update[1]["skill_md"].endswith("EDITED AGAIN")
+    # and the record moved on under another writer → this job's memo no longer matches
+    registry_seam_version["v"] = "1.3.0-skill"
+    calls.update = None
+    fourth = lab.post(f"/api/skill-lab/jobs/{job['id']}/publish", json={}).json()
+    assert fourth["unchanged"] is False and calls.update is not None
+
+
+def test_publish_is_a_no_op_when_the_record_already_carries_the_skill(
+    lab, registry_seam, monkeypatch,
+):
+    """N16-obs44 across jobs / processes: the record's SKILL.md descriptor IS best_skill.md
+    (another job, or an earlier process, published it) → `unchanged`, no write, nothing
+    re-settled into DRAFT, nothing to re-approve even when asked."""
+    from app.services import registry_console
+    from app.skill_lab import artifacts
+
+    ts = _split_taskset(lab)
+    job = _wait(lab, _submit_train(lab, ts).json()["id"])
+    best = (artifacts.out_root(job["id"]) / "best_skill.md").read_text(encoding="utf-8")
+    calls = registry_seam
+    calls.status_before = "APPROVED"
+
+    def console_get(ws, record_id):
+        return {"recordId": record_id, "status": "APPROVED", "recordVersion": "1.4.0-skill",
+                "descriptors": {"agentSkills": {"skillMd": {"inlineContent": best}}}}
+
+    monkeypatch.setattr(registry_console, "console_get", console_get)
+    result = lab.post(
+        f"/api/skill-lab/jobs/{job['id']}/publish", json={"reapprove": True}
+    ).json()
+    assert result == {
+        "record_id": "rec-1", "name": result["name"], "new_version": "1.4.0-skill",
+        "status_before": "APPROVED", "status_after": "APPROVED", "reapproved": False,
+        "pending_approval": False, "unchanged": True,
+    }
+    assert calls.update is None and calls.approve == 0
 
 
 def test_trainable_files_bundle_flow(lab, registry_seam):
@@ -511,8 +594,23 @@ def test_publish_reapproves_only_previously_approved(lab, registry_seam):
         f"/api/skill-lab/jobs/{job['id']}/publish", json={"reapprove": True}
     ).json()
     assert result["reapproved"] is True
-    assert result["status_after"] == "APPROVED"
+    assert result["status_before"] == "APPROVED" and result["status_after"] == "APPROVED"
+    assert result["new_version"] == "1.1.0-skill"  # the bump is reported WITH the re-approve
+    assert result["pending_approval"] is False
     assert registry_seam.approve == 1
+    assert registry_seam.is_admin is True  # the auth-off operator is the built-in admin
+
+
+def test_publish_reapprove_is_a_no_op_when_the_update_left_it_approved(lab, registry_seam):
+    registry_seam.status_before = "APPROVED"
+    registry_seam.status_after_update = "APPROVED"
+    ts = _split_taskset(lab)
+    job = _wait(lab, _submit_train(lab, ts).json()["id"])
+    result = lab.post(
+        f"/api/skill-lab/jobs/{job['id']}/publish", json={"reapprove": True}
+    ).json()
+    assert result["status_after"] == "APPROVED" and result["reapproved"] is False
+    assert registry_seam.approve == 0
 
 
 def test_publish_refusals(lab, registry_seam, monkeypatch):

@@ -19,14 +19,11 @@ _RESPONSES_API_MODELS = {
 _BACKEND_DEFAULT_MODELS = {
     "azure_openai": "gpt-4o",
     "openai_chat": "gpt-4o",
-    "codex": "gpt-4o",
-    "codex_exec": "gpt-4o",
-    "claude": "claude-sonnet-4-6",
-    "claude_chat": "claude-sonnet-4-6",
-    "claude_code_exec": "claude-sonnet-4-6",
+    "opencode": "global.moonshotai.kimi-k3",  # LAUNCHPAD PATCH (D16)
+    "opencode_exec": "global.moonshotai.kimi-k3",  # LAUNCHPAD PATCH (D16)
     "qwen_chat": "Qwen/Qwen3.5-4B",
     "minimax_chat": "MiniMax-M2.7",
-    "bedrock_chat": "global.anthropic.claude-opus-5",  # LAUNCHPAD PATCH
+    "bedrock_chat": "global.zai.glm-5.3",  # LAUNCHPAD PATCH (D10/D16 judge default)
 }
 
 _BACKEND_ALIASES = {
@@ -34,13 +31,8 @@ _BACKEND_ALIASES = {
     "azure_openai": "azure_openai",
     "azure-openai": "azure_openai",
     "openai_chat": "openai_chat",
-    "openai": "codex",
-    "codex": "codex",
-    "codex_exec": "codex_exec",
-    "claude": "claude_chat",
-    "claude_chat": "claude_chat",
-    "claude_code_exec": "claude_code_exec",
-    "anthropic": "claude_chat",
+    "opencode": "opencode_exec",  # LAUNCHPAD PATCH (D16)
+    "opencode_exec": "opencode_exec",  # LAUNCHPAD PATCH (D16)
     "qwen": "qwen_chat",
     "qwen_chat": "qwen_chat",
     "minimax": "minimax_chat",

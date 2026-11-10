@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/runtime_policy_denied_frame/v1",
+  "title": "Runtime policy_denied stream frame for a GATEWAY denial (lead note 3)",
+  "description": "The rendered template's AfterToolCall hook turns a tool result carrying the I8 deny text into this frame, drained by the existing __LAUNCHPAD_POLICY_DRAIN__ splice, so the console PolicyDenyCard renders unchanged. source=gateway tells policy_enforcement.record_runtime_decision NOT to write a second row (the gateway line is the system of record). decision_id may be null when the MCP client drops error.data.",
+  "type": "object",
+  "properties": {
+    "event": {"const": "policy_denied"},
+    "source": {"const": "gateway"},
+    "tool": {"type": "string", "minLength": 1},
+    "reason": {"type": "string"},
+    "policy_id": {"type": ["string", "null"]},
+    "decision_id": {"type": ["string", "null"]},
+    "tool_use_id": {"type": "string"},
+    "mode": {"enum": ["enforce"]},
+    "decision": {"const": "deny"},
+    "bundle_version": {"type": ["integer", "null"]}
+  },
+  "required": ["event", "source", "tool", "reason", "policy_id", "decision_id", "tool_use_id", "mode", "decision", "bundle_version"],
+  "additionalProperties": false
+}

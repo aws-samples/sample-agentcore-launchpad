@@ -3,7 +3,6 @@
 import base64
 import binascii
 import json
-import re
 import subprocess
 import sys
 import warnings
@@ -16,6 +15,7 @@ from PIL import Image, UnidentifiedImageError
 
 from app.core.errors import AppError
 from app.models.ledger import Agent
+from app.schemas.agent import supports_native_images
 from app.schemas.attachments import (
     MAX_FILE_BYTES,
     MAX_FILES,
@@ -38,15 +38,14 @@ TEXT_EXTENSIONS = frozenset({
     ".yml", ".toml", ".ini", ".sql", ".sh", ".go", ".rs", ".java", ".c", ".cpp",
 })
 _SIGNATURES = (b"%PDF-", b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"RIFF", b"PK\x03\x04")
-_MULTIMODAL_MODELS = re.compile(
-    r"^(?:(?:global|us|eu|apac)\.)?"
-    r"(?:anthropic\.claude-(?:sonnet|opus|haiku)|amazon\.nova-2-lite|openai\.gpt-5)"
-)
+# Multimodal (image) support is per-model, not per-build: of the CN catalog's two
+# Global Bedrock models (spec C3), only Kimi K3 has native vision — GLM 5.3 is
+# text-only. See schemas.agent.MODEL_CAPABILITIES.
 
 
 def attachment_capability(agent: Agent) -> dict[str, Any]:
     spec = agent.spec or {}
-    harness = agent.method == "harness" or is_discovered_harness(agent)
+    harness = is_discovered_harness(agent)
     generated_a2a = (
         agent.method == "zip_runtime" and spec.get("protocol") == "a2a"
         and not spec.get("code") and not spec.get("code_bundle")
@@ -54,7 +53,7 @@ def attachment_capability(agent: Agent) -> dict[str, Any]:
     deployed = bool(
         agent.version and getattr(agent, "attachment_version", None) == agent.version
     )
-    model = bool(_MULTIMODAL_MODELS.match(str(spec.get("model_id", ""))))
+    model = supports_native_images(str(spec.get("model_id", "")))
     active = agent.status == "active" and bool(agent.arn)
     native = active and not harness and model and (deployed or generated_a2a)
     reason = None
@@ -250,14 +249,7 @@ def prepare_attachments(
     if prepared.native and (agent.spec or {}).get("protocol") != "a2a":
         from app.core.db import SessionLocal
         from app.models.ledger import ChatSession
-        from app.optimization import canary_service
 
-        if canary_service.active_canary_route(agent.id):
-            raise _error(
-                "canary_unsupported",
-                "Native attachments are unavailable while this agent has an active canary.",
-                status=409,
-            )
         if session_id:
             with SessionLocal() as db:
                 row = db.query(ChatSession).filter(

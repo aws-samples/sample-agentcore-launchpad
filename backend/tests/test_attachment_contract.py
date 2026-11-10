@@ -4,6 +4,7 @@ from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.deployer.input_contract import record_input_contract, source_contract, stamp_input_contract
 from app.deployer.pipeline import StageContext, create_deployment
 from app.models.ledger import Agent, Job
+from app.services.attachments import attachment_capability
 from tests.conftest import ws_ctx
 
 
@@ -48,3 +49,20 @@ def test_package_marker_survives_resume_but_does_not_enable_before_deploy():
         stamp_input_contract(resumed, db, agent)
         db.commit()
         assert agent.attachment_version is None
+
+
+def test_harness_rows_no_longer_force_the_harness_reason_code():
+    """A self-built harness row is Runtime-backed like zip_runtime — the old
+    forced-text-only ``reason_code == "harness"`` special case is gone."""
+    with SessionLocal() as db:
+        agent = Agent(
+            workspace_id=DEFAULT_WORKSPACE_ID, name="harness-attach", method="harness",
+            version="1", status="active", attachment_version="1",
+            arn="arn:aws:bedrock-agentcore:us-west-2:1:runtime/harness-attach",
+            spec={"model_id": "global.moonshotai.kimi-k3"},
+        )
+        db.add(agent)
+        db.commit()
+        db.refresh(agent)
+        capability = attachment_capability(agent)
+    assert capability["reason_code"] != "harness"

@@ -1,0 +1,248 @@
+# Lifecycle graph — Chat session (E04). Round 16, channel A, r16-o.
+graph: chat_session
+module: E04
+entity: Chat session row (`chat_sessions`) with its turns (`chat_messages`, `chat_turn_events`)
+initial: none
+
+contracts:
+  API_CHAT_POST:
+    doc: docs/api.md
+    section: "Console Chat API › POST /api/chat/{agent_id}"
+    quote: >-
+      One turn as SSE (`meta` → `delta`/`tool`/`auth_required`/`policy_denied`/`error` → `done`);
+      **N-ARCH-obs15 v2:** the turn runs server-side to its terminal event whatever happens to this
+      connection — each frame carries `id: <seq>`, `meta` carries `turn` … `409 chat.turn_in_progress
+      {active_turn}` before the stream while the session's previous turn still runs (one turn per
+      session) … a supplied one must be 33–100 characters of `[a-zA-Z0-9][a-zA-Z0-9-_]*` — `422
+      chat.session_id_invalid` otherwise, before the policy gate and any AWS call … **N16-obs79:** a
+      `session_id` whose session was ended … is `409 chat.session_ended {session_id, ended_at}` before
+      any runtime call — the marker stays
+  API_CHAT_STOP:
+    doc: docs/api.md
+    section: "Console Chat API › POST …/sessions/{session_id}/stop"
+    quote: >-
+      **END SESSION** — data-plane `StopRuntimeSession(agentRuntimeArn, runtimeSessionId)` →
+      `{session_id, ended: true, already_ended, ended_at}`. `already_ended: true` when AWS answered
+      `ResourceNotFoundException` (the session had already ended or idle-expired) — a success, not an
+      error. The ledger row is kept (history stays replayable) and stamped `ended_at`
+  AT_8_3:
+    doc: docs/cn/interfaces/assistant-turns.md
+    section: "8.3 Endpoints (additive)"
+    quote: >-
+      Reattach: replays `seq > from` (default 0), tails the live producer (same process) or polls the
+      ledger every `HEARTBEAT_S` while the claim is held, then the terminal event. `404
+      chat.session_not_found` (another agent / workspace), `404 chat.turn_not_found` (turn ≤ 0 or >
+      `turns`), `409 chat.turn_not_yours {author}` when another member **sent the turn**
+  AT_8_3_V1:
+    doc: docs/cn/interfaces/assistant-turns.md
+    section: 8.3 Endpoints (chat playground parity) — reattach to a /v1 turn (N16-obs112)
+    quote: >-
+      a turn made through `POST /v1/agents/{id}/invoke` … (sync, no event log; N16-obs112): it
+      counts as a session turn, and a reattach to it answers `200` with exactly one frame, `event:
+      done` `{"turn": n}` — no `meta`, no `delta`
+  UO_S4_CHAT:
+    doc: docs/cn/interfaces/users-and-ownership.md
+    section: "4. CN extras — Chat sessions"
+    quote: >-
+      Chat sessions are personal **in both visibility modes** (N16-obs70 / N16-obs71, 2026-10-19) …
+      and a `POST /api/chat/{id}` naming an existing `session_id` all resolve the row through the one
+      helper `routers/chat._session_for` → `session_visibility.require_own` … hidden session → 404
+      `chat.session_not_found` (the same envelope an unknown id gets; the reattach 409
+      `turn_not_yours` is reachable only on a readable session)
+  ONE_CHAIN:
+    doc: CLAUDE.md
+    section: "One invoke chain for both entrances"
+    quote: >-
+      The Chat console (`/api/chat/{id}`) and the public `/v1` API share the single entry point
+      `app.services.invoke.invoke_agent_text` (+ `app.services.chat.chat_stream` for SSE). `/v1` only
+      adds `X-Api-Key` auth (sha256-hashed); everything downstream of method dispatch is identical.
+  API_V1:
+    doc: docs/api.md
+    section: "Sync invoke"
+    quote: >-
+      Every `/v1` turn (sync and streaming) is ledgered like a console turn, so the session appears in
+      the console's Chat session list, history and Observability with `source: "public_api"`
+      (N-SCN-obs1); the row keeps the request's `actor_id` (default `api`).
+  API_V1_ENDED:
+    doc: docs/api.md
+    section: "Sync invoke › N16-obs88"
+    quote: >-
+      a `session_id` whose chat session was ENDED (`POST /api/chat/{id}/sessions/{sid}/stop`) is
+      `409 chat.session_ended {session_id, ended_at}` on `/v1/agents/{id}/invoke` and
+      `/v1/agents/{id}/invoke-stream` exactly as on `POST /api/chat/{id}` (N16-obs79) — before the
+      policy gate and any runtime call, as a plain response before the stream opens, and the ledger
+      row is left untouched
+
+nodes:
+  - id: none
+  - id: open
+  - id: open_v1
+  - id: live_turn
+  - id: ended
+    terminal: true
+
+edges:
+  - id: first_turn
+    from: none
+    to: live_turn
+    via: POST /api/chat/{agent} with a fresh session_id (the producer is gated, so the turn stays live)
+    expect: {status: 200, meta_turn: 1}
+    cites: [API_CHAT_POST]
+    ui: {page: /v2/chat, view: null, controls: [agent-select, new-session, chat-send]}
+  - id: invalid_session_id
+    from: none
+    to: none
+    kind: refusal
+    via: POST /api/chat/{agent} with a 20-char session_id
+    expect: {status: 422, code: chat.session_id_invalid}
+    cites: [API_CHAT_POST]
+    ui: null
+  - id: send_while_live
+    from: live_turn
+    to: live_turn
+    kind: refusal
+    via: a second POST /api/chat/{agent} on the same session while the turn runs
+    expect: {status: 409, code: chat.turn_in_progress}
+    cites: [API_CHAT_POST]
+    ui: {page: /v2/chat, view: null, controls: [chat-send]}
+  - id: turn_completes
+    from: live_turn
+    to: open
+    via: the producer's gate opens; the SSE body ends on `done`
+    expect: {terminal: done, history_turns: +1}
+    cites: [API_CHAT_POST]
+    ui: null
+  - id: next_turn
+    from: open
+    to: live_turn
+    via: POST /api/chat/{agent} with the session_id (gated producer)
+    expect: {status: 200, meta_turn: +1}
+    cites: [API_CHAT_POST]
+    ui: {page: /v2/chat, view: null, controls: [chat-send]}
+  - id: reattach_open
+    from: open
+    to: open
+    via: GET …/sessions/{sid}/turns/{last}/stream?from=0
+    expect: {status: 200, terminal: done, replay_equals_log: true}
+    cites: [AT_8_3]
+    ui: null
+  - id: reattach_unknown_turn
+    from: open
+    to: open
+    kind: refusal
+    via: GET …/sessions/{sid}/turns/{last+5}/stream
+    expect: {status: 404, code: chat.turn_not_found}
+    cites: [AT_8_3]
+    ui: null
+  - id: v1_turn
+    from: open
+    to: open_v1
+    via: POST /v1/agents/{agent}/invoke with the console session_id (X-Api-Key)
+    expect: {status: 200, sessions_turns: +1, differential: "the console session list shows the /v1 turn on the same row"}
+    cites: [ONE_CHAIN, API_V1]
+    ui: {page: /v2/chat, view: null, controls: [new-key]}
+  - id: v1_turn_again
+    from: open_v1
+    to: open_v1
+    via: a second POST /v1/agents/{agent}/invoke on the same session
+    expect: {status: 200, sessions_turns: +1}
+    cites: [ONE_CHAIN, API_V1]
+    ui: null
+  - id: reattach_v1_turn
+    from: open_v1
+    to: open_v1
+    via: GET …/sessions/{sid}/turns/{last}/stream for the turn the /v1 sync invoke made
+    expect: {bounded: "answers within the budget", status: 200, frames: [done], done_turn: "the /v1 turn's number", no_meta_no_delta: true}
+    cites: [AT_8_3_V1, AT_8_3, ONE_CHAIN]
+    ui: null
+  - id: console_turn_after_v1
+    from: open_v1
+    to: live_turn
+    via: POST /api/chat/{agent} with the session_id after a /v1 turn (gated producer)
+    expect: {status: 200, meta_turn: +1}
+    cites: [API_CHAT_POST, ONE_CHAIN]
+    ui: {page: /v2/chat, view: null, controls: [chat-send]}
+  - id: stop_after_v1
+    from: open_v1
+    to: ended
+    via: POST …/sessions/{sid}/stop after a /v1 turn
+    expect: {status: 200, ended: true}
+    cites: [API_CHAT_STOP]
+    ui: {page: /v2/chat, view: null, controls: [end-session, v2-confirm-ok]}
+  - id: stop_open
+    from: open
+    to: ended
+    via: POST …/sessions/{sid}/stop
+    expect: {status: 200, ended: true, ended_at_set: true}
+    cites: [API_CHAT_STOP]
+    ui: {page: /v2/chat, view: null, controls: [end-session, v2-confirm-ok]}
+  - id: stop_ended
+    from: ended
+    to: ended
+    via: POST …/sessions/{sid}/stop again (AWS answers ResourceNotFoundException)
+    expect: {status: 200, already_ended: true, ended_at_unchanged: true}
+    cites: [API_CHAT_STOP]
+    ui: {page: /v2/chat, view: null, controls: [history-end-session]}
+  - id: send_ended
+    from: ended
+    to: ended
+    kind: refusal
+    via: POST /api/chat/{agent} with the ended session_id
+    expect: {status: 409, code: chat.session_ended}
+    cites: [API_CHAT_POST]
+    ui: {page: /v2/chat, view: null, controls: [chat-send]}
+  - id: v1_send_ended
+    from: ended
+    to: ended
+    kind: refusal
+    via: POST /v1/agents/{agent}/invoke with the ended console session_id
+    expect: {status: 409, code: chat.session_ended, differential: "the two entrances share one chain, so /v1 must refuse exactly as the console does"}
+    cites: [API_V1_ENDED, ONE_CHAIN, API_CHAT_POST]
+    ui: null
+  - id: history_ended
+    from: ended
+    to: ended
+    via: GET …/history?session_id=
+    expect: {status: 200, messages_kept: true}
+    cites: [API_CHAT_STOP]
+    ui: null
+  - id: other_member_history
+    from: open
+    to: open
+    kind: refusal
+    via: another member's GET …/history?session_id=
+    expect: {status: 404, code: chat.session_not_found}
+    cites: [UO_S4_CHAT]
+    ui: null
+  - id: other_member_stop
+    from: open
+    to: open
+    kind: refusal
+    via: another member's POST …/sessions/{sid}/stop
+    expect: {status: 404, code: chat.session_not_found}
+    cites: [UO_S4_CHAT]
+    ui: null
+  - id: other_member_post
+    from: open
+    to: open
+    kind: refusal
+    via: another member's POST /api/chat/{agent} naming the session_id
+    expect: {status: 404, code: chat.session_not_found}
+    cites: [UO_S4_CHAT]
+    ui: null
+  - id: other_member_reattach
+    from: open
+    to: open
+    kind: refusal
+    via: another member's GET …/sessions/{sid}/turns/1/stream
+    expect: {status: 404, code: chat.session_not_found}
+    cites: [UO_S4_CHAT]
+    ui: null
+  - id: admin_reattach
+    from: open
+    to: open
+    kind: refusal
+    via: an administrator's GET …/sessions/{sid}/turns/1/stream on a member's turn
+    expect: {status: 409, code: chat.turn_not_yours}
+    cites: [AT_8_3, UO_S4_CHAT]
+    ui: null

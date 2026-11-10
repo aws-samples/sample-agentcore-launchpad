@@ -1,0 +1,12 @@
+bash scripts/verify.sh
+
+════ backend · pytest ════
+5820 passed, 187 warnings in 176.37s (0:02:56)
+── pytest: OK
+
+════ infra · pytest ════
+12 passed in 0.02s
+── infra pytest: OK
+
+════ verify: PASS ════
+verify_rc=0

@@ -21,7 +21,9 @@ import {
   saveBlob,
   stepVerdict,
 } from "../../../lib/skillLab";
+import { creatorLabel } from "../../format";
 import { useV2Toast } from "../../hooks";
+import { useMayMutate } from "../../ownership";
 import {
   Alert,
   Button,
@@ -44,6 +46,7 @@ import { GoneCard, JobStatusTag } from "./common";
 import { JobOverview, LiveProgress } from "./EvalDetail";
 import { JobLog } from "./JobLog";
 import { TrainCurve } from "./TrainCurve";
+import { statusLabel } from "../registry/common";
 
 const score = (value: number | null | undefined) => (typeof value === "number" ? value.toFixed(3) : "—");
 const wallTime = (value: number | null | undefined) => (typeof value === "number" ? `${(value / 60).toFixed(1)}m` : "—");
@@ -147,6 +150,7 @@ export function TrainDetail({ id }: { id: string }) {
   const [, setParams] = useSearchParams();
   const navigate = useNavigate();
   const toast = useV2Toast();
+  const mayMutate = useMayMutate();
   const { job, setJob, missing, error } = useJob(id);
   const [summary, setSummary] = useState<SkillLabTrainSummary | null>(null);
   const [diff, setDiff] = useState<SkillLabSkillDiff | null>(null);
@@ -234,7 +238,9 @@ export function TrainDetail({ id }: { id: string }) {
   if (!job) return error ? <Alert tone="error">{error}</Alert> : <Spin />;
 
   const uploadSourced = job.skill_source?.kind === "upload";
-  const publishable = job.status === "succeeded" && !uploadSourced && diff?.changed === true;
+  // creator-or-admin on cancel / resume / delete / publish (server rule `skill_lab.forbidden`, r13-g)
+  const owner = mayMutate(job);
+  const publishable = owner && job.status === "succeeded" && !uploadSourced && diff?.changed === true;
 
   const act = async () => {
     setBusy(true);
@@ -265,10 +271,10 @@ export function TrainDetail({ id }: { id: string }) {
       const result = await api.skillLabJobPublish(job.id, reapprove);
       toast(
         "success",
-        t("skillLab.train.publish.done", {
+        t(result.unchanged ? "skillLab.train.publish.unchanged" : "skillLab.train.publish.done", {
           name: result.name ?? job.skill_source?.name ?? "",
           version: result.new_version,
-          status: result.status_after,
+          status: result.status_after ? statusLabel(t, result.status_after) : result.status_after,
         }),
       );
       setPublished(result);
@@ -321,17 +327,17 @@ export function TrainDetail({ id }: { id: string }) {
         onBack={back}
         end={
           <>
-            {isLiveJob(job) && (
+            {owner && isLiveJob(job) && (
               <Button kind="danger" disabled={busy} onClick={() => setPending("cancel")} testId="v2-train-cancel">
                 {t("v2.skillLab.cancelRun")}
               </Button>
             )}
-            {RESUMABLE_STATUSES.includes(job.status) && (
+            {owner && RESUMABLE_STATUSES.includes(job.status) && (
               <Button kind="primary" disabled={busy} onClick={() => setPending("resume")} testId="v2-train-resume">
                 {t("skillLab.train.resume")}
               </Button>
             )}
-            {!isLiveJob(job) && (
+            {owner && !isLiveJob(job) && (
               <Button kind="danger" disabled={busy} onClick={() => setPending("delete")} testId="v2-train-delete">
                 {t("v2.common.delete")}
               </Button>
@@ -339,6 +345,7 @@ export function TrainDetail({ id }: { id: string }) {
           </>
         }
       />
+      {!owner && <Alert data-testid="v2-train-creator-only">{t("v2.common.creatorOnlyActions", { name: creatorLabel(job) })}</Alert>}
       {job.error && (
         <Alert tone="error">
           <span style={{ whiteSpace: "pre-wrap" }}>{job.error}</span>
@@ -432,7 +439,7 @@ export function TrainDetail({ id }: { id: string }) {
                       <span className="v2-row">
                         {record?.name ?? job.skill_source?.name ?? "—"}
                         <span className="mono v2-muted">{record?.version ?? job.skill_source?.version ?? ""}</span>
-                        {record !== null && <Tag tone={record.status === "APPROVED" ? "green" : "gray"}>{record.status}</Tag>}
+                        {record !== null && <Tag tone={record.status === "APPROVED" ? "green" : "gray"}>{statusLabel(t, record.status)}</Tag>}
                       </span>
                     ),
                   },
@@ -449,10 +456,10 @@ export function TrainDetail({ id }: { id: string }) {
                     </Button>
                   }
                 >
-                  {t("skillLab.train.publish.done", {
+                  {t(published.unchanged ? "skillLab.train.publish.unchanged" : "skillLab.train.publish.done", {
                     name: published.name ?? "",
                     version: published.new_version,
-                    status: published.status_after,
+                    status: published.status_after ? statusLabel(t, published.status_after) : published.status_after,
                   })}
                 </Alert>
               )}
@@ -468,7 +475,7 @@ export function TrainDetail({ id }: { id: string }) {
                 >
                   {t("skillLab.train.publish.action")}
                 </Button>
-                {!publishable && <span className="v2-muted">{t("skillLab.train.publish.noChange")}</span>}
+                {!publishable && <span className="v2-muted">{owner ? t("skillLab.train.publish.noChange") : t("v2.common.creatorOnly")}</span>}
               </div>
             </>
           )}
@@ -512,7 +519,7 @@ export function TrainDetail({ id }: { id: string }) {
             {t("skillLab.train.publish.reapprove")}
           </label>
           {record !== null && record.status !== "APPROVED" && reapprove && (
-            <span className="v2-muted">{t("skillLab.train.publish.reapproveNoop", { status: record.status })}</span>
+            <span className="v2-muted">{t("skillLab.train.publish.reapproveNoop", { status: statusLabel(t, record.status) })}</span>
           )}
           {publishError !== null && <Alert tone="error">{publishError}</Alert>}
         </div>

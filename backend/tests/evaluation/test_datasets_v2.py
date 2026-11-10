@@ -5,8 +5,8 @@ turns:[{input, expected_response?}], expected_trajectory?, assertions?}.
 """
 
 import json
-from unittest.mock import MagicMock
 
+import pytest
 from sqlalchemy import create_engine, inspect, text
 
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal, _migrate
@@ -14,7 +14,8 @@ from app.evaluation import service as svc
 from app.evaluation.models import EvalDataset, EvalRun
 from app.evaluation.scenarios import ground_truth_metadata, normalize_scenarios
 from tests.conftest import ws_ctx
-from tests.evaluation.test_runs_flow import make_agent, stub_environment
+from tests.evaluation.fakes import strip_ci
+from tests.evaluation.test_runs_flow import make_agent, stub_environment, wait_terminal
 
 SCENARIO = {
     "scenario_id": "refund_flow",
@@ -142,59 +143,94 @@ def test_put_kind_immutable(client):
     assert res.json()["code"] == "dataset.kind_immutable"
 
 
-# ─── AWS sync ────────────────────────────────────────────────────────────────
-def stub_cloud(monkeypatch, *, get_status="ACTIVE", failure_reason=None):
-    stub = MagicMock()
-    stub.create_dataset.return_value = {
-        "datasetId": "cloudds-1",
-        "datasetArn": "arn:aws:bedrock-agentcore:us-west-2:1:dataset/cloudds-1",
-    }
-    detail = {"datasetId": "cloudds-1", "status": get_status,
-              "datasetArn": "arn:aws:bedrock-agentcore:us-west-2:1:dataset/cloudds-1",
-              "exampleCount": 1}
-    if failure_reason:
-        detail["failureReason"] = failure_reason
-    stub.get_dataset.return_value = detail
-    stub.list_dataset_versions.return_value = {"versions": []}
-    monkeypatch.setattr("app.evaluation.routers.control_client", lambda _ws=None: stub)
-    return stub
+# ─── cloud sync (S3 snapshot store, CA-6) ────────────────────────────────────
+PREDEFINED = "AGENTCORE_EVALUATION_PREDEFINED_V1"
+SIMULATED = "AGENTCORE_EVALUATION_SIMULATED_V1"
+
+
+def fake_store(monkeypatch, bucket="bucket"):
+    """An in-memory S3 behind ``datasets_local`` + the bucket on the default workspace."""
+    from app.evaluation import datasets_local
+    from app.models.ledger import Workspace
+    from tests.evaluation.fakes import FakeS3
+
+    s3 = FakeS3()
+    with SessionLocal() as db:
+        row = db.get(Workspace, DEFAULT_WORKSPACE_ID)
+        row.resources = {**(row.resources or {}), "artifacts_bucket": bucket}
+        db.commit()
+    monkeypatch.setattr(datasets_local, "s3_client", lambda _ws: s3)
+    return s3
+
+
+def seed_cloud(s3, *, cloud_id="cloudds-7", name="remote_scenarios", schema=PREDEFINED,
+               examples=None, versions=(), status="ACTIVE", draft_status="MODIFIED",
+               workspace_id=DEFAULT_WORKSPACE_ID, bucket="bucket", failure_reason=None):
+    """A cloud-only snapshot store (no local row) with ``versions`` of the same examples."""
+    examples = [SCENARIO] if examples is None else list(examples)
+    body = lambda payload: json.dumps(payload).encode()  # noqa: E731
+    prefix = f"eval-datasets/{cloud_id}/"
+    s3.objects[(bucket, prefix + "draft.json")] = body({"examples": examples})
+    listed = []
+    for i, v in enumerate(versions):
+        created = f"2026-09-0{i + 1}T00:00:00+00:00"
+        s3.objects[(bucket, prefix + f"v{v}.json")] = body(
+            {"examples": examples, "createdAt": created, "exampleCount": len(examples)})
+        listed.append({"datasetVersion": str(v), "exampleCount": len(examples),
+                       "createdAt": created})
+    s3.objects[(bucket, prefix + "meta.json")] = body({
+        "datasetId": cloud_id, "datasetName": name, "workspaceId": workspace_id,
+        "schemaType": schema, "description": "", "status": status,
+        "draftStatus": draft_status, "exampleCount": len(examples),
+        "failureReason": failure_reason, "createdAt": "2026-09-01T00:00:00+00:00",
+        "updatedAt": "2026-09-05T00:00:00+00:00", "versions": listed,
+    })
+    return s3
+
+
+def _meta(s3, cloud_id, bucket="bucket"):
+    return json.loads(s3.objects[(bucket, f"eval-datasets/{cloud_id}/meta.json")])
 
 
 def test_sync_to_aws_success(client, monkeypatch):
-    stub = stub_cloud(monkeypatch)
+    s3 = fake_store(monkeypatch)
     ds = client.post("/api/eval/datasets", json={
         "name": "sync me!", "items": [{"prompt": "2+2?", "expected": "4"}],
     }).json()
     res = client.post(f"/api/eval/datasets/{ds['id']}/sync-to-aws")
     assert res.status_code == 200, res.text
-    kwargs = stub.create_dataset.call_args.kwargs
-    assert kwargs["schemaType"] == "AGENTCORE_EVALUATION_PREDEFINED_V1"
-    assert kwargs["datasetName"] == "sync_me"  # sanitized
-    assert kwargs["source"]["inlineExamples"]["examples"] == normalize_scenarios(
-        ds["items"]
-    )
     cloud = res.json()["cloud"]
-    assert cloud["dataset_id"] == "cloudds-1"
+    meta = _meta(s3, cloud["dataset_id"])
+    assert meta["schemaType"] == PREDEFINED
+    assert meta["datasetName"] == "sync_me"  # sanitized
+    draft = json.loads(s3.objects[("bucket", f"eval-datasets/{cloud['dataset_id']}/draft.json")])
+    assert draft["examples"] == normalize_scenarios(ds["items"])
     assert cloud["status"] == "ACTIVE"
     assert cloud["synced_at"]
     assert cloud["failure_reason"] is None
 
 
 def test_sync_simulated_dataset_uses_simulated_schema(client, monkeypatch):
-    stub = stub_cloud(monkeypatch)
+    s3 = fake_store(monkeypatch)
     ds = client.post("/api/eval/datasets", json={
         "name": "personas", "items": [PERSONA],
     }).json()
     assert ds["kind"] == "simulated"
     res = client.post(f"/api/eval/datasets/{ds['id']}/sync-to-aws")
     assert res.status_code == 200, res.text
-    kwargs = stub.create_dataset.call_args.kwargs
-    assert kwargs["schemaType"] == "AGENTCORE_EVALUATION_SIMULATED_V1"
-    assert kwargs["source"]["inlineExamples"]["examples"] == [PERSONA]
+    cloud_id = res.json()["cloud"]["dataset_id"]
+    assert _meta(s3, cloud_id)["schemaType"] == SIMULATED
+    draft = json.loads(s3.objects[("bucket", f"eval-datasets/{cloud_id}/draft.json")])
+    assert draft["examples"] == [PERSONA]
 
 
 def test_sync_to_aws_create_failed_persists_blob(client, monkeypatch):
-    stub_cloud(monkeypatch, get_status="CREATE_FAILED", failure_reason="bad examples")
+    s3 = fake_store(monkeypatch)
+
+    def boom(**kwargs):
+        raise RuntimeError("bad examples")
+
+    monkeypatch.setattr(s3, "put_object", boom)
     ds = client.post("/api/eval/datasets", json={
         "name": "failing", "items": [{"prompt": "x"}],
     }).json()
@@ -209,50 +245,42 @@ def test_sync_to_aws_create_failed_persists_blob(client, monkeypatch):
 
 
 def test_cloud_list_passthrough(client, monkeypatch):
-    stub = stub_cloud(monkeypatch)
-    stub.list_datasets.return_value = {"datasets": [{
-        "datasetId": "cloudds-9", "datasetName": "remote_only", "status": "ACTIVE",
-        "schemaType": "AGENTCORE_EVALUATION_PREDEFINED_V1", "exampleCount": 7,
-        "draftStatus": None, "updatedAt": "2026-07-10 00:00:00",
-    }]}
+    s3 = fake_store(monkeypatch)
+    seed_cloud(s3, cloud_id="cloudds-9", name="remote_only", examples=[SCENARIO] * 7,
+               draft_status=None)
     res = client.get("/api/eval/datasets/cloud")
     assert res.status_code == 200
     assert res.json()["datasets"] == [{
         "datasetId": "cloudds-9", "name": "remote_only", "status": "ACTIVE",
-        "schemaType": "AGENTCORE_EVALUATION_PREDEFINED_V1", "exampleCount": 7,
-        "draftStatus": None, "updatedAt": "2026-07-10 00:00:00",
+        "schemaType": PREDEFINED, "exampleCount": 7,
+        "draftStatus": None, "updatedAt": "2026-09-05T08:00:00+08:00",  # N17-obs463
     }]
 
 
 def test_cloud_delete_marks_local_copy(client, monkeypatch):
-    stub = stub_cloud(monkeypatch)
+    s3 = fake_store(monkeypatch)
     ds = client.post("/api/eval/datasets", json={
         "name": "synced", "items": [{"prompt": "x"}],
     }).json()
-    client.post(f"/api/eval/datasets/{ds['id']}/sync-to-aws")
-    res = client.delete("/api/eval/datasets/cloud/cloudds-1")
+    synced = client.post(f"/api/eval/datasets/{ds['id']}/sync-to-aws").json()
+    cloud_id = synced["cloud"]["dataset_id"]
+    res = client.delete(f"/api/eval/datasets/cloud/{cloud_id}")
     assert res.status_code == 200
-    stub.delete_dataset.assert_called_once_with(datasetId="cloudds-1")
+    assert not any(k.startswith(f"eval-datasets/{cloud_id}/") for (_b, k) in s3.objects)
     row = next(d for d in client.get("/api/eval/datasets").json()["datasets"]
                if d["id"] == ds["id"])
     assert row["cloud"]["status"] == "deleted"
 
 
-def stub_cloud_run(monkeypatch, *, schema_type="AGENTCORE_EVALUATION_PREDEFINED_V1",
-                   status="ACTIVE", examples=None):
-    """Control-plane stub for cloud-dataset-scoped runs and the detail endpoint."""
-    stub = MagicMock()
-    stub.get_dataset.return_value = {
-        "datasetId": "cloudds-7", "datasetName": "remote_scenarios",
-        "status": status, "schemaType": schema_type, "exampleCount": 1,
-    }
+def stub_cloud_run(monkeypatch, *, schema_type=PREDEFINED, status="ACTIVE", examples=None):
+    """A cloud-only snapshot store for cloud-dataset-scoped runs and the detail endpoint."""
     if examples is None:
-        base = PERSONA if schema_type == "AGENTCORE_EVALUATION_SIMULATED_V1" else SCENARIO
+        base = PERSONA if schema_type == SIMULATED else SCENARIO
         examples = [{"exampleId": "ex-1", **base}]
-    stub.list_dataset_examples.return_value = {"examples": examples}
-    stub.list_dataset_versions.return_value = {"versions": []}
-    monkeypatch.setattr("app.evaluation.routers.control_client", lambda _ws=None: stub)
-    return stub
+    s3 = fake_store(monkeypatch)
+    seed_cloud(s3, cloud_id="cloudds-7", name="remote_scenarios", schema=schema_type,
+               examples=examples, status=status)
+    return s3
 
 
 def test_cloud_dataset_detail_reports_ground_truth(client, monkeypatch):
@@ -266,13 +294,13 @@ def test_cloud_dataset_detail_reports_ground_truth(client, monkeypatch):
 
 
 def test_cloud_dataset_detail_simulated_runnable_with_gt(client, monkeypatch):
-    stub_cloud_run(monkeypatch, schema_type="AGENTCORE_EVALUATION_SIMULATED_V1")
+    stub_cloud_run(monkeypatch, schema_type=SIMULATED)
     res = client.get("/api/eval/datasets/cloud/cloudds-7")
     assert res.status_code == 200
     body = res.json()
     assert body["runnable"] is True
     assert body["has_ground_truth"] is True  # persona assertions count
-    assert body["schemaType"] == "AGENTCORE_EVALUATION_SIMULATED_V1"
+    assert body["schemaType"] == SIMULATED
 
 
 def test_run_on_cloud_dataset(client, monkeypatch):
@@ -280,7 +308,7 @@ def test_run_on_cloud_dataset(client, monkeypatch):
     agent = make_agent(db, name="cloud-run-agent")
     db.close()
     stub_environment(monkeypatch)
-    stub = stub_cloud_run(monkeypatch)
+    stub_cloud_run(monkeypatch)
 
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "cloud_dataset_id": "cloudds-7",
@@ -291,7 +319,6 @@ def test_run_on_cloud_dataset(client, monkeypatch):
     body = res.json()
     assert body["dataset_id"] == "cloudds-7"
     assert body["dataset_name"] == "cloud:remote_scenarios"
-    stub.list_dataset_examples.assert_called_once_with(datasetId="cloudds-7")
     import time
 
     for _ in range(50):
@@ -307,7 +334,7 @@ def test_run_on_simulated_dataset_requires_actor_model(client, monkeypatch):
     agent = make_agent(db, name="cloud-sim-agent")
     db.close()
     stub_environment(monkeypatch)
-    stub_cloud_run(monkeypatch, schema_type="AGENTCORE_EVALUATION_SIMULATED_V1")
+    stub_cloud_run(monkeypatch, schema_type=SIMULATED)
 
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "cloud_dataset_id": "cloudds-7", "wait_seconds": 0,
@@ -319,7 +346,7 @@ def test_run_on_simulated_dataset_requires_actor_model(client, monkeypatch):
 def test_run_refuses_more_than_ten_evaluators_before_any_replay(client, monkeypatch):
     """StartBatchEvaluation accepts at most ten evaluators; the route refuses an
     over-long selection up front instead of replaying every scenario first."""
-    from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS
+    from app.evaluation.evaluators_local import ALL_BUILTIN_EVALUATORS
 
     db = SessionLocal()
     agent = make_agent(db, name="cloud-too-many")
@@ -336,47 +363,49 @@ def test_run_refuses_more_than_ten_evaluators_before_any_replay(client, monkeypa
 
 
 def test_run_on_simulated_cloud_dataset_with_actor_model(client, monkeypatch):
+    """Persona scenarios ride to the worker with their actor profile; the worker drives the
+    ActorSimulator (here a fake) against the pre-assigned session and the persona's
+    assertions ride along as ground truth."""
+    from app.services.strands_eval import jobs_batch
+
     db = SessionLocal()
     agent = make_agent(db, name="cloud-sim-ok-agent")
     db.close()
-    data, _ = stub_environment(monkeypatch)
-    stub_cloud_run(monkeypatch, schema_type="AGENTCORE_EVALUATION_SIMULATED_V1")
-
+    env, calls = stub_environment(monkeypatch)
+    stub_cloud_run(monkeypatch, schema_type=SIMULATED)
     sim_calls: list[dict] = []
 
-    def fake_sim(data_client, *, agent_arn, method, scenario, actor_model_id,
-                 protocol="http", runtime_user_id=None):
-        sim_calls.append({"scenario": scenario, "model": actor_model_id,
-                          "method": method})
-        return f"sim-sess-{len(sim_calls):03d}" + "x" * 30
+    def build_actor(profile, initial_query, *, model, max_turns=10):
+        sim_calls.append({"profile": profile, "input": initial_query, "model": model,
+                          "max_turns": max_turns})
+        return object()
 
-    monkeypatch.setattr(svc.simulation, "run_simulated_scenario", fake_sim)
+    def drive(actor, invoke):
+        reply = invoke("turn-1", None)  # the actor's first message → the agent
+        return reply["session_id"]
+
+    monkeypatch.setattr(jobs_batch.simulator, "build_actor", build_actor)
+    monkeypatch.setattr(jobs_batch.simulator, "drive", drive)
 
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "cloud_dataset_id": "cloudds-7",
-        "actor_model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "actor_model_id": "global.moonshotai.kimi-k3",
         "wait_seconds": 0,
     })
     assert res.status_code == 201, res.text
-    run_id = res.json()["id"]
-
-    import time
-    for _ in range(50):
-        run = client.get(f"/api/eval/runs/{run_id}").json()
-        if run["status"] in ("completed", "failed"):
-            break
-        time.sleep(0.1)
+    run = wait_terminal(client, res.json()["id"])
     assert run["status"] == "completed", run.get("error")
-    assert sim_calls[0]["model"] == "global.anthropic.claude-haiku-4-5-20251001-v1:0"
-    assert sim_calls[0]["scenario"]["scenario_id"] == "frustrated-employee-leave"
-    assert run["session_ids"] == ["sim-sess-001" + "x" * 30]
+    assert sim_calls[0]["profile"]["goal"] == "Get a PTO request submitted and confirmed"
+    assert sim_calls[0]["input"] == PERSONA["input"] and sim_calls[0]["max_turns"] == 8
+    assert sim_calls[0]["model"] is env.judge  # the injected actor model, never a default
+    assert calls["n"] == 1 and calls["sessions"] == run["session_ids"]
+    (job,) = env.submitted
+    assert job.spec["actor_model_id"] == "global.moonshotai.kimi-k3"
+    session = job.spec["sessions"][0]
+    assert session["actor_profile"]["goal"] == PERSONA["actor_profile"]["goal"]
     # persona assertions ride along as ground truth
-    meta = data.start_batch_evaluation.call_args.kwargs["evaluationMetadata"]
-    assert meta["sessionMetadata"][0]["groundTruth"]["inline"]["assertions"] == [
-        {"text": "Agent submits a PTO request"}
-    ]
-
-
+    assert job.spec["ground_truth"][session["session_id"]]["assertions"] == [
+        "Agent submits a PTO request"]
 def test_run_rejects_local_plus_cloud_dataset(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db, name="cloud-xor-agent")
@@ -395,56 +424,42 @@ def test_run_rejects_local_plus_cloud_dataset(client, monkeypatch):
 
 
 # ─── ground-truth runs ───────────────────────────────────────────────────────
-def test_multi_turn_scenarios_replay_in_one_session(monkeypatch):
+def test_multi_turn_scenarios_replay_in_one_session(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db, name="scenario-agent")
     run = EvalRun(
         workspace_id=DEFAULT_WORKSPACE_ID,
         agent_id=agent.id, agent_name=agent.name, mode="evaluators",
-                  evaluators=["Builtin.Correctness"], status="queued")
+        evaluators=["Builtin.Correctness"], status="queued")
     db.add(run)
     db.commit()
     run_id = run.id
     db.close()
 
-    data, _ = stub_environment(monkeypatch)
-    calls: list[tuple[str, str]] = []
-
-    def invoke(
-        client, arn, prompt, session_id=None, actor_id="default", runtime_user_id=None
-    ):
-        sid = session_id or f"gen-{len(calls):02d}" + "x" * 30
-        calls.append((sid, prompt))
-        return {"text": "ok", "session_id": sid}
-
-    monkeypatch.setattr(svc.rt, "invoke_runtime_text", invoke)
-
+    env, calls = stub_environment(monkeypatch)
     items = [SCENARIO, {"prompt": "standalone question"}]
-    svc.execute_run(
-        run_id,
-        workspace=ws_ctx(),
-        agent_arn=agent.arn, method="zip_runtime", service_name="svc.DEFAULT",
-        log_group="/lg",
-        items=items, evaluators=["Builtin.Correctness"], mode="evaluators",
-        wait_seconds=0,
+    workspace = ws_ctx(id=DEFAULT_WORKSPACE_ID)
+    plan = svc.plan_run(
+        run_id, workspace=workspace, agent_arn=agent.arn, agent_id=agent.id, protocol="http",
+        service_name="svc.DEFAULT", log_group="/lg", log_groups=["aws/spans", "/lg"],
+        items=items, evaluators=["Builtin.Correctness"], mode="evaluators", wait_seconds=0,
+        existing_session_ids=None, time_range=None, insights=None, actor_model_id=None,
+        runtime_user_id=None,
     )
-    assert [p for _, p in calls] == [
-        "I want a refund", "Order 123 please", "standalone question",
-    ]
-    assert calls[0][0] == calls[1][0]  # same scenario → same session
-    assert calls[2][0] != calls[0][0]  # next scenario → new session
-
-    kwargs = data.start_batch_evaluation.call_args.kwargs
-    meta = kwargs["evaluationMetadata"]["sessionMetadata"]
-    assert len(meta) == 1  # only the scenario with ground truth
-    assert meta[0]["sessionId"] == calls[0][0]
-    assert meta[0]["testScenarioId"] == "refund_flow"
-
+    svc.execute_run(run_id, workspace=workspace, plan=plan)
+    assert calls["prompts"] == ["I want a refund", "Order 123 please", "standalone question"]
+    assert calls["sessions"][0] == calls["sessions"][1]  # same scenario → same session
+    assert calls["sessions"][2] != calls["sessions"][0]  # next scenario → new session
+    refund_sid = calls["sessions"][0]
+    (job,) = env.submitted
+    truth = job.spec["ground_truth"]
+    assert truth[refund_sid]["scenario_id"] == "refund_flow"
+    assert truth[refund_sid]["expected_trajectory"] == ["lookup_order", "issue_refund"]
+    assert truth[refund_sid]["assertions"] == ["The agent confirms the refund"]
+    assert truth[calls["sessions"][2]]["expected_response"] is None  # the plain prompt
     db = SessionLocal()
     assert db.get(EvalRun, run_id).status == "completed"
     db.close()
-
-
 def test_trajectory_evaluator_needs_ground_truth(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db, name="traj-agent")
@@ -481,25 +496,38 @@ def test_trajectory_evaluator_accepted_with_ground_truth(client, monkeypatch):
     db.commit()
     ds_id = ds.id
     db.close()
-    stub_environment(monkeypatch)
+    env, _ = stub_environment(monkeypatch)
 
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "dataset_id": ds_id,
-        "evaluators": ["Builtin.TrajectoryInOrderMatch", "Builtin.Correctness"],
-        "wait_seconds": 0,
+        "evaluators": ["Builtin.TrajectoryInOrderMatch"], "wait_seconds": 0,
     })
     assert res.status_code == 201, res.text
-    import time
-
-    for _ in range(50):
-        run = client.get(f"/api/eval/runs/{res.json()['id']}").json()
-        if run["status"] in ("completed", "failed"):
-            break
-        time.sleep(0.1)
+    run = wait_terminal(client, res.json()["id"])
     assert run["status"] == "completed", run.get("error")
+    (job,) = env.submitted
+    sid = job.spec["sessions"][0]["session_id"]
+    assert job.spec["ground_truth"][sid]["expected_trajectory"] == ["lookup_order", "issue_refund"]
+    # the fixture session called hr_lookup only → the deterministic matcher scores 0
+    assert strip_ci(run["scores"]) == [{
+        "evaluatorId": "Builtin.TrajectoryInOrderMatch", "score": 0.0,
+                              "count": 1, "n": 1, "unit": "session"}]
+def _stub_judge(monkeypatch=None):
+    """One ground-truth judge row ({expected_response} placeholder) in the default
+    workspace — the CN evaluator is the ``eval_evaluators`` row (E1-1)."""
+    from app.evaluation.models import EvalEvaluator
+
+    with SessionLocal() as db:
+        db.add(EvalEvaluator(
+            id=GT_JUDGE_ID, workspace_id=DEFAULT_WORKSPACE_ID, name="ref_grounding",
+            level="TRACE", definition="judge", model_id="global.zai.glm-5.3",
+            instructions=("Context: {context}\nAnswer: {assistant_turn}\n"
+                          "Reference: {expected_response}\nScore it."),
+            rating_scale=[],
+        ))
+        db.commit()
 
 
-# ─── migration guard ─────────────────────────────────────────────────────────
 def test_migrate_adds_dataset_columns_idempotently(tmp_path):
     eng = create_engine(f"sqlite:///{tmp_path}/old.db")
     with eng.begin() as conn:
@@ -517,26 +545,23 @@ def test_migrate_adds_dataset_columns_idempotently(tmp_path):
 
 
 # ─── custom-judge ground-truth preflight ─────────────────────────────────────
-GT_JUDGE_DETAIL = {
-    "evaluatorId": "ref_grounding-abc123",
-    "level": "TRACE",
-    "evaluatorConfig": {
-        "llmAsAJudge": {
-            "instructions": (
-                "Context: {context}\nAnswer: {assistant_turn}\n"
-                "Reference: {expected_response}\nScore it."
-            )
-        }
-    },
-}
+GT_JUDGE_ID = "ref_grounding-abc123"
 
 
-def _stub_judge(monkeypatch, detail=GT_JUDGE_DETAIL):
-    """Control client whose GetEvaluator returns one ground-truth judge."""
-    stub = MagicMock()
-    stub.get_evaluator.return_value = detail
-    monkeypatch.setattr("app.evaluation.routers.control_client", lambda _ws=None: stub)
-    return stub
+def _stub_judge(monkeypatch=None):
+    """One ground-truth judge row ({expected_response} placeholder) in the default
+    workspace — the CN evaluator is the ``eval_evaluators`` row (E1-1)."""
+    from app.evaluation.models import EvalEvaluator
+
+    with SessionLocal() as db:
+        db.add(EvalEvaluator(
+            id=GT_JUDGE_ID, workspace_id=DEFAULT_WORKSPACE_ID, name="ref_grounding",
+            level="TRACE", definition="judge", model_id="global.zai.glm-5.3",
+            instructions=("Context: {context}\nAnswer: {assistant_turn}\n"
+                          "Reference: {expected_response}\nScore it."),
+            rating_scale=[],
+        ))
+        db.commit()
 
 
 def test_judge_ground_truth_gate_rejects_scopes_without_it(client, monkeypatch):
@@ -553,7 +578,7 @@ def test_judge_ground_truth_gate_rejects_scopes_without_it(client, monkeypatch):
     # dataset scope, but no scenario carries expected_response
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "dataset_id": plain_id,
-        "evaluators": ["ref_grounding-abc123"],
+        "evaluators": [GT_JUDGE_ID],
     })
     assert res.status_code == 422
     body = res.json()
@@ -563,7 +588,7 @@ def test_judge_ground_truth_gate_rejects_scopes_without_it(client, monkeypatch):
     # window scope — ground truth is impossible there
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "lookback_hours": 24,
-        "evaluators": ["ref_grounding-abc123"],
+        "evaluators": [GT_JUDGE_ID],
     })
     assert res.status_code == 422
     assert res.json()["code"] == "run.judge_needs_ground_truth"
@@ -589,17 +614,16 @@ def test_judge_ground_truth_gate_accepts_dataset_with_expected_response(
 
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "dataset_id": ds_id,
-        "evaluators": ["ref_grounding-abc123"], "wait_seconds": 0,
+        "evaluators": [GT_JUDGE_ID], "wait_seconds": 0,
     })
     assert res.status_code == 201, res.text
 
 
-def test_judge_ground_truth_gate_skips_builtins_and_refuses_unreadable_judges(
+def test_judge_ground_truth_gate_skips_builtins_and_refuses_unknown_judges(
     client, monkeypatch
 ):
-    """SE-047 B: an unreadable custom evaluator has UNKNOWN reference needs. The old
-    fail-open ('AWS enforces it too') let the agent be invoked for every scenario before
-    the service could reject the batch; the gate now refuses before any run row."""
+    """SE-047 B: an unknown custom evaluator has UNKNOWN reference needs; the gate refuses
+    before any run row (the agent would otherwise be invoked for every scenario first)."""
     db = SessionLocal()
     agent = make_agent(db, name="judge-open-agent")
     plain = EvalDataset(
@@ -609,28 +633,46 @@ def test_judge_ground_truth_gate_skips_builtins_and_refuses_unreadable_judges(
     plain_id = plain.id
     db.close()
     stub_environment(monkeypatch)
-    stub = _stub_judge(monkeypatch)
 
-    # builtin-only selection never asks the control plane
+    # builtin-only selection needs no row lookup
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "dataset_id": plain_id,
         "evaluators": ["Builtin.Correctness"], "wait_seconds": 0,
     })
     assert res.status_code == 201, res.text
-    stub.get_evaluator.assert_not_called()
 
-    # an unreadable control plane means unknown requirements: refused, no run row
+    # an id that is neither a builtin nor a row of this workspace: refused, no run row
     from app.evaluation.models import EvalRun
 
     with SessionLocal() as db:
         before = db.query(EvalRun).count()
-    stub.get_evaluator.side_effect = RuntimeError("control plane unavailable")
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "dataset_id": plain_id,
-        "evaluators": ["ref_grounding-abc123"], "wait_seconds": 0,
+        "evaluators": ["ref_grounding-missing"], "wait_seconds": 0,
     })
     assert res.status_code == 422, res.text
-    assert res.json()["code"] == "run.evaluator_unverifiable"
-    assert "ref_grounding-abc123" in res.json()["message"]
+    assert res.json()["code"] == "run.evaluator_not_found"
+    assert "ref_grounding-missing" in res.json()["message"]
     with SessionLocal() as db:
         assert db.query(EvalRun).count() == before
+
+
+@pytest.mark.siliconflow
+def test_run_refuses_an_actor_model_whose_provider_is_not_configured(client, monkeypatch):
+    """N-R6-obs1: the actor simulator runs on the worker with the provider's key — a
+    SiliconFlow actor without the key is a 422 `model.provider_unconfigured` at start."""
+    monkeypatch.delenv("LAUNCHPAD_SILICONFLOW_API_KEY", raising=False)
+    db = SessionLocal()
+    agent = make_agent(db, name="cloud-sim-unconfigured-agent")
+    db.close()
+    stub_environment(monkeypatch)
+    stub_cloud_run(monkeypatch, schema_type=SIMULATED)
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "cloud_dataset_id": "cloudds-7",
+        "actor_model_id": "siliconflow.zai-org/GLM-5.3",
+        "wait_seconds": 0,
+    })
+    assert res.status_code == 422, res.text
+    assert res.json()["code"] == "model.provider_unconfigured"
+    assert res.json()["detail"] == {"actor_model_id": "siliconflow.zai-org/GLM-5.3"}
+    assert "launchpad-siliconflow-api-key" in res.json()["message"]

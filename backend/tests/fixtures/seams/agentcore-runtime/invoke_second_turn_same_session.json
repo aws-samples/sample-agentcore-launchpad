@@ -1,0 +1,55 @@
+{
+ "seam": "agentcore-runtime",
+ "case": "invoke_second_turn_same_session",
+ "captured_at": "2026-10-19T09:17:45Z",
+ "notes": "Genuine reattach to the session created above (warm container).",
+ "response_or_error": {
+  "invoke_response_meta": {
+   "ResponseMetadata": {
+    "RequestId": "6496440c-8c4e-4ad3-8ab7-296d99d51cea",
+    "HTTPStatusCode": 200,
+    "HTTPHeaders": {
+     "date": "Mon, 19 Oct 2026 09:17:45 GMT",
+     "content-type": "text/event-stream; charset=utf-8",
+     "transfer-encoding": "chunked",
+     "connection": "keep-alive",
+     "x-amzn-requestid": "6496440c-8c4e-4ad3-8ab7-296d99d51cea",
+     "x-amzn-bedrock-agentcore-runtime-session-id": "c32700ad-635d-4719-909c-503c85598a36-fc2d349f"
+    }
+   },
+   "runtimeSessionId": "c32700ad-635d-4719-909c-503c85598a36-fc2d349f",
+   "contentType": "text/event-stream; charset=utf-8",
+   "statusCode": 200
+  },
+  "line_count": 6,
+  "bytes": 502,
+  "first_3_lines": [
+   "data: {\"event\": {\"messageStart\": {\"role\": \"assistant\"}}}",
+   "data: {\"event\": {\"contentBlockDelta\": {\"delta\": {\"text\": \"\"}, \"contentBlockIndex\": 0}}}",
+   "data: {\"event\": {\"contentBlockDelta\": {\"delta\": {\"text\": \"OK\"}, \"contentBlockIndex\": 0}}}"
+  ],
+  "last_2_lines": [
+   "data: {\"event\": {\"messageStop\": {\"stopReason\": \"end_turn\"}}}",
+   "data: {\"event\": {\"metadata\": {\"usage\": {\"inputTokens\": 1213, \"outputTokens\": 3, \"totalTokens\": 1216}, \"metrics\": {\"latencyMs\": 8271}}}}"
+  ],
+  "data_line_key_shapes_unique": [
+   [
+    "[",
+    "\"",
+    "e",
+    "v",
+    "e",
+    "n",
+    "t",
+    "\"",
+    "]"
+   ]
+  ],
+  "data_line_key_shapes_unique_raw": [
+   "[\"event\"]"
+  ]
+ },
+ "status": 200,
+ "elapsed_s": 9.826,
+ "source": "t1 host, instance role (uv env boto3 1.43.109), via SSM"
+}

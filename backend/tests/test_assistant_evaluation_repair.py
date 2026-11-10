@@ -1,5 +1,6 @@
 # ruff: noqa: F811 — pytest fixtures are imported explicitly from test_assistant
-"""Repair turns exercise the real router/composer with a stubbed Harness and temp DB."""
+"""Repair turns exercise the real router/composer with a stubbed architect runtime and temp
+DB (N12 W-E5 restore of the Global suite; the two call-shape assertions follow N1 R12)."""
 
 import json
 import threading
@@ -162,9 +163,12 @@ def test_repair_stream_gets_saved_context_and_persists_new_validatable_revision(
     assert events[0][1]["omitted_turns"] == 0
     assert len(harness.calls) == 1
     call = harness.calls[0]
-    assert call["harnessArn"] == PRESET_ARN
-    assert [m["role"] for m in call["messages"]] == ["user"]
-    text = call["messages"][0]["content"][0]["text"]
+    # CN (N1 R12): the preset is a self-built Harness on AgentCore Runtime — the replay
+    # travels as the InvokeAgentRuntime payload, not as InvokeHarness.messages
+    assert call["agentRuntimeArn"] == PRESET_ARN
+    messages = harness.messages_of(0)
+    assert [m["role"] for m in messages] == ["user"]
+    text = messages[0]["content"][0]["text"]
     assert text.startswith("# Launchpad assistant protocol")
     assert PROMPT in text
     snapshot = json.loads(text[text.rfind('\n{"latest_proposal":') + 1:])
@@ -422,7 +426,7 @@ def test_ordinary_turn_ignores_invalid_plan_without_a_repair_reference(
     assert response.status_code == 200, response.text
     events = _sse(response)
     assert events[0][0] == "meta" and events[-1][0] == "done"
-    text = harness.calls[-1]["messages"][-1]["content"][0]["text"]
+    text = harness.messages_of(-1)[-1]["content"][0]["text"]
     assert text.endswith(body["prompt"]) and '"invalid_plan":' not in text
     assert _latest(client, cid)["turns"] == 1
 

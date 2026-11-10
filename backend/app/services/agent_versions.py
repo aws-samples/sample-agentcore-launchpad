@@ -10,9 +10,11 @@ roles or authorizer configuration leave the backend.
 
 The agent's resource kind decides which pair of list operations runs:
 
-* ``zip_runtime`` / ``studio`` / ``container`` and imported rows whose
+* every self-built method (``zip_runtime`` / ``studio`` / ``container`` /
+  ``byoc`` / ``harness``) and an imported row whose
   ``spec.discovery.resource_type`` is absent or ``runtime`` → Runtime lists;
-* ``harness`` and imported rows with ``resource_type == "harness"`` → Harness lists;
+* an imported row with ``resource_type == "harness"`` (a discovered managed
+  Harness, N1 residue) → no API to read versions/endpoints back from;
 * anything else (no resource yet, deleted, unknown method) → ``agent.no_resource``.
 """
 
@@ -21,13 +23,12 @@ from typing import Any, Literal
 
 from app.core.errors import AppError
 from app.models.ledger import Agent
-from app.services.agentcore import harness as harness_api
 from app.services.agentcore import runtime as runtime_api
 from app.services.runtime_discovery import DISCOVERED_METHOD, HARNESS_RESOURCE_TYPE
 
-ResourceKind = Literal["runtime", "harness"]
+ResourceKind = Literal["runtime"]
 
-RUNTIME_METHODS = {"zip_runtime", "studio", "container", "byoc"}
+RUNTIME_METHODS = {"zip_runtime", "studio", "container", "byoc", "harness"}
 DEFAULT_ENDPOINT = "DEFAULT"
 CANARY_ENDPOINTS = ("stable", "treatment")
 
@@ -45,16 +46,20 @@ def _text(value: Any) -> str | None:
 
 
 def resource_kind(agent: Agent) -> ResourceKind | None:
-    """Which AWS resource family backs this ledger row, or None when neither does."""
-    if agent.method == "harness":
-        return "harness"
+    """Which AWS resource family backs this ledger row, or None when neither does.
+
+    Only a *discovered* managed Harness (DISCOVERED_METHOD with
+    ``resource_type == "harness"``) resolves to None: it has no Harness API to
+    read versions/endpoints back from. The self-built `harness` method is
+    Runtime-backed like every other method in ``RUNTIME_METHODS``.
+    """
     if agent.method in RUNTIME_METHODS:
         return "runtime"
     if agent.method == DISCOVERED_METHOD:
         discovery = (agent.spec or {}).get("discovery") or {}
         resource_type = discovery.get("resource_type") or "runtime"
         if resource_type == HARNESS_RESOURCE_TYPE:
-            return "harness"
+            return None
         if resource_type == "runtime":
             return "runtime"
     return None
@@ -122,29 +127,6 @@ def _project_runtime_endpoint(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _project_harness_version(raw: dict[str, Any]) -> dict[str, Any]:
-    # HarnessVersionSummary: no description, ``updatedAt`` rather than lastUpdatedAt.
-    return {
-        "version": _text(raw.get("harnessVersion")),
-        "status": _text(raw.get("status")),
-        "description": None,
-        "last_updated_at": _iso(raw.get("updatedAt") or raw.get("createdAt")),
-    }
-
-
-def _project_harness_endpoint(raw: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "name": _text(raw.get("endpointName")),
-        "live_version": _text(raw.get("liveVersion")),
-        "target_version": _text(raw.get("targetVersion")),
-        "status": _text(raw.get("status")),
-        "description": _text(raw.get("description")),
-        "created_at": _iso(raw.get("createdAt")),
-        "last_updated_at": _iso(raw.get("updatedAt")),
-        "failure_reason": _text(raw.get("failureReason")),
-    }
-
-
 def list_agent_versions(control: Any, agent: Agent) -> dict[str, Any]:
     """The full AWS version + endpoint set for one agent, allow-list projected.
 
@@ -154,24 +136,14 @@ def list_agent_versions(control: Any, agent: Agent) -> dict[str, Any]:
     mint, so the UI shows the mismatch rather than treating it as an error.
     """
     kind, resource_id = require_resource(agent)
-    if kind == "harness":
-        versions = [
-            _project_harness_version(v)
-            for v in harness_api.list_harness_versions(control, resource_id)
-        ]
-        endpoints = [
-            _project_harness_endpoint(e)
-            for e in harness_api.list_harness_endpoints(control, resource_id)
-        ]
-    else:
-        versions = [
-            _project_runtime_version(v)
-            for v in runtime_api.list_runtime_versions(control, resource_id)
-        ]
-        endpoints = [
-            _project_runtime_endpoint(e)
-            for e in runtime_api.list_runtime_endpoints(control, resource_id)
-        ]
+    versions = [
+        _project_runtime_version(v)
+        for v in runtime_api.list_runtime_versions(control, resource_id)
+    ]
+    endpoints = [
+        _project_runtime_endpoint(e)
+        for e in runtime_api.list_runtime_endpoints(control, resource_id)
+    ]
     versions.sort(key=lambda v: _version_key(v["version"]), reverse=True)
     endpoints.sort(key=_endpoint_key)
     latest = versions[0]["version"] if versions else None

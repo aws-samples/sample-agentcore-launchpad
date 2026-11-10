@@ -14,6 +14,7 @@ class _LaunchpadSigV4Auth(httpx.Auth):
         self._session = boto3.Session()
 
     def auth_flow(self, request):
+        __LAUNCHPAD_PRINCIPAL_INJECT__
         credentials = self._session.get_credentials().get_frozen_credentials()
         signed = AWSRequest(
             method=request.method, url=str(request.url), data=request.content,

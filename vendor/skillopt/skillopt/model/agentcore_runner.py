@@ -1,12 +1,12 @@
 """Remote exec runner: ship a prepared work_dir to Bedrock AgentCore Runtime.
 
-When ``SKILLOPT_EXEC_RUNNER=agentcore``, ``run_claude_code_exec`` /
-``run_codex_exec`` delegate here instead of spawning a local CLI. The local
+When ``SKILLOPT_EXEC_RUNNER=agentcore``, ``run_opencode_exec`` delegates here
+instead of spawning a local CLI (LAUNCHPAD PATCH D16: OpenCode is the one exec
+backend). The local
 work_dir (already seeded by ``prepare_workspace``) is tarred to S3, executed
 inside a per-task AgentCore microVM by ``skillopt.model.agentcore_worker``,
-and the mutated work_dir is downloaded back in place, so manifest diffing,
-``codex_last_message.txt`` readback, and the judge all keep working on local
-paths. The judge transport (``policy`` calls) never reaches this module.
+and the mutated work_dir is downloaded back in place, so manifest diffing and
+the judge all keep working on local paths. The judge transport (``policy`` calls) never reaches this module.
 
 Design spec: docs/superpowers/specs/agentcore-exec-runner.md
 """
@@ -55,7 +55,7 @@ def get_runner_config() -> dict[str, Any]:
         )
     region = os.environ.get("SKILLOPT_AGENTCORE_REGION", "").strip()
     if not region:
-        # arn:aws:bedrock-agentcore:<region>:<acct>:runtime/<id>
+        # arn:<partition>:bedrock-agentcore:<region>:<acct>:runtime/<id>
         parts = arn.split(":")
         if len(parts) < 4 or not parts[3]:
             raise AgentCoreRunnerError(f"Cannot parse region from runtime ARN: {arn!r}")
@@ -72,6 +72,10 @@ def get_runner_config() -> dict[str, Any]:
         "region": region,
         "qualifier": os.environ.get("SKILLOPT_AGENTCORE_QUALIFIER", "DEFAULT").strip() or "DEFAULT",
         "sync_interval": max(0, sync_interval),
+        # Sent on every invoke so the Runtime injects a workload access token the
+        # worker exchanges for the Global Bedrock API key (model-credential.md).
+        "runtime_user_id": os.environ.get("SKILLOPT_AGENTCORE_RUNTIME_USER_ID", "skill-lab").strip()
+        or "skill-lab",
     }
 
 
@@ -200,7 +204,7 @@ def run_remote_exec(
             "SKILLOPT_EXEC_RUNNER=agentcore does not support images/data_dirs yet "
             "(they reference host paths outside the work_dir)"
         )
-    if backend not in {"claude_code_exec", "codex_exec"}:
+    if backend != "opencode_exec":
         raise ValueError(f"Unsupported backend for remote exec: {backend!r}")
     work_dir = os.path.abspath(work_dir)
     if not os.path.isdir(work_dir):
@@ -222,9 +226,7 @@ def run_remote_exec(
     s3.put_object(Bucket=cfg["bucket"], Key=in_key, Body=_tar_work_dir(work_dir))
 
     # Remote side re-applies the local exec config, minus host-specific bits.
-    remote_config = {
-        k: v for k, v in exec_config.items() if k not in {"path", "use_sdk", "profile"}
-    }
+    remote_config = {k: v for k, v in exec_config.items() if k not in {"path"}}
     payload = {
         "action": "exec",
         "backend": backend,
@@ -262,6 +264,7 @@ def run_remote_exec(
             agentRuntimeArn=cfg["runtime_arn"],
             qualifier=cfg["qualifier"],
             runtimeSessionId=session_id,
+            runtimeUserId=cfg["runtime_user_id"],
             payload=json.dumps(payload).encode("utf-8"),
         )
         worker_reply = _read_invoke_response(response)
@@ -288,8 +291,19 @@ def run_remote_exec(
             ) from invoke_error
 
     # Async completion: the microVM keeps working (ping=HealthyBusy) after the
-    # invoke returns; result.json is uploaded by its final flush.
-    result = _poll_json(s3, cfg["bucket"], result_key, result_deadline)
+    # invoke returns; result.json is uploaded by its final flush. An interrupted
+    # wait (the host job was cancelled) leaves a cancel marker the worker honours
+    # before launching the CLI, then stops the session — cheap alignment with the
+    # N12 evaluation-worker protocol.
+    try:
+        result = _poll_json(s3, cfg["bucket"], result_key, result_deadline)
+    except BaseException:
+        try:
+            s3.put_object(Bucket=cfg["bucket"], Key=f"{job_prefix}/cancel", Body=b"")
+        except Exception:  # noqa: BLE001 - best effort
+            pass
+        _stop_session()
+        raise
     _stop_session()
     if result is None:
         raise AgentCoreRunnerError(
@@ -300,8 +314,23 @@ def run_remote_exec(
     out_obj = s3.get_object(Bucket=cfg["bucket"], Key=out_key)
     _extract_tar_over_work_dir(out_obj["Body"].read(), work_dir)
 
-    if result.get("error"):
-        # The remote harness raised (e.g. codex nonzero exit) — mirror the
-        # local behaviour where that exception propagates to the caller.
-        raise RuntimeError(f"Remote {backend} failed (job {job_id}): {result['error']}")
+    _raise_for_remote_error(backend, job_id, result)
     return str(result.get("response") or ""), str(result.get("raw") or "")
+
+
+def _raise_for_remote_error(backend: str, job_id: str, result: dict[str, Any]) -> None:
+    """Surface a worker-side failure the way the rollout expects it.
+
+    ``error_kind == "infrastructure"`` (the worker never got to run the CLI: download,
+    config or model-key resolution failed) is an ``AgentCoreRunnerError`` — the rollout
+    marks the row invalid, excluded from scoring (N10v3-bug3). Anything else mirrors the
+    local behaviour: the CLI raised, so a plain ``RuntimeError`` propagates and the row is
+    a scored artifact failure."""
+    error = result.get("error")
+    if not error:
+        return
+    if result.get("error_kind") == "infrastructure":
+        raise AgentCoreRunnerError(
+            f"Remote {backend} infrastructure failure (job {job_id}): {error}"
+        )
+    raise RuntimeError(f"Remote {backend} failed (job {job_id}): {error}")

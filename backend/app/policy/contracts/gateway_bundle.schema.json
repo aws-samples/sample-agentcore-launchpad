@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "launchpad.policy.contracts/gateway_bundle/v3",
+  "title": "I3 interceptor bundle",
+  "description": "Written by the hub's bundle writer (policy_bundle.write_gateway_bundle, immutable key s3://<artifacts>/policy/gateway/<gateway_id>/v<n>.json); read by the interceptor Lambda. Holds no secret: the engine HMAC key is a separate S3 object named by engine.key_s3_key. Schema /3 (Global model, policy-engines contract 2026-10-28): ONE `attachment` per gateway — {engine_id, mode LOG_ONLY|ENFORCE, counts, actions} or null for an unattached (unguarded) gateway; the /1 and /2 `workspaces` shapes are retired. The Lambda also still reads /1 and /2 (ruling 25); this schema describes what the hub WRITES.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "enum": [
+        "launchpad.policy.gateway/3"
+      ]
+    },
+    "gateway_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "gateway_arn": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "issued_at": {
+      "type": "string"
+    },
+    "env": {
+      "type": "string"
+    },
+    "empty_set_decision": {
+      "enum": [
+        "deny"
+      ]
+    },
+    "hub_role": {
+      "type": "string"
+    },
+    "pubkeys": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 40
+      }
+    },
+    "role_map": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "ws": {
+            "type": "string",
+            "minLength": 1
+          },
+          "method": {
+            "type": "string"
+          },
+          "system": {
+            "type": "boolean"
+          },
+          "byoc": {
+            "type": "boolean"
+          },
+          "exempt": {
+            "type": "boolean",
+            "description": "user ruling (12): the caller is exempt from policy (passed with a system_exempt row, no engine call); absent = the value of `system`"
+          }
+        },
+        "required": [
+          "agent_id",
+          "byoc",
+          "exempt",
+          "method",
+          "system",
+          "ws"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "attachment": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "engine_id": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^pe_[0-9a-f]{12}$"
+            },
+            "mode": {
+              "enum": [
+                "LOG_ONLY",
+                "ENFORCE"
+              ]
+            },
+            "active_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "temporal_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            },
+            "policy_set_version": {
+              "type": "string",
+              "minLength": 1
+            },
+            "temporal_set_version": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "governed_actions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^AgentCore::Action::\".+\"$"
+              }
+            },
+            "temporal_referenced_actions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^AgentCore::Action::\".+\"$"
+              }
+            }
+          },
+          "required": [
+            "engine_id",
+            "mode",
+            "active_count",
+            "temporal_count",
+            "policy_set_version",
+            "temporal_set_version",
+            "governed_actions",
+            "temporal_referenced_actions"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "engine": {
+      "type": "object",
+      "properties": {
+        "endpoints": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9.]+:[0-9]{2,5}$"
+          },
+          "minItems": 1
+        },
+        "shards": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "key_s3_key": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "endpoints",
+        "shards",
+        "key_s3_key"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "gateway_id",
+    "gateway_arn",
+    "version",
+    "issued_at",
+    "env",
+    "empty_set_decision",
+    "hub_role",
+    "pubkeys",
+    "role_map",
+    "attachment",
+    "engine"
+  ],
+  "additionalProperties": false
+}

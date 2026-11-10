@@ -1,108 +1,110 @@
-"""Simulated persona scenarios — SDK executor adapter + dataset plumbing."""
+"""Simulated persona scenarios (E1-6): the worker drives them on
+``strands_evals.simulation.ActorSimulator`` through ``strands_eval/simulator`` — the SDK's
+``SimulatedScenarioExecutor`` wrapper (``evaluation/simulation.py``) is gone — plus the
+dataset plumbing for persona items and the actor-model catalog check."""
+
+from pathlib import Path
 
 import pytest
 
-from app.evaluation import simulation
-from app.evaluation.routers import _infer_kind, _validate_items
+from app.core.errors import AppError
+from app.evaluation.routers import _check_actor_model, _infer_kind, _validate_items
 from app.evaluation.scenarios import ground_truth_metadata, normalize_scenarios
+from app.services.strands_eval import simulator
+from tests.evaluation.fakes import FakeModel
 from tests.evaluation.test_datasets_v2 import PERSONA, SCENARIO
 
-
-# ─── adapter: our invokers drive the SDK executor ────────────────────────────
-class FakeResult:
-    def __init__(self, status="COMPLETED", error=None):
-        self.status = status
-        self.error = error
+APP = Path(__file__).resolve().parents[2] / "app"
 
 
-def stub_executor(monkeypatch, *, turns=2, status="COMPLETED", captured=None):
-    """Replace the SDK executor with one that calls the invoker ``turns`` times
-    (framework session id stays stable across turns, like the real loop)."""
-    from bedrock_agentcore.evaluation import AgentInvokerInput
-
-    class FakeExecutor:
-        def __init__(self, *, agent_invoker, simulation_config):
-            if captured is not None:
-                captured["config"] = simulation_config
-            self.agent_invoker = agent_invoker
-
-        def run_scenario(self, scenario):
-            if captured is not None:
-                captured["scenario"] = scenario
-            for turn in range(turns):
-                self.agent_invoker(AgentInvokerInput(
-                    payload=f"turn-{turn}", session_id="framework-key"))
-            return FakeResult(status=status,
-                              error="boom" if status == "FAILED" else None)
-
-    monkeypatch.setattr(simulation, "SimulatedScenarioExecutor", FakeExecutor)
+# ─── the actor: profile from the item, model injected ────────────────────────
+def test_build_actor_maps_the_item_profile_onto_the_strands_profile():
+    actor = simulator.build_actor(PERSONA["actor_profile"], PERSONA["input"],
+                                  model=FakeModel(), max_turns=8)
+    assert actor.initial_query == PERSONA["input"]
+    assert actor._max_turns == 8  # the SDK keeps it private; the injected model is the actor's
+    assert isinstance(actor.model_id, FakeModel)
+    assert actor.actor_profile.actor_goal == PERSONA["actor_profile"]["goal"]
+    assert actor.actor_profile.context == PERSONA["actor_profile"]["context"]
+    assert actor.actor_profile.traits == PERSONA["actor_profile"]["traits"]
 
 
-def test_adapter_threads_runtime_session_and_maps_fields(monkeypatch):
-    captured: dict = {}
-    stub_executor(monkeypatch, turns=3, captured=captured)
-    calls: list[tuple[str | None, str]] = []
+def test_build_actor_refuses_a_model_id_string():
+    """A str would make ActorSimulator build a default Claude ``BedrockModel`` (R-3)."""
+    with pytest.raises(ValueError, match="global_bedrock_model"):
+        simulator.build_actor(PERSONA["actor_profile"], "hi", model="global.zai.glm-5.3")
 
-    def invoke(
-        client, arn, prompt, session_id=None, actor_id="default", runtime_user_id=None
-    ):
-        calls.append((session_id, prompt))
-        return {"text": "ok", "session_id": "runtime-sess-" + "x" * 30}
 
-    monkeypatch.setattr(simulation.rt, "invoke_runtime_text", invoke)
+def test_drive_threads_the_runtime_session_until_the_actor_stops():
+    class Turn:
+        def __init__(self, message, stop):
+            self.structured_output = type("R", (), {"message": message, "stop": stop})()
 
-    sid = simulation.run_simulated_scenario(
-        object(), agent_arn="arn:x", method="zip_runtime", scenario=PERSONA,
-        actor_model_id="global.anthropic.claude-haiku-4-5-20251001-v1:0",
-    )
+    class Actor:
+        initial_query = "turn-0"
+
+        def __init__(self):
+            self.seen = []
+            self.turns = [Turn("turn-1", False), Turn("turn-2", False), Turn("", True)]
+
+        def has_next(self):
+            return bool(self.turns)
+
+        def act(self, text):
+            self.seen.append(text)
+            return self.turns.pop(0)
+
+    calls: list[tuple[str, str | None]] = []
+
+    def invoke(prompt, session_id):
+        calls.append((prompt, session_id))
+        return {"text": f"reply to {prompt}", "session_id": "runtime-sess-" + "x" * 30}
+
+    actor = Actor()
+    sid = simulator.drive(actor, invoke)
     assert sid == "runtime-sess-" + "x" * 30
-    # first turn opens the session, later turns reuse the RUNTIME session id
-    assert calls[0][0] is None
-    assert calls[1][0] == sid and calls[2][0] == sid
-
-    sim = captured["scenario"]
-    assert sim.scenario_id == "frustrated-employee-leave"
-    assert sim.actor_profile.goal == "Get a PTO request submitted and confirmed"
-    assert sim.max_turns == 8
-    assert sim.assertions == ["Agent submits a PTO request"]
-    assert captured["config"].model_id == (
-        "global.anthropic.claude-haiku-4-5-20251001-v1:0"
-    )
+    # the first turn opens the session; later turns reuse the RUNTIME session id
+    assert [c[1] for c in calls] == [None] + [sid] * 2
+    assert [c[0] for c in calls] == ["turn-0", "turn-1", "turn-2"]
+    assert actor.seen == ["reply to turn-0", "reply to turn-1", "reply to turn-2"]
 
 
-def test_adapter_dispatches_harness(monkeypatch):
-    stub_executor(monkeypatch, turns=1)
-    monkeypatch.setattr(
-        simulation.hc, "invoke_harness_text",
-        lambda client, arn, prompt, session_id=None, actor_id="default": {
-            "text": "ok", "session_id": "harness-sess-" + "x" * 30},
-    )
-    sid = simulation.run_simulated_scenario(
-        object(), agent_arn="arn:h", method="harness", scenario=PERSONA,
-        actor_model_id="m",
-    )
-    assert sid.startswith("harness-sess-")
+def test_drive_stops_when_the_actor_has_no_next_turn():
+    class Actor:
+        initial_query = "only"
+
+        def has_next(self):
+            return False
+
+    calls = []
+    sid = simulator.drive(Actor(), lambda p, s: calls.append(p) or {"text": "ok",
+                                                                    "session_id": "s" * 33})
+    assert sid == "s" * 33 and calls == ["only"]
 
 
-def test_adapter_raises_on_failed_scenario(monkeypatch):
-    stub_executor(monkeypatch, turns=1, status="FAILED")
-    monkeypatch.setattr(
-        simulation.rt, "invoke_runtime_text",
-        lambda *a, **k: {"text": "ok", "session_id": "s" * 33},
-    )
-    with pytest.raises(RuntimeError, match="boom"):
-        simulation.run_simulated_scenario(
-            object(), agent_arn="arn:x", method="zip_runtime", scenario=PERSONA,
-            actor_model_id="m",
-        )
+def test_the_sdk_executor_and_the_default_profile_generator_are_gone():
+    """E1-6 acceptance: no ``SimulatedScenarioExecutor`` wrapper and no
+    ``from_case_for_user_simulator`` (it builds a default Claude ``Agent()``)."""
+    assert not (APP / "evaluation" / "simulation.py").exists()
+    offenders = [
+        str(path.relative_to(APP))
+        for path in APP.rglob("*.py")
+        if "from_case_for_user_simulator(" in path.read_text(encoding="utf-8")
+        or "SimulatedScenarioExecutor" in path.read_text(encoding="utf-8")
+    ]  # simulator.py's docstring names the banned factory without calling it
+    assert offenders == []
 
 
-def test_adapter_requires_actor_model():
-    with pytest.raises(RuntimeError, match="actor_model_id"):
-        simulation.run_simulated_scenario(
-            object(), agent_arn="arn:x", method="zip_runtime", scenario=PERSONA,
-            actor_model_id="",
-        )
+# ─── the run request: actor model required and catalog-checked ───────────────
+def test_persona_runs_need_an_actor_model_from_the_catalog():
+    with pytest.raises(AppError) as exc:
+        _check_actor_model([PERSONA], None)
+    assert exc.value.code == "run.actor_model_required" and exc.value.status_code == 422
+    with pytest.raises(AppError) as exc:
+        _check_actor_model([PERSONA], "global.anthropic.claude-haiku-4-5-20251001-v1:0")
+    assert exc.value.code == "model.not_allowed" and exc.value.status_code == 422
+    _check_actor_model([PERSONA], "global.zai.glm-5.3")  # catalog id: no raise
+    _check_actor_model([SCENARIO], None)  # no persona item: nothing required
 
 
 # ─── dataset plumbing for persona items ──────────────────────────────────────
@@ -110,11 +112,9 @@ def test_persona_items_validate_and_infer_kind():
     _validate_items([PERSONA])  # no raise
     assert _infer_kind([PERSONA]) == "simulated"
     assert _infer_kind([SCENARIO, PERSONA]) == "simulated"
-    assert simulation.is_simulated(PERSONA) and not simulation.is_simulated(SCENARIO)
 
 
 def test_persona_items_rejected_without_goal_or_input():
-    from app.core.errors import AppError
     bad_cases = [
         {**PERSONA, "input": ""},
         {**PERSONA, "actor_profile": {"context": "x"}},  # no goal

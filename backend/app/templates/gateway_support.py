@@ -30,16 +30,31 @@ from typing import Any
 from app.schemas.agent import AgentSpec
 
 GATEWAY_TEMPLATE = Path(__file__).with_name("gateway_tools.py.tmpl")
+SIGV4_TRANSPORT_TEMPLATE = Path(__file__).with_name("sigv4_gateway_transport.py.tmpl")
 
 # Env keys the rendered client reads. Named here because two producers must agree:
 # `deployer/environment.py` writes them and `gateway_tools.py.tmpl` reads them.
 ENV_URL = "LAUNCHPAD_GATEWAY_URL"
-ENV_PROVIDER = "LAUNCHPAD_GATEWAY_PROVIDER"
-ENV_SCOPE = "LAUNCHPAD_GATEWAY_SCOPE"
-ENV_WORKLOAD = "LAUNCHPAD_WORKLOAD_NAME"
+ENV_GATEWAYS = "LAUNCHPAD_GATEWAYS"
 # Comma-separated fnmatch patterns of the Gateway MCP tool names the agent may load
 # (see ``gateway_tool_patterns``); absent = every tool (runtimes rendered before it).
 ENV_TOOLS = "LAUNCHPAD_GATEWAY_TOOLS"
+
+# Module-scope imports the SigV4 transport block needs from its surrounding module
+# (see ``sigv4_gateway_transport.py.tmpl``'s header comment — the same contract
+# ``harness_convert.py`` satisfies for a converted twin's mcp_client/client.py).
+# ``_LaunchpadSigV4Auth(httpx.Auth)`` is a class statement that resolves at module
+# **import** time, so these cannot be function-local the way the rest of the
+# fail-soft gateway block is: httpx/botocore/mcp are guaranteed present (declared
+# dependencies of strands-agents / bedrock_agentcore), so this trades no real
+# fail-softness away. ``boto3`` itself is already imported at module scope by
+# ``main.py.tmpl``.
+_SIGV4_TRANSPORT_IMPORTS = (
+    "import httpx\n"
+    "from botocore.auth import SigV4Auth\n"
+    "from botocore.awsrequest import AWSRequest\n"
+    "from mcp.client.streamable_http import streamablehttp_client\n"
+)
 
 
 def uses_gateway(spec: AgentSpec) -> bool:
@@ -71,48 +86,34 @@ def gateway_tool_patterns(spec: AgentSpec) -> list[str]:
     return list(dict.fromkeys(patterns))
 
 
-def runtime_user_id(spec: Mapping[str, Any] | None, actor_id: str = "default") -> str | None:
-    """``runtimeUserId`` for an ``InvokeAgentRuntime`` call, or None to omit it.
+def runtime_user_id(spec: Mapping[str, Any] | None, actor_id: str = "default") -> str:
+    """``runtimeUserId`` for every ``InvokeAgentRuntime`` call.
 
     Supplying it is what makes the Runtime inject a ``WorkloadAccessToken`` into
-    the container request; without it a generated agent has no workload identity
-    token to exchange and silently runs without its Gateway tools (measured — see
-    the zip-gateway task's ``research/r1-m2m-token-path.md``).
-
-    Returns None unless the spec actually carries a gateway ToolRef. Sending it
-    unconditionally would change the invoke call for every existing agent to buy
-    nothing, and it is a real identity input to AgentCore Identity, not a tag.
-
-    Takes the stored spec dict rather than an ``AgentSpec`` so discovered/foreign
-    runtimes — whose stored spec may not validate — cost nothing here.
-
-    Also sent when any tool carries an ``auth`` block (tool-level outbound auth,
-    ``templates/identity_support``): the token exchange those tools perform needs
-    the same Runtime-injected workload token the Gateway client uses.
+    the container request. Pre-CN only gateway/auth-tool agents needed that token; in
+    the CN build EVERY generated agent exchanges it for the Global Bedrock API key
+    (``GetResourceApiKey`` on the workspace's ``model_credential`` provider) before its
+    first model call, so the id is always sent. ``spec`` stays in the signature for the
+    callers that pass a stored/foreign spec dict; it no longer gates anything. Bounded
+    to the API's 1–1024 characters and never empty.
     """
-    tools = (spec or {}).get("tools") or []
-    needs_token = any(
-        isinstance(tool, dict) and (tool.get("type") == "gateway" or tool.get("auth"))
-        for tool in tools
-    )
-    if not needs_token:
-        return None
+    del spec
     return (actor_id or "default")[:1024]
 
 
-def provider_name(resources: Mapping[str, Any]) -> str:
-    """OAuth2 credential provider NAME from its ARN.
+def render_sigv4_transport(*, principal_carrier: bool = False) -> str:
+    """The SigV4 transport block; ``principal_carrier`` (stream A3) adds the line that puts
+    the turn's principal token into the request it signs — off, byte-identical to before."""
+    from app.templates.principal_support import render_transport
 
-    ``GetResourceOauth2Token`` takes the name, and the bootstrap config records the
-    ARN (``…/oauth2credentialprovider/launchpad-gw-m2m``). Derived rather than
-    stored as a second key, so the two can never disagree.
-    """
-    arn = str(resources.get("oauth_provider_arn") or "")
-    return arn.rsplit("/", 1)[-1] if arn else ""
+    return render_transport(SIGV4_TRANSPORT_TEMPLATE.read_text(encoding="utf-8"),
+                            enabled=principal_carrier)
 
 
-def render_gateway_source(spec: AgentSpec) -> str:
+def render_gateway_source(spec: AgentSpec, *, principal_carrier: bool = False) -> str:
     """The Gateway client source to inline, or '' when the spec has no gateway tool."""
     if not uses_gateway(spec):
         return ""
-    return GATEWAY_TEMPLATE.read_text(encoding="utf-8").strip()
+    transport = render_sigv4_transport(principal_carrier=principal_carrier).strip()
+    client = GATEWAY_TEMPLATE.read_text(encoding="utf-8").strip()
+    return f"{_SIGV4_TRANSPORT_IMPORTS}\n{transport}\n\n{client}"

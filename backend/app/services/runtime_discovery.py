@@ -17,7 +17,6 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
 from app.models.ledger import Agent
-from app.services.agentcore import harness as harness_api
 from app.services.agentcore import runtime as runtime_api
 
 DISCOVERED_METHOD = "discovered_runtime"
@@ -73,20 +72,9 @@ def _artifact_type(detail: dict[str, Any]) -> str:
 
 
 def _harness_index(control: Any) -> dict[str, dict[str, Any]]:
-    """Backing-runtime name → owning harness summary (fail-soft to {}).
-
-    On ListHarnesses failure the image heuristic in ``_backing_harness`` still
-    flags harness-managed runtimes, just without the owner linkage.
-    """
-    try:
-        summaries = harness_api.list_harnesses(control)
-    except Exception:
-        return {}
-    return {
-        f"{_HARNESS_RUNTIME_PREFIX}{summary['harnessName']}": summary
-        for summary in summaries
-        if summary.get("harnessName")
-    }
+    """Harness-managed backing runtimes are not resolvable in this build (no
+    Harness API); the image heuristic in ``_backing_harness`` still flags them."""
+    return {}
 
 
 def _backing_harness(
@@ -159,16 +147,6 @@ def _runtime_invoke_capability(
             "eligible": False,
             "reason_code": "runtime-not-ready",
             "reason": f"Runtime status is {aws_status or 'UNKNOWN'}, not READY.",
-        }
-    return {"eligible": True, "reason_code": None, "reason": None}
-
-
-def _harness_status_capability(aws_status: str) -> dict[str, Any]:
-    if aws_status in FAILURE_STATUSES or aws_status.endswith("_FAILED"):
-        return {
-            "eligible": False,
-            "reason_code": "harness-not-ready",
-            "reason": f"Harness status is {aws_status or 'UNKNOWN'}, not READY.",
         }
     return {"eligible": True, "reason_code": None, "reason": None}
 
@@ -387,57 +365,11 @@ def scan_runtimes(control: Any, db: Session, *, workspace_id: str) -> list[dict[
     return candidates
 
 
-def _harness_candidate(
-    record: dict[str, Any], db: Session, *, workspace_id: str
-) -> dict[str, Any]:
-    """Projection of one ListHarnesses summary / GetHarness detail.
-
-    Harness summaries carry no authorizer or artifact detail, so the scan makes
-    no invoke claim — import eligibility is the status verdict only, and the
-    invoke verdict is projected from the stored spec after import.
-    """
-    harness_id = str(record.get("harnessId") or "")
-    harness_arn = str(record.get("arn") or "")
-    aws_status = str(record.get("status") or "UNKNOWN").upper()
-    managed = _managed_match(db, workspace_id, harness_arn or None, harness_id)
-    capability = _harness_status_capability(aws_status)
-    return {
-        "harness_id": harness_id,
-        "harness_arn": harness_arn,
-        "name": str(record.get("harnessName") or harness_id),
-        "description": str(record.get("description") or ""),
-        "version": str(record.get("harnessVersion") or ""),
-        "aws_status": aws_status,
-        "last_updated_at": _iso(record.get("updatedAt") or record.get("createdAt")),
-        "managed_agent_id": managed.id if managed else None,
-        "managed_agent_name": managed.name if managed else None,
-        "managed_agent_method": managed.method if managed else None,
-        "importable": capability["eligible"],
-        "reason_code": capability["reason_code"],
-        "reason": capability["reason"],
-    }
-
-
 def scan_harnesses(
     control: Any, db: Session, *, workspace_id: str
 ) -> tuple[list[dict[str, Any]], str | None]:
-    """Harness candidates plus a fail-soft error string.
-
-    Unlike the Runtime scan a ListHarnesses failure is not fatal: the Runtime
-    half of the discovery response still renders, with the error reported next
-    to it (same posture as ``_harness_index``).
-    """
-    try:
-        summaries = harness_api.list_harnesses(control)
-    except Exception as exc:
-        return [], f"AgentCore Harness discovery failed ({_aws_error(exc)})."
-    return (
-        [
-            _harness_candidate(summary, db, workspace_id=workspace_id)
-            for summary in summaries
-        ],
-        None,
-    )
+    """Managed Harnesses are not discoverable in this build (no Harness API)."""
+    return [], None
 
 
 def _ledger_status(aws_status: str) -> str:
@@ -483,22 +415,6 @@ def _discovery_spec(candidate: dict[str, Any]) -> dict[str, Any]:
             "description": candidate["description"],
             "artifact_type": candidate["artifact_type"],
             "authorizer_type": candidate["authorizer_type"],
-            "aws_status": candidate["aws_status"],
-            "last_updated_at": candidate["last_updated_at"],
-        },
-    }
-
-
-def _harness_discovery_spec(
-    candidate: dict[str, Any], authorizer_type: str
-) -> dict[str, Any]:
-    return {
-        "protocol": HARNESS_RESOURCE_TYPE,
-        "discovery": {
-            "resource_type": HARNESS_RESOURCE_TYPE,
-            "harness_name": candidate["name"],
-            "description": candidate["description"],
-            "authorizer_type": authorizer_type,
             "aws_status": candidate["aws_status"],
             "last_updated_at": candidate["last_updated_at"],
         },
@@ -574,9 +490,8 @@ def import_runtimes(
             db, candidate["name"], runtime_id, existing, workspace_id=workspace_id
         )
         if existing is None:
-            existing = Agent(
-                workspace_id=workspace_id, method=DISCOVERED_METHOD, owner="aws-discovery"
-            )
+            # no creator: a discovered runtime is externally owned (its delete detaches)
+            existing = Agent(workspace_id=workspace_id, method=DISCOVERED_METHOD)
             db.add(existing)
         existing.name = display_name
         existing.status = _ledger_status(candidate["aws_status"])
@@ -600,83 +515,14 @@ def import_runtimes(
 def import_harnesses(
     control: Any, db: Session, harness_ids: list[str], *, workspace_id: str
 ) -> dict[str, list[dict[str, Any]]]:
-    """Import managed Harnesses as externally-owned ledger rows (idempotent).
-
-    The row carries the harness ARN/id, never the backing runtime's, so delete
-    stays ledger-only and invoke dispatches to InvokeHarness. `workspace_id`
-    stamps the rows this call creates and scopes the ownership/name queries.
-    """
+    """Managed Harnesses cannot be imported in this build (no Harness API)."""
     result = _empty_import_result()
     for harness_id in harness_ids:
-        try:
-            detail = harness_api.get_harness(control, harness_id)
-        except Exception as exc:
-            result["failed"].append(
-                {
-                    "harness_id": harness_id,
-                    "reason_code": "inspection-failed",
-                    "reason": f"Harness detail inspection failed ({_aws_error(exc)}).",
-                }
-            )
-            continue
-        candidate = _harness_candidate(detail, db, workspace_id=workspace_id)
-
-        # Ownership first: a harness deployed by launchpad (method="harness")
-        # must never be duplicated as an externally-owned import.
-        if (
-            candidate["managed_agent_id"] is not None
-            and candidate["managed_agent_method"] != DISCOVERED_METHOD
-        ):
-            result["already_managed"].append(
-                {
-                    "harness_id": harness_id,
-                    "agent_id": candidate["managed_agent_id"],
-                    "agent_name": candidate["managed_agent_name"],
-                }
-            )
-            continue
-
-        existing = (
-            db.get(Agent, candidate["managed_agent_id"])
-            if candidate["managed_agent_id"] is not None
-            else None
-        )
-        # Status gates the FIRST import only. Refreshing an existing import is how
-        # the ledger learns the external harness broke — refusing would leave a
-        # stale "active" row whose invoke attempts keep reaching a dead harness.
-        if existing is None and not candidate["importable"]:
-            result["failed"].append(
-                {
-                    "harness_id": harness_id,
-                    "reason_code": candidate["reason_code"],
-                    "reason": candidate["reason"],
-                }
-            )
-            continue
-
-        created = existing is None
-        display_name = _display_name(
-            db, candidate["name"], harness_id, existing, workspace_id=workspace_id
-        )
-        if existing is None:
-            existing = Agent(
-                workspace_id=workspace_id, method=DISCOVERED_METHOD, owner="aws-discovery"
-            )
-            db.add(existing)
-        existing.name = display_name
-        existing.status = _ledger_status(candidate["aws_status"])
-        existing.resource_id = harness_id
-        existing.arn = candidate["harness_arn"]
-        existing.version = candidate["version"] or None
-        existing.spec = _harness_discovery_spec(candidate, _authorizer_type(detail))
-        existing.error = None
-        existing.updated_at = datetime.now(UTC)
-        db.flush()
-        result["imported" if created else "updated"].append(
+        result["failed"].append(
             {
                 "harness_id": harness_id,
-                "agent_id": existing.id,
-                "agent_name": existing.name,
+                "reason_code": "harness-unavailable",
+                "reason": "Managed Harness is not available in this build.",
             }
         )
     return result

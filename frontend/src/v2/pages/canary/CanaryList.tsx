@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import type { RuntimeCanaryInfo } from "../../../lib/api";
-import { fmtTime } from "../../format";
+import { creatorLabel, fmtTime } from "../../format";
 import { usePaged } from "../../hooks";
 import { Button, Card, type Column, FilterSelect, LinkButton, Pager, SearchInput, Table, Tag } from "../../ui";
 import { CANARY_TONE, versionsLabel, weightsLabel } from "./common";
@@ -68,7 +68,17 @@ export function CanaryList({
         ),
     },
     { key: "status", title: t("v2.tasks.colStatus"), render: (c) => <Tag tone={CANARY_TONE[c.status]}>{t(`v2.canary.status.${c.status}`)}</Tag> },
-    { key: "created", title: t("v2.tasks.colCreated"), className: "nowrap", render: (c) => fmtTime(c.created_at) },
+    {
+      key: "created",
+      title: t("v2.tasks.colCreated"),
+      className: "nowrap",
+      render: (c) => (
+        <>
+          {fmtTime(c.created_at)}
+          <span className="sub" title={t("v2.common.creator")}>{creatorLabel(c)}</span>
+        </>
+      ),
+    },
     {
       key: "ops",
       title: t("v2.common.actions"),

@@ -15,7 +15,7 @@ from app.deployer.zip_runtime import (
 from app.schemas.agent import AgentSpec
 from app.services.agentcore import runtime as rt
 
-MANTLE_EXTRA = "strands-agents[openai]>=1.47,<2"
+OPENAI_EXTRA = "strands-agents[openai]>=1.47,<2"
 
 
 class FakePipResult:
@@ -36,6 +36,7 @@ FAKE_LOCK = (
 def fake_pip_ok(cmd, **kwargs):
     """Stands in for both subprocesses build_zip drives: the uv resolve (writes a
     lock at `-o`) and the pip install (populates `-t`)."""
+    fake_pip_ok.last_env = kwargs.get("env")
     if "compile" in cmd:
         Path(cmd[cmd.index("-o") + 1]).write_text(FAKE_LOCK, encoding="utf-8")
         fake_pip_ok.compile_cmd = cmd
@@ -72,6 +73,23 @@ def test_build_zip_contains_expected_files(tmp_path: Path):
     assert "-r" in cmd
 
 
+def test_build_zip_passes_the_pip_mirror_through_env(tmp_path: Path):
+    build_zip(
+        "print('agent')", ["strands-agents[otel]>=1.0,<2"], tmp_path / "build",
+        pip_runner=fake_pip_ok,
+    )
+    env = fake_pip_ok.last_env
+    assert env is not None
+    assert env["PIP_INDEX_URL"] == "https://pypi.tuna.tsinghua.edu.cn/simple"
+    assert env["UV_INDEX_URL"] == "https://pypi.tuna.tsinghua.edu.cn/simple"
+    # uv 0.9.10 deprecates UV_INDEX_URL in favor of UV_DEFAULT_INDEX — both
+    # must carry the mirror.
+    assert env["UV_DEFAULT_INDEX"] == "https://pypi.tuna.tsinghua.edu.cn/simple"
+    assert "UV_INDEX" not in env and "PIP_EXTRA_INDEX_URL" not in env  # no secondary by default
+    # the subprocess still inherits the rest of the ambient environment
+    assert "PATH" in env
+
+
 def test_build_zip_resolves_a_hashed_lock_for_the_deploy_target(tmp_path: Path):
     """Resolving for this host and installing for aarch64 would produce a lock
     that does not describe the artifact."""
@@ -98,6 +116,73 @@ def test_build_zip_reports_the_locked_package_count(tmp_path: Path):
         on_lock_ready=seen.append,
     )
     assert seen == [2]  # FAKE_LOCK pins two packages
+
+
+class _Exited:
+    def __init__(self, returncode: int):
+        self.returncode = returncode
+        self.stdout = ""
+        self.stderr = ""
+
+
+def _install_exits(returncode: int):
+    """The uv resolve succeeds (fake lock); the pip install ends with ``returncode`` and
+    no output — the shape of a child killed from outside (N17-obs113)."""
+    def runner(cmd, **kwargs):
+        if "compile" in cmd:
+            return fake_pip_ok(cmd, **kwargs)
+        return _Exited(returncode)
+    return runner
+
+
+def test_build_zip_sigtermed_install_is_an_interrupted_stage(tmp_path: Path):
+    """N17-obs113 (b): `systemctl restart launchpad-backend` SIGTERMs the control group —
+    the pip child exits -15 with EMPTY output. That is not a failed build: build_zip raises
+    `StageInterrupted` (the pipeline records the stage `interrupted` and resumes or retries
+    it) and the message names the signal, not a resolver."""
+    from app.deployer import pipeline
+
+    with pytest.raises(pipeline.StageInterrupted, match=r"killed by signal 15 \(SIGTERM\)"):
+        build_zip("print('agent')", ["strands-agents>=1,<2"], tmp_path / "build",
+                  pip_runner=_install_exits(-15))
+
+
+def test_build_zip_sigkilled_install_is_interrupted_with_the_terminal_sentence_attached(
+    tmp_path: Path,
+):
+    """Any signal kill (the OOM killer's SIGKILL too) is an interruption — the pipeline
+    decides between resume and the one retry; the exception carries the terminal message
+    (signal named, the terminated sentence, never 'no output') for the second kill."""
+    from app.deployer import pipeline
+
+    with pytest.raises(pipeline.StageInterrupted) as info:
+        build_zip("print('agent')", ["strands-agents>=1,<2"], tmp_path / "build",
+                  pip_runner=_install_exits(-9))
+    assert "killed by signal 9 (SIGKILL)" in str(info.value)
+    failure = info.value.failure
+    assert failure.startswith("pip install failed (killed by signal 9 (SIGKILL)): ")
+    assert "install process terminated (signal 9, SIGKILL)" in failure
+    assert "no output" not in failure
+
+
+def test_build_zip_silent_nonzero_install_reports_the_exit_status(tmp_path: Path):
+    """N17-obs113 (a): a non-zero exit with empty output says how it ended."""
+    expected = r"failed \(exit status 2\): resolver produced no output \(exit status 2\)"
+    with pytest.raises(RuntimeError, match=expected):
+        build_zip("print('agent')", ["strands-agents>=1,<2"], tmp_path / "build",
+                  pip_runner=_install_exits(2))
+
+
+def test_build_zip_sigtermed_resolve_is_an_interrupted_stage(tmp_path: Path):
+    """The uv resolve is a subprocess too — the same SIGTERM rule applies to it."""
+    from app.deployer import pipeline
+
+    def killed_compile(cmd, **kwargs):
+        return _Exited(-15)
+
+    with pytest.raises(pipeline.StageInterrupted, match=r"requirements resolve \(uv\) was killed"):
+        build_zip("print('agent')", ["strands-agents>=1,<2"], tmp_path / "build",
+                  pip_runner=fake_pip_ok, compile_runner=killed_compile)
 
 
 def test_build_zip_fails_when_the_resolve_fails(tmp_path: Path):
@@ -133,20 +218,8 @@ def _spec(**over) -> AgentSpec:
     )
 
 
-def test_mantle_source_packages_the_openai_extra():
-    """The template's bedrock_mantle_config branch needs the token generator,
-    which ships in the strands openai extra — nothing else pulls it in."""
-    reqs = _method_requirements(_spec(model_source="mantle", model_id="openai.gpt-5.6-sol"))
-    assert MANTLE_EXTRA in reqs
-    # the base otel pin stays: pip installs the union of both extras
-    assert any(r.startswith("strands-agents[otel]") for r in reqs)
-    # openai is pinned again because the extra only asks for >=1.68 while
-    # strands' openai_responses module imports 2.x APIs at module scope
-    assert "openai>=2,<3" in reqs
-
-
-def test_bedrock_source_packages_no_openai_extra():
-    assert MANTLE_EXTRA not in _method_requirements(_spec())
+def test_bedrock_specs_package_no_openai_extra():
+    assert OPENAI_EXTRA not in _method_requirements(_spec())
 
 
 def test_the_package_stage_is_exactly_platform_plus_spec_requirements():
@@ -157,7 +230,6 @@ def test_the_package_stage_is_exactly_platform_plus_spec_requirements():
     """
     cases = [
         _spec(requirements=["httpx==0.28.1"]),
-        _spec(model_source="mantle", model_id="openai.gpt-5.6-sol"),
         _spec(method="studio", requirements=["strands-agents[openai]==1.47.0"]),
         _spec(protocol="a2a", requirements=["httpx==0.28.1"]),
     ]
@@ -174,11 +246,10 @@ def test_studio_specs_bring_their_own_extras():
     reqs = _method_requirements(
         _spec(
             method="studio",
-            model_source="mantle",
             requirements=["strands-agents[openai]==1.47.0"],
         )
     )
-    assert MANTLE_EXTRA not in reqs
+    assert OPENAI_EXTRA not in reqs
     assert "strands-agents[openai]==1.47.0" in reqs
     assert "strands-agents-tools" in reqs
     assert "strands-agents-tools[mem0_memory]" not in reqs
@@ -198,6 +269,44 @@ def test_build_zip_raises_with_pip_stderr(tmp_path: Path):
         )
 
 
+def test_a_mirror_fault_is_surfaced_verbatim_not_just_as_no_distribution(tmp_path: Path):
+    """N13-bug1 / N11-obs25: tuna served an expired certificate; the resolve failed and
+    the stage reported only "boto3 has no distribution …". The resolver's own words must
+    reach the job log so the operator sees the TLS/index cause."""
+    class Failed:
+        returncode = 1
+        stderr = (
+            "error: Failed to fetch: `https://pypi.tuna.tsinghua.edu.cn/simple/boto3/`\n"
+            "  Caused by: client error (Connect)\n"
+            "  Caused by: invalid peer certificate: certificate has expired\n"
+            "No matching distribution found for boto3\n"
+        )
+
+    with pytest.raises(RuntimeError) as exc:
+        build_zip("code", ["boto3"], tmp_path / "b", pip_runner=lambda *a, **k: Failed())
+    message = str(exc.value)
+    assert "boto3 has no distribution" in message  # the concise summary stays
+    assert "certificate has expired" in message  # the real cause, verbatim
+    assert "resolver output:" in message
+
+
+def test_the_optional_extra_index_reaches_the_resolver_env(tmp_path: Path, monkeypatch):
+    from app.deployer import zip_runtime as zr
+
+    settings = zr.get_settings()
+    monkeypatch.setattr(
+        zr, "get_settings",
+        lambda: settings.model_copy(
+            update={"pip_extra_index_url": "https://mirror.nju.edu.cn/pypi/web/simple"}),
+    )
+    build_zip("print('agent')", ["strands-agents>=1.0,<2"], tmp_path / "build",
+              pip_runner=fake_pip_ok)
+    env = fake_pip_ok.last_env
+    assert env["UV_INDEX"] == "https://mirror.nju.edu.cn/pypi/web/simple"
+    assert env["PIP_EXTRA_INDEX_URL"] == "https://mirror.nju.edu.cn/pypi/web/simple"
+    assert env["UV_DEFAULT_INDEX"] == settings.pip_index_url  # primary unchanged
+
+
 def test_sanitize_runtime_name():
     name = sanitize_runtime_name("hr-assistant v2!")
     assert name.startswith("hr_assistant_v2")
@@ -205,11 +314,16 @@ def test_sanitize_runtime_name():
 
 
 class StubRuntimeControl:
-    def __init__(self, statuses):
+    def __init__(self, statuses, existing=None):
         self.statuses = list(statuses)
         self.created_with = None
         self.updated_with = None
         self.deleted = []
+        # ListAgentRuntimes summaries already in the account (N10v2-bug1 adoption)
+        self.existing = list(existing or [])
+
+    def list_agent_runtimes(self, **_kwargs):
+        return {"agentRuntimes": [dict(r) for r in self.existing]}
 
     def create_agent_runtime(self, **kwargs):
         self.created_with = kwargs
@@ -231,13 +345,55 @@ class StubRuntimeControl:
 
     def get_agent_runtime(self, agentRuntimeId):
         status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
-        return {
+        for runtime in self.existing:
+            if runtime["agentRuntimeId"] == agentRuntimeId:
+                return {**runtime, "status": status}
+        # like the real API, the detail echoes the environment the last Create/Update sent
+        sent = self.updated_with or self.created_with or {}
+        detail = {
             "agentRuntimeId": agentRuntimeId,
             "agentRuntimeArn": "arn:rt-1",
             "agentRuntimeVersion": "1",
             "status": status,
             "failureReason": "image pull failure" if "FAILED" in status else None,
         }
+        if "environmentVariables" in sent:
+            detail["environmentVariables"] = dict(sent["environmentVariables"])
+        return detail
+
+
+def test_resumed_deploy_adopts_the_runtime_created_before_the_restart(monkeypatch):
+    """N10v2-bug1 on the zip path: the row has no resource_id (the process died between
+    the accepted CreateAgentRuntime and the commit), the runtime exists under this
+    agent's base name on the shared role → adopt it, no second create."""
+    from app.deployer import zip_runtime as zr
+    from app.deployer.pipeline import StageContext
+    from app.services.agent_iam import runtime_name_base
+
+    stub = StubRuntimeControl(["CREATING", "READY"], existing=[{
+        "agentRuntimeId": "rt-old", "agentRuntimeArn": "arn:rt-old",
+        "agentRuntimeName": f"{runtime_name_base('zip-adopt')}_0a1b2c",
+        "agentRuntimeVersion": "1", "status": "CREATING", "roleArn": "arn:role",
+    }])
+    monkeypatch.setattr(zr, "control_client", lambda _ws=None: stub)
+    monkeypatch.setattr(zr, "get_settings", _fake_settings)
+    real_wait = rt.wait_runtime_ready
+    monkeypatch.setattr(rt, "wait_runtime_ready",
+                        lambda client, rid, **kw: real_wait(
+                            client, rid, sleeper=lambda _s: None, **kw))
+
+    agent = _persist("zip-adopt", status="deploying")
+    ctx = StageContext(agent_id=agent.id, deployment_id="d", job_id="j", workspace=_fake_ws())
+    result = zr._stage_deploy(ctx, agent)
+
+    assert stub.created_with is None
+    assert result.detail.startswith("READY · arn:rt-old")
+    from app.core.db import SessionLocal
+    from app.models.ledger import Agent
+
+    with SessionLocal() as db:
+        row = db.get(Agent, agent.id)
+        assert row.resource_id == "rt-old" and row.arn == "arn:rt-old"
 
 
 def test_create_code_runtime_payload():
@@ -659,111 +815,134 @@ def test_deploy_stage_update_mode_passes_spec_env(monkeypatch):
     zr._stage_deploy(ctx, agent)
 
     assert stub.updated_with is not None and stub.created_with is None
-    assert stub.updated_with["environmentVariables"] == {"BEDROCK_API_KEY": "bk-user"}
+    # Every spec now also gets the model credential env + (on update) the runtime's
+    # own workload identity name (spec C3/C4; row.resource_id == "rt-1" here).
+    assert stub.updated_with["environmentVariables"] == {
+        "BEDROCK_API_KEY": "bk-user",
+        "LAUNCHPAD_MODEL_REGION": "us-west-2",
+        "LAUNCHPAD_MODEL_CREDENTIAL": "launchpad-global-bedrock",
+        "LAUNCHPAD_BUNDLE_BUCKET": "bkt",  # routed config bundles (N12)
+        "LAUNCHPAD_WORKLOAD_NAME": "rt-1",
+        "LAUNCHPAD_AGENT_ID": agent_id,  # the bundle reader's S3 prefix (N12-obs33)
+    }
+
+
+def _persist_a2a(name, **columns):
+    from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
+    from app.models.ledger import Agent
+
+    spec = AgentSpec(
+        name=name, method="zip_runtime", protocol="a2a", system_prompt="s",
+        memory={"short_term": False, "long_term": False},
+    )
+    db = SessionLocal()
+    agent = Agent(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        name=name, method="zip_runtime", spec=spec.model_dump(), **columns)
+    db.add(agent)
+    db.commit()
+    agent_id = agent.id
+    db.close()
+    db = SessionLocal()
+    agent = db.get(Agent, agent_id)
+    db.close()
+    return agent
+
+
+def _deploy(monkeypatch, agent, stub, mode=None):
+    from app.deployer import zip_runtime as zr
+    from app.deployer.pipeline import StageContext
+
+    monkeypatch.setattr(zr, "control_client", lambda _ws=None: stub)
+    monkeypatch.setattr(zr, "get_settings", _fake_settings)
+    ctx = StageContext(agent_id=agent.id, deployment_id="d", job_id="j", workspace=_fake_ws())
+    if mode:
+        ctx.scratch["mode"] = mode
+    return zr._stage_deploy(ctx, agent), ctx
+
+
+def test_a2a_create_pins_the_workload_name_with_a_follow_up_update(monkeypatch):
+    """N10v3-bug5 (F4 pin): LAUNCHPAD_WORKLOAD_NAME names the runtime's own workload
+    identity (= its runtime id), unknown until CreateAgentRuntime returns. Live correction
+    (r4-F): a runtime-linked identity cannot self-mint, so the pin is informational and the
+    A2A server's key comes from the caller's runtimeUserId; the deploy shape is unchanged —
+    a fresh A2A deploy follows the READY create with one
+    UpdateAgentRuntime that pins it (and echoes the protocol), then waits READY again."""
+    stub = StubRuntimeControl(["READY"])
+    agent = _persist_a2a("a2a-pin", status="deploying")
+    result, _ctx = _deploy(monkeypatch, agent, stub)
+    assert stub.created_with is not None
+    assert "LAUNCHPAD_WORKLOAD_NAME" not in stub.created_with["environmentVariables"]
+    assert stub.updated_with is not None
+    assert stub.updated_with["agentRuntimeId"] == "rt-1"
+    assert stub.updated_with["environmentVariables"]["LAUNCHPAD_WORKLOAD_NAME"] == "rt-1"
+    assert stub.updated_with["protocolConfiguration"] == {"serverProtocol": "A2A"}
+    assert result.detail.startswith("READY · arn:rt-1")
+    from app.core.db import SessionLocal
+    from app.models.ledger import Agent
+
+    with SessionLocal() as db:
+        row = db.get(Agent, agent.id)
+        assert row.resource_id == "rt-1" and row.arn == "arn:rt-1"
+
+
+def test_http_create_does_not_issue_the_follow_up_update(monkeypatch):
+    stub = StubRuntimeControl(["READY"])
+    agent = _persist("http-nopin", status="deploying")
+    _deploy(monkeypatch, agent, stub)
+    assert stub.created_with is not None and stub.updated_with is None
+
+
+def test_a2a_redeploy_already_carries_the_pin_and_updates_once(monkeypatch):
+    stub = StubRuntimeControl(["READY"])
+    agent = _persist_a2a("a2a-upd", status="active", resource_id="rt-1", arn="arn:rt-1",
+                         version="1")
+    calls: list[str] = []
+    real_update = stub.update_agent_runtime
+
+    def counting_update(**kw):
+        calls.append(kw["agentRuntimeId"])
+        return real_update(**kw)
+
+    stub.update_agent_runtime = counting_update
+    _deploy(monkeypatch, agent, stub, mode="update")
+    assert calls == ["rt-1"]  # one update: the env already named the workload
+    assert stub.updated_with["environmentVariables"]["LAUNCHPAD_WORKLOAD_NAME"] == "rt-1"
+
+
+def test_a2a_resumed_create_pins_only_when_the_live_env_lacks_the_name(monkeypatch):
+    """Review F4 — observed state, not a mode heuristic. The process died after the
+    accepted create: the resumed job reads the READY runtime's environment back and pins
+    the workload name it never sent …"""
+    stub = StubRuntimeControl(["READY"])
+    agent = _persist_a2a("a2a-resume", status="deploying", resource_id="rt-1", arn="arn:rt-1")
+    _deploy(monkeypatch, agent, stub)
+    assert stub.created_with is None
+    assert stub.updated_with["environmentVariables"]["LAUNCHPAD_WORKLOAD_NAME"] == "rt-1"
+    # … and is a no-op (no extra runtime version) when the live env already carries it.
+    stub = StubRuntimeControl(["READY"], existing=[{
+        "agentRuntimeId": "rt-1", "agentRuntimeArn": "arn:rt-1", "agentRuntimeName": "x",
+        "agentRuntimeVersion": "1", "status": "READY", "roleArn": "arn:role",
+        "environmentVariables": {"LAUNCHPAD_WORKLOAD_NAME": "rt-1"},
+    }])
+    agent = _persist_a2a("a2a-resume-2", status="deploying", resource_id="rt-1", arn="arn:rt-1")
+    _deploy(monkeypatch, agent, stub)
+    assert stub.created_with is None and stub.updated_with is None
 
 
 def test_runtime_environment_skips_platform_memory_when_disabled():
     spec = AgentSpec(
         name="memory-off",
-        method="container",
+        method="zip_runtime",
         system_prompt="s",
         env={"FOO": "bar"},
         memory={"short_term": False, "long_term": False},
     )
-    assert runtime_environment(spec, _fake_settings().resources) == {"FOO": "bar"}
-
-
-def test_container_update_clears_runtime_environment_when_memory_disabled(monkeypatch):
-    from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
-    from app.deployer import container
-    from app.deployer.pipeline import StageContext
-    from app.models.ledger import Agent
-
-    spec = AgentSpec(
-        name="container-memory-disabled",
-        method="container",
-        system_prompt="s",
-        memory={"short_term": False, "long_term": False},
-    )
-    db = SessionLocal()
-    agent = Agent(
-        workspace_id=DEFAULT_WORKSPACE_ID, name=spec.name,
-        method="container",
-        status="active",
-        resource_id="rt-1",
-        arn="arn:rt-1",
-        version="1",
-        spec=spec.model_dump(),
-    )
-    db.add(agent)
-    db.commit()
-    agent_id = agent.id
-    db.close()
-
-    stub = StubRuntimeControl(["READY"])
-    monkeypatch.setattr(container, "control_client", lambda _ws=None: stub)
-    monkeypatch.setattr(container, "get_settings", _fake_settings)
-
-    ctx = StageContext(
-        agent_id=agent_id, deployment_id="d-disabled", job_id="j-disabled",
-        workspace=_fake_ws(),
-    )
-    ctx.scratch["mode"] = "update"
-    db = SessionLocal()
-    agent = db.get(Agent, agent_id)
-    db.close()
-    container._stage_deploy(ctx, agent)
-
-    assert stub.updated_with["environmentVariables"] == {}
-
-
-@pytest.mark.parametrize("mode", ["create", "update"])
-def test_container_deploy_stage_injects_platform_memory(monkeypatch, mode):
-    from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
-    from app.deployer import container
-    from app.deployer.pipeline import StageContext
-    from app.models.ledger import Agent
-
-    spec = AgentSpec(
-        name=f"container-memory-{mode}",
-        method="container",
-        system_prompt="s",
-        env={"CUSTOM": "value", "LAUNCHPAD_MEMORY_ID": "user-supplied"},
-        memory={"short_term": False, "long_term": True},
-    )
-    db = SessionLocal()
-    agent = Agent(
-        workspace_id=DEFAULT_WORKSPACE_ID, name=spec.name,
-        method="container",
-        status="active" if mode == "update" else "deploying",
-        resource_id="rt-1" if mode == "update" else None,
-        arn="arn:rt-1" if mode == "update" else None,
-        version="1",
-        spec=spec.model_dump(),
-    )
-    db.add(agent)
-    db.commit()
-    agent_id = agent.id
-    db.close()
-
-    stub = StubRuntimeControl(["READY"])
-    monkeypatch.setattr(container, "control_client", lambda _ws=None: stub)
-    monkeypatch.setattr(container, "get_settings", _fake_settings)
-
-    ctx = StageContext(
-        agent_id=agent_id, deployment_id="d-container", job_id="j-container",
-        workspace=_fake_ws(),
-    )
-    ctx.scratch["mode"] = mode
-    db = SessionLocal()
-    agent = db.get(Agent, agent_id)
-    db.close()
-    container._stage_deploy(ctx, agent)
-
-    request = stub.updated_with if mode == "update" else stub.created_with
-    assert request["environmentVariables"] == {
-        "CUSTOM": "value",
-        "LAUNCHPAD_MEMORY_ID": "platform-mem-id",
+    assert runtime_environment(spec, _fake_settings().resources) == {
+        "FOO": "bar",
+        "LAUNCHPAD_MODEL_REGION": "us-west-2",
+        "LAUNCHPAD_MODEL_CREDENTIAL": "launchpad-global-bedrock",
+        "LAUNCHPAD_BUNDLE_BUCKET": "bkt",  # routed config bundles (N12)
     }
 
 
@@ -909,3 +1088,72 @@ def test_a_real_validation_error_is_not_retried(monkeypatch):
             agent,
         )
     assert stub.calls == 1
+
+
+# ─── N12-bug7: a preset's lifecycleConfiguration survives every UpdateAgentRuntime ───
+PRESET_LIFECYCLE = {"idleRuntimeSessionTimeout": 300, "maxLifetime": 28800}
+DEDICATED_ROLE = "arn:aws-cn:iam::111122223333:role/launchpad-agent-launchpad-eval-worker"
+
+
+def _deploy_preset(monkeypatch, agent, stub, mode=None):
+    """``_deploy`` for a system preset: the dedicated-role guard needs per-agent roles
+    on and the provision stage's role in scratch (never the shared workspace role)."""
+    from app.deployer import zip_runtime as zr
+    from app.deployer.pipeline import StageContext
+
+    settings = _fake_settings()
+    settings.per_agent_execution_roles = True
+    monkeypatch.setattr(zr, "control_client", lambda _ws=None: stub)
+    monkeypatch.setattr(zr, "get_settings", lambda: settings)
+    ctx = StageContext(agent_id=agent.id, deployment_id="d", job_id="j", workspace=_fake_ws())
+    ctx.scratch["execution_role_arn"] = DEDICATED_ROLE
+    if mode:
+        ctx.scratch["mode"] = mode
+    return zr._stage_deploy(ctx, agent), ctx
+
+
+def test_preset_create_carries_the_lifecycle(monkeypatch):
+    stub = StubRuntimeControl(["READY"])
+    agent = _persist("launchpad-eval-worker-new", status="deploying", system_key="eval-worker")
+    _deploy_preset(monkeypatch, agent, stub)
+    assert stub.created_with["lifecycleConfiguration"] == PRESET_LIFECYCLE
+    assert stub.updated_with is None
+
+
+def test_preset_redeploy_carries_the_lifecycle(monkeypatch):
+    """UpdateAgentRuntime resets an omitted lifecycleConfiguration to the defaults
+    (900 s idle) — observed on t1 + default after a REPAIR. The eval-worker preset's
+    {300, 28800} (R-15) must therefore ride on the re-publish update too."""
+    stub = StubRuntimeControl(["READY"])
+    agent = _persist("launchpad-eval-worker-repair", status="active", resource_id="rt-1",
+                     arn="arn:rt-1", version="1", system_key="eval-worker")
+    _deploy_preset(monkeypatch, agent, stub, mode="update")
+    assert stub.created_with is None
+    assert stub.updated_with["agentRuntimeId"] == "rt-1"
+    assert stub.updated_with["roleArn"] == DEDICATED_ROLE
+    assert stub.updated_with["lifecycleConfiguration"] == PRESET_LIFECYCLE
+
+
+def test_preset_a2a_workload_pin_update_carries_the_lifecycle(monkeypatch):
+    """The F4 follow-up UpdateAgentRuntime (LAUNCHPAD_WORKLOAD_NAME pin) is an update of
+    the same runtime — it must echo the lifecycle as well."""
+    stub = StubRuntimeControl(["READY"])
+    agent = _persist_a2a("preset-a2a-pin", status="deploying", system_key="eval-worker")
+    _deploy_preset(monkeypatch, agent, stub)
+    assert stub.created_with["lifecycleConfiguration"] == PRESET_LIFECYCLE
+    assert stub.updated_with["environmentVariables"]["LAUNCHPAD_WORKLOAD_NAME"] == "rt-1"
+    assert stub.updated_with["lifecycleConfiguration"] == PRESET_LIFECYCLE
+
+
+def test_ordinary_agents_send_no_lifecycle_on_create_update_or_pin(monkeypatch):
+    stub = StubRuntimeControl(["READY"])
+    _deploy(monkeypatch, _persist("plain-create", status="deploying"), stub)
+    assert "lifecycleConfiguration" not in stub.created_with
+    stub = StubRuntimeControl(["READY"])
+    _deploy(monkeypatch, _persist("plain-upd", status="active", resource_id="rt-1",
+                                  arn="arn:rt-1", version="1"), stub, mode="update")
+    assert "lifecycleConfiguration" not in stub.updated_with
+    stub = StubRuntimeControl(["READY"])
+    _deploy(monkeypatch, _persist_a2a("plain-a2a", status="deploying"), stub)
+    assert "lifecycleConfiguration" not in stub.created_with
+    assert "lifecycleConfiguration" not in stub.updated_with

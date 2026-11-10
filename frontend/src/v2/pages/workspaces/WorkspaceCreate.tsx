@@ -257,7 +257,7 @@ export function WorkspaceCreate() {
                       className="v2-input mono"
                       value={freeRegion}
                       onChange={(e) => setFreeRegion(e.target.value)}
-                      placeholder="eu-central-1"
+                      placeholder="cn-north-1"
                       disabled={submitting}
                       aria-label={t("v2.workspaces.field.region")}
                       data-testid="v2-ws-region"
@@ -272,7 +272,7 @@ export function WorkspaceCreate() {
                       className="v2-input mono"
                       value={roleArn}
                       onChange={(e) => setRoleArn(e.target.value)}
-                      placeholder="arn:aws:iam::123456789012:role/LaunchpadWorkspaceRole"
+                      placeholder="arn:aws-cn:iam::123456789012:role/LaunchpadWorkspaceRole"
                       disabled={submitting}
                       data-testid="v2-ws-role-arn"
                     />

@@ -1,0 +1,827 @@
+{
+ "session_id": "doc-example-session-0001",
+ "cases": {
+  "langgraph-otel-split": {
+   "records": [
+    {
+     "traceId": "6a01eef11066751d68f90def0da1f80a",
+     "spanId": "ba1833fa7f097041",
+     "name": "travel_agent.workflow",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 100,
+     "endTimeUnixNano": 200,
+     "attributes": {
+      "traceloop.span.kind": "workflow",
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.agent.name": "travel_agent",
+      "gen_ai.provider.name": "langgraph",
+      "traceloop.workflow.name": "travel_agent",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     },
+     "parentSpanId": "836a5ccf9a2186cc"
+    },
+    {
+     "traceId": "6a01eef11066751d68f90def0da1f80a",
+     "spanId": "ba1833fa7f097041",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain"
+     },
+     "timeUnixNano": 200,
+     "attributes": {
+      "event.name": "opentelemetry.instrumentation.langchain",
+      "session.id": "doc-example-session-0001"
+     },
+     "eventName": "opentelemetry.instrumentation.langchain",
+     "body": {
+      "input": {
+       "messages": [
+        {
+         "content": "{\"inputs\": {\"messages\": [{\"role\": \"user\", \"content\": \"Hey, how can you help me\"}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"langchain_create_agent\"}, \"kwargs\": {\"name\": \"travel_agent\"}}",
+         "role": "user"
+        }
+       ]
+      },
+      "output": {
+       "messages": [
+        {
+         "content": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Hey, how can you help me\", \"type\": \"human\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"Hello! I'm your travel planning assistant ...\", \"type\": \"ai\"}}]}, \"kwargs\": {\"tags\": []}}",
+         "role": "assistant"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "5b332f3cd15ace04",
+     "name": "execute_tool search_flights",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 300,
+     "endTimeUnixNano": 310,
+     "attributes": {
+      "traceloop.span.kind": "tool",
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.tool.name": "search_flights",
+      "gen_ai.tool.type": "function",
+      "traceloop.workflow.name": "travel_agent",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     },
+     "parentSpanId": "922a21edc04eba29"
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "5b332f3cd15ace04",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain"
+     },
+     "timeUnixNano": 310,
+     "attributes": {
+      "event.name": "opentelemetry.instrumentation.langchain",
+      "session.id": "doc-example-session-0001"
+     },
+     "eventName": "opentelemetry.instrumentation.langchain",
+     "body": {
+      "input": {
+       "messages": [
+        {
+         "content": "{\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}"
+        }
+       ]
+      },
+      "output": {
+       "messages": [
+        {
+         "role": "tool",
+         "name": "search_flights",
+         "content": "{\"origin\": \"SEA\", \"destination\": \"NYC\", \"flights\": [ ... ]}"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  "langgraph-otel-unified": {
+   "records": [
+    {
+     "traceId": "6a01eef11066751d68f90def0da1f80a",
+     "spanId": "31ea3d5882dac680",
+     "name": "LangGraph.workflow",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 100,
+     "endTimeUnixNano": 200,
+     "attributes": {
+      "traceloop.span.kind": "workflow",
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.agent.name": "LangGraph",
+      "gen_ai.task.input": "{\"inputs\": {\"messages\": [{\"role\": \"user\", \"content\": \"Hey, how can you help me\"}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"langchain_create_agent\"}, \"kwargs\": {\"name\": \"travel_agent\"}}",
+      "gen_ai.task.output": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Hey, how can you help me\", \"type\": \"human\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"Hello! I'm your travel planning assistant ...\", \"type\": \"ai\"}}]}, \"kwargs\": {\"tags\": []}}",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     }
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "b64c37adefae74f0",
+     "name": "execute_tool search_flights",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 300,
+     "endTimeUnixNano": 310,
+     "attributes": {
+      "traceloop.span.kind": "tool",
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.tool.name": "search_flights",
+      "gen_ai.tool.call.arguments": "{\"input_str\": \"{'origin': 'SEA', 'destination': 'NYC', 'date': '2025-03-15'}\", \"inputs\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}}",
+      "gen_ai.tool.call.result": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"flights\\\": [ ... ]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"status\": \"success\"}}}",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     }
+    }
+   ]
+  },
+  "langgraph-oi-split": {
+   "records": [
+    {
+     "traceId": "6a01eef11066751d68f90def0da1f80a",
+     "spanId": "0a7990d804132a9b",
+     "name": "LangGraph",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "openinference.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 100,
+     "endTimeUnixNano": 200,
+     "attributes": {
+      "openinference.span.kind": "CHAIN",
+      "input.mime_type": "application/json",
+      "output.mime_type": "application/json",
+      "llm.input_messages.0.message.role": "user",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     },
+     "parentSpanId": "29ae22014173881c"
+    },
+    {
+     "traceId": "6a01eef11066751d68f90def0da1f80a",
+     "spanId": "0a7990d804132a9b",
+     "scope": {
+      "name": "openinference.instrumentation.langchain"
+     },
+     "timeUnixNano": 200,
+     "attributes": {
+      "event.name": "openinference.instrumentation.langchain",
+      "session.id": "doc-example-session-0001"
+     },
+     "eventName": "openinference.instrumentation.langchain",
+     "body": {
+      "input": {
+       "messages": [
+        {
+         "role": "user",
+         "content": "{\"messages\": [{\"role\": \"user\", \"content\": \"Hey, how can you help me\"}]}"
+        }
+       ]
+      },
+      "output": {
+       "messages": [
+        {
+         "role": "assistant",
+         "content": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"Hey, how can you help me\"}}, {\"type\": \"ai\", \"data\": {\"content\": \"Hello! I'm your travel planning assistant ...\"}}]}"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "ab105c12cc40048f",
+     "name": "search_flights",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "openinference.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 300,
+     "endTimeUnixNano": 310,
+     "attributes": {
+      "openinference.span.kind": "TOOL",
+      "tool.name": "search_flights",
+      "input.mime_type": "application/json",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     },
+     "parentSpanId": "9b2d4e72760690b4"
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "ab105c12cc40048f",
+     "scope": {
+      "name": "openinference.instrumentation.langchain"
+     },
+     "timeUnixNano": 310,
+     "attributes": {
+      "event.name": "openinference.instrumentation.langchain",
+      "session.id": "doc-example-session-0001"
+     },
+     "eventName": "openinference.instrumentation.langchain",
+     "body": {
+      "input": {
+       "messages": [
+        {
+         "role": "user",
+         "content": "{\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}"
+        }
+       ]
+      },
+      "output": {
+       "messages": [
+        {
+         "role": "assistant",
+         "content": "{\"type\": \"tool\", \"data\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"flights\\\": [ ... ]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"tool_call_id\": \"toolu_bdrk_01LzXXJCfpfuS7Bpf7e1qLMg\", \"status\": \"success\"}}"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  "langgraph-oi-unified": {
+   "records": [
+    {
+     "traceId": "6a01eef11066751d68f90def0da1f80a",
+     "spanId": "b8c0b67876b78b91",
+     "name": "LangGraph",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "openinference.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 100,
+     "endTimeUnixNano": 200,
+     "attributes": {
+      "openinference.span.kind": "CHAIN",
+      "input.value": "{\"messages\": [{\"role\": \"user\", \"content\": \"Hey, how can you help me\"}]}",
+      "output.value": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"Hey, how can you help me\"}}, {\"type\": \"ai\", \"data\": {\"content\": \"Hello! I'm your travel planning assistant ...\"}}]}",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     }
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "58752612d9b22ae1",
+     "name": "search_flights",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "openinference.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 300,
+     "endTimeUnixNano": 310,
+     "attributes": {
+      "openinference.span.kind": "TOOL",
+      "tool.name": "search_flights",
+      "input.value": "{\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}",
+      "output.value": "{\"type\": \"tool\", \"data\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"flights\\\": [ ... ]}\", \"name\": \"search_flights\"}}",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     }
+    }
+   ]
+  },
+  "langgraph-otel-split+entity.name": {
+   "records": [
+    {
+     "traceId": "6a01eef11066751d68f90def0da1f80a",
+     "spanId": "ba1833fa7f097041",
+     "name": "travel_agent.workflow",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 100,
+     "endTimeUnixNano": 200,
+     "attributes": {
+      "traceloop.span.kind": "workflow",
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.agent.name": "travel_agent",
+      "gen_ai.provider.name": "langgraph",
+      "traceloop.workflow.name": "travel_agent",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     },
+     "parentSpanId": "836a5ccf9a2186cc"
+    },
+    {
+     "traceId": "6a01eef11066751d68f90def0da1f80a",
+     "spanId": "ba1833fa7f097041",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain"
+     },
+     "timeUnixNano": 200,
+     "attributes": {
+      "event.name": "opentelemetry.instrumentation.langchain",
+      "session.id": "doc-example-session-0001"
+     },
+     "eventName": "opentelemetry.instrumentation.langchain",
+     "body": {
+      "input": {
+       "messages": [
+        {
+         "content": "{\"inputs\": {\"messages\": [{\"role\": \"user\", \"content\": \"Hey, how can you help me\"}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"langchain_create_agent\"}, \"kwargs\": {\"name\": \"travel_agent\"}}",
+         "role": "user"
+        }
+       ]
+      },
+      "output": {
+       "messages": [
+        {
+         "content": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Hey, how can you help me\", \"type\": \"human\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"Hello! I'm your travel planning assistant ...\", \"type\": \"ai\"}}]}, \"kwargs\": {\"tags\": []}}",
+         "role": "assistant"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "5b332f3cd15ace04",
+     "name": "execute_tool search_flights",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 300,
+     "endTimeUnixNano": 310,
+     "attributes": {
+      "traceloop.span.kind": "tool",
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.tool.name": "search_flights",
+      "gen_ai.tool.type": "function",
+      "traceloop.workflow.name": "travel_agent",
+      "session.id": "doc-example-session-0001",
+      "traceloop.entity.name": "search_flights"
+     },
+     "status": {
+      "code": "OK"
+     },
+     "parentSpanId": "922a21edc04eba29"
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "5b332f3cd15ace04",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain"
+     },
+     "timeUnixNano": 310,
+     "attributes": {
+      "event.name": "opentelemetry.instrumentation.langchain",
+      "session.id": "doc-example-session-0001"
+     },
+     "eventName": "opentelemetry.instrumentation.langchain",
+     "body": {
+      "input": {
+       "messages": [
+        {
+         "content": "{\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}"
+        }
+       ]
+      },
+      "output": {
+       "messages": [
+        {
+         "role": "tool",
+         "name": "search_flights",
+         "content": "{\"origin\": \"SEA\", \"destination\": \"NYC\", \"flights\": [ ... ]}"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  "langgraph-otel-split+legacy-tool-body": {
+   "records": [
+    {
+     "traceId": "6a01eef11066751d68f90def0da1f80a",
+     "spanId": "ba1833fa7f097041",
+     "name": "travel_agent.workflow",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 100,
+     "endTimeUnixNano": 200,
+     "attributes": {
+      "traceloop.span.kind": "workflow",
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.agent.name": "travel_agent",
+      "gen_ai.provider.name": "langgraph",
+      "traceloop.workflow.name": "travel_agent",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     },
+     "parentSpanId": "836a5ccf9a2186cc"
+    },
+    {
+     "traceId": "6a01eef11066751d68f90def0da1f80a",
+     "spanId": "ba1833fa7f097041",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain"
+     },
+     "timeUnixNano": 200,
+     "attributes": {
+      "event.name": "opentelemetry.instrumentation.langchain",
+      "session.id": "doc-example-session-0001"
+     },
+     "eventName": "opentelemetry.instrumentation.langchain",
+     "body": {
+      "input": {
+       "messages": [
+        {
+         "content": "{\"inputs\": {\"messages\": [{\"role\": \"user\", \"content\": \"Hey, how can you help me\"}]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"langchain_create_agent\"}, \"kwargs\": {\"name\": \"travel_agent\"}}",
+         "role": "user"
+        }
+       ]
+      },
+      "output": {
+       "messages": [
+        {
+         "content": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Hey, how can you help me\", \"type\": \"human\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"Hello! I'm your travel planning assistant ...\", \"type\": \"ai\"}}]}, \"kwargs\": {\"tags\": []}}",
+         "role": "assistant"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "5b332f3cd15ace04",
+     "name": "execute_tool search_flights",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 300,
+     "endTimeUnixNano": 310,
+     "attributes": {
+      "traceloop.span.kind": "tool",
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.tool.name": "search_flights",
+      "gen_ai.tool.type": "function",
+      "traceloop.workflow.name": "travel_agent",
+      "session.id": "doc-example-session-0001",
+      "traceloop.entity.name": "search_flights"
+     },
+     "status": {
+      "code": "OK"
+     },
+     "parentSpanId": "922a21edc04eba29"
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "5b332f3cd15ace04",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain"
+     },
+     "timeUnixNano": 310,
+     "attributes": {
+      "event.name": "opentelemetry.instrumentation.langchain",
+      "session.id": "doc-example-session-0001"
+     },
+     "eventName": "opentelemetry.instrumentation.langchain",
+     "body": {
+      "input": {
+       "messages": [
+        {
+         "content": "{\"input_str\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"date\\\": \\\"2025-03-15\\\"}\", \"inputs\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}}"
+        }
+       ]
+      },
+      "output": {
+       "messages": [
+        {
+         "content": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"flights\\\": [ ... ]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"tool_call_id\": \"call_1\", \"status\": \"success\"}}}"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  "lg-2turn-final": {
+   "records": [
+    {
+     "traceId": "6a01eef11066751d68f90def0da1f80a",
+     "spanId": "aaaa000000000001",
+     "name": "travel_agent.workflow",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 100,
+     "endTimeUnixNano": 190,
+     "attributes": {
+      "traceloop.span.kind": "workflow",
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.agent.name": "travel_agent",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     }
+    },
+    {
+     "traceId": "6a01eef11066751d68f90def0da1f80a",
+     "spanId": "aaaa000000000001",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain"
+     },
+     "timeUnixNano": 190,
+     "attributes": {
+      "event.name": "opentelemetry.instrumentation.langchain",
+      "session.id": "doc-example-session-0001"
+     },
+     "eventName": "opentelemetry.instrumentation.langchain",
+     "body": {
+      "input": {
+       "messages": [
+        {
+         "content": "{\"inputs\": {\"messages\": [{\"role\": \"user\", \"content\": \"Hey, how can you help me\"}]}, \"tags\": [], \"metadata\": {}, \"kwargs\": {\"name\": \"travel_agent\"}}",
+         "role": "user"
+        }
+       ]
+      },
+      "output": {
+       "messages": [
+        {
+         "content": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Hey, how can you help me\", \"type\": \"human\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"TURN-1 ANSWER: I can plan trips.\", \"type\": \"ai\"}}]}, \"kwargs\": {\"tags\": []}}",
+         "role": "assistant"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "bbbb000000000001",
+     "name": "travel_agent.workflow",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 1000,
+     "endTimeUnixNano": 1090,
+     "attributes": {
+      "traceloop.span.kind": "workflow",
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.agent.name": "travel_agent",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     }
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "bbbb000000000001",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain"
+     },
+     "timeUnixNano": 1090,
+     "attributes": {
+      "event.name": "opentelemetry.instrumentation.langchain",
+      "session.id": "doc-example-session-0001"
+     },
+     "eventName": "opentelemetry.instrumentation.langchain",
+     "body": {
+      "input": {
+       "messages": [
+        {
+         "content": "{\"inputs\": {\"messages\": [{\"role\": \"user\", \"content\": \"Find me flights SEA to NYC on 2025-03-15\"}]}, \"tags\": [], \"metadata\": {}, \"kwargs\": {\"name\": \"travel_agent\"}}",
+         "role": "user"
+        }
+       ]
+      },
+      "output": {
+       "messages": [
+        {
+         "content": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Hey, how can you help me\", \"type\": \"human\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"TURN-1 ANSWER: I can plan trips.\", \"type\": \"ai\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"Let me search for flights.\", \"type\": \"ai\", \"tool_calls\": [{\"name\": \"search_flights\", \"args\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"id\": \"call_1\", \"type\": \"tool_call\"}]}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"flights\\\": [ ... ]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"tool_call_id\": \"call_1\", \"status\": \"success\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"TURN-2 FINAL: Here are 3 flights ...\", \"type\": \"ai\"}}]}, \"kwargs\": {\"tags\": []}}",
+         "role": "assistant"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  "lg-2turn-ends-after-tool": {
+   "records": [
+    {
+     "traceId": "6a01eef11066751d68f90def0da1f80a",
+     "spanId": "aaaa000000000001",
+     "name": "travel_agent.workflow",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 100,
+     "endTimeUnixNano": 190,
+     "attributes": {
+      "traceloop.span.kind": "workflow",
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.agent.name": "travel_agent",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     }
+    },
+    {
+     "traceId": "6a01eef11066751d68f90def0da1f80a",
+     "spanId": "aaaa000000000001",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain"
+     },
+     "timeUnixNano": 190,
+     "attributes": {
+      "event.name": "opentelemetry.instrumentation.langchain",
+      "session.id": "doc-example-session-0001"
+     },
+     "eventName": "opentelemetry.instrumentation.langchain",
+     "body": {
+      "input": {
+       "messages": [
+        {
+         "content": "{\"inputs\": {\"messages\": [{\"role\": \"user\", \"content\": \"Hey, how can you help me\"}]}, \"tags\": [], \"metadata\": {}, \"kwargs\": {\"name\": \"travel_agent\"}}",
+         "role": "user"
+        }
+       ]
+      },
+      "output": {
+       "messages": [
+        {
+         "content": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Hey, how can you help me\", \"type\": \"human\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"TURN-1 ANSWER: I can plan trips.\", \"type\": \"ai\"}}]}, \"kwargs\": {\"tags\": []}}",
+         "role": "assistant"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "bbbb000000000001",
+     "name": "travel_agent.workflow",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 1000,
+     "endTimeUnixNano": 1090,
+     "attributes": {
+      "traceloop.span.kind": "workflow",
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.agent.name": "travel_agent",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     }
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "bbbb000000000001",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain"
+     },
+     "timeUnixNano": 1090,
+     "attributes": {
+      "event.name": "opentelemetry.instrumentation.langchain",
+      "session.id": "doc-example-session-0001"
+     },
+     "eventName": "opentelemetry.instrumentation.langchain",
+     "body": {
+      "input": {
+       "messages": [
+        {
+         "content": "{\"inputs\": {\"messages\": [{\"role\": \"user\", \"content\": \"Find me flights SEA to NYC on 2025-03-15\"}]}, \"tags\": [], \"metadata\": {}, \"kwargs\": {\"name\": \"travel_agent\"}}",
+         "role": "user"
+        }
+       ]
+      },
+      "output": {
+       "messages": [
+        {
+         "content": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Hey, how can you help me\", \"type\": \"human\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"TURN-1 ANSWER: I can plan trips.\", \"type\": \"ai\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"type\": \"ai\", \"tool_calls\": [{\"name\": \"search_flights\", \"args\": {\"origin\": \"SEA\", \"destination\": \"NYC\", \"date\": \"2025-03-15\"}, \"id\": \"call_1\", \"type\": \"tool_call\"}]}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"{\\\"origin\\\": \\\"SEA\\\", \\\"destination\\\": \\\"NYC\\\", \\\"flights\\\": [ ... ]}\", \"type\": \"tool\", \"name\": \"search_flights\", \"tool_call_id\": \"call_1\", \"status\": \"success\"}}]}, \"kwargs\": {\"tags\": []}}",
+         "role": "assistant"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  },
+  "lg-final-blocks": {
+   "records": [
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "bbbb000000000001",
+     "name": "travel_agent.workflow",
+     "kind": "INTERNAL",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain",
+      "version": ""
+     },
+     "startTimeUnixNano": 1000,
+     "endTimeUnixNano": 1090,
+     "attributes": {
+      "traceloop.span.kind": "workflow",
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.agent.name": "travel_agent",
+      "session.id": "doc-example-session-0001"
+     },
+     "status": {
+      "code": "OK"
+     }
+    },
+    {
+     "traceId": "6a01eefa5c52f3d86a35038f35f5ba30",
+     "spanId": "bbbb000000000001",
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain"
+     },
+     "timeUnixNano": 1090,
+     "attributes": {
+      "event.name": "opentelemetry.instrumentation.langchain",
+      "session.id": "doc-example-session-0001"
+     },
+     "eventName": "opentelemetry.instrumentation.langchain",
+     "body": {
+      "input": {
+       "messages": [
+        {
+         "content": "{\"inputs\": {\"messages\": [{\"role\": \"user\", \"content\": \"Find me flights SEA to NYC on 2025-03-15\"}]}, \"tags\": [], \"metadata\": {}, \"kwargs\": {\"name\": \"travel_agent\"}}",
+         "role": "user"
+        }
+       ]
+      },
+      "output": {
+       "messages": [
+        {
+         "content": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Find me flights SEA to NYC on 2025-03-15\", \"type\": \"human\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": [{\"type\": \"reasoning_content\", \"reasoning_content\": {\"text\": \"thinking...\"}}, {\"type\": \"text\", \"text\": \"TURN-2 FINAL: blocks\"}], \"type\": \"ai\"}}]}, \"kwargs\": {\"tags\": []}}",
+         "role": "assistant"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ }
+}

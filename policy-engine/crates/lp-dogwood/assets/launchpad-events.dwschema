@@ -1,0 +1,31 @@
+// Launchpad event schema: Global's temporal session semantics (T3, §13.7).
+//
+// History is scoped to (policy session id, caller identity): both are universal
+// symmetric pins, so a temporal predicate only sees events of the same session AND
+// the same principal — two identities presenting the same session id stay separate,
+// as on an authenticated AgentCore Gateway. The engine assigns timestamps.
+
+decision event <A>::request {
+    ...inputs(A),
+    pin callerPrincipal: principalType(A) = principal,
+    callerResource:      resourceType(A),
+    requestId:           String,
+    pin sessionId:       String = context.launchpad.sessionId,
+}
+
+event <A>::response {
+    ...inputs(A),
+    ...outputs(A),
+    pin callerPrincipal: principalType(A) = principal,
+    callerResource:      resourceType(A),
+    requestId:           String,
+    pin sessionId:       String = context.launchpad.sessionId,
+}
+
+event <A>::error {
+    ...inputs(A),
+    pin callerPrincipal: principalType(A) = principal,
+    callerResource:      resourceType(A),
+    requestId:           String,
+    pin sessionId:       String = context.launchpad.sessionId,
+}

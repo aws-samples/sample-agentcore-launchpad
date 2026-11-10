@@ -1,0 +1,340 @@
+# Lifecycle graph — Agent (E03). Round 16, channel A, r16-o.
+#
+# Every edge cites the contract sentence it enforces (`cites` → `contracts`). An edge the
+# contract does not name carries `gap:` and a register id — it is a FINDING (contract gap),
+# never a threshold copied from code. `kind: refusal` edges must leave the ledger untouched
+# (no row, no job written); the executor asserts that generically.
+graph: agent
+module: E03
+entity: Agent row (`agents`) with its deploy Job / Deployment
+initial: absent
+
+contracts:
+  ARCH_JOB:
+    doc: docs/architecture.md
+    section: "Job/event model"
+    quote: >-
+      Creating an agent returns `202` with a `job_id`. The deploy job runs on a background
+      thread … The agent moves `deploying → active` (or `failed`) as the job finishes. … A failed
+      update-mode job keeps the live version … the `Job` and the `Deployment` are `failed` but the
+      `Agent` goes back to `active`, keeps serving the previous version, and the read model carries
+      `last_deploy_failed: true` / `last_deploy_error` … A first deploy, a cold re-publish of a
+      `failed` agent (nothing serves yet) and a failure inside the `deploy` stage itself still mark
+      the agent `failed`.
+  AGENTS_S4_1:
+    doc: docs/cn/interfaces/agents.md
+    section: "4.1 Redeploy answers 202 and flips the row to `deploying`"
+    quote: >-
+      `POST /api/agents/{id}/redeploy` with an edited spec (name and method immutable — `400
+      agent.redeploy_immutable`) answers `202 {agent, job_id, deployment_id}` … The row's `spec` is
+      replaced, `status` becomes `deploying`, `error` is cleared, and an update-mode job is queued
+  AGENTS_S4_2:
+    doc: docs/cn/interfaces/agents.md
+    section: "4.2 A `failed` agent can be re-published"
+    quote: >-
+      The same route on an agent whose status is `failed` … answers the same 202 and runs the
+      update-mode job; its `deploy` stage falls back to Create when the row has no Runtime yet … A
+      cold re-publish that fails marks the agent `failed` again
+  AGENTS_S4_3:
+    doc: docs/cn/interfaces/agents.md
+    section: "4.3 A failed update keeps the live version"
+    quote: >-
+      When the agent already serves a version and the failing stage left it untouched … the `Job`
+      and the `Deployment` are `failed` but the `Agent` returns to `active`, keeps serving the
+      previous version, and `GET /api/agents/{id}` / the list carry `last_deploy_failed: true` and
+      `last_deploy_error`
+  AGENTS_S4_4:
+    doc: docs/cn/interfaces/agents.md
+    section: "4.4 A delete releases the name"
+    quote: >-
+      `DELETE /api/agents/{id}` (200) marks the row `deleted` and releases its name claim … so
+      `POST /api/agents` with the same name answers 202 and creates a new row (new id)
+  AGENTS_S1:
+    doc: docs/cn/interfaces/agents.md
+    section: "1. A deploy job owns its agent until it is terminal"
+    quote: >-
+      `DELETE /api/agents/{id}` is refused while the agent has a deploy job that is not terminal …
+      `queued`, `running` | `409 agent.deploy_in_progress {job_id, stage, job_status}` — nothing is
+      touched (no AWS call, the row stays `deploying`, the name claim stays) … `succeeded`, `failed`,
+      `cancelled` | proceeds (the existing teardown) … **Members and administrators alike; no
+      `force`.** The member waits for the job to end — succeeded, or failed — and deletes then. The
+      same code the redeploy / inbound-auth routes already answer for a `deploying` agent
+  AGENTS_S2:
+    doc: docs/cn/interfaces/agents.md
+    section: "2. The pipeline re-reads the agent row before and after every stage"
+    quote: >-
+      Missing row or `status = deleted` → the job stops. … The stop is honest: job `status =
+      cancelled`, `error` = `pipeline.CANCEL_REASON` … the Deployment `status = cancelled` with
+      `ended_at`, and that stage marked `cancelled` … The agent row, when it still exists, is left
+      exactly as the delete put it (`deleted`). … `cancelled` is terminal: `resume_pending_jobs` does
+      not adopt it
+  AGENTS_S3:
+    doc: docs/cn/interfaces/agents.md
+    section: "3. Reserved names: a preset's whole family"
+    quote: >-
+      `422 agent.name_reserved {name, reserved_for: <preset key>}` from
+      `presets.refuse_reserved_name`, at every ordinary-agent creation boundary before any row, claim
+      or AWS call … a validation failure of the request, not a conflict with an existing row (`409
+      agent.name_exists` stays for the latter)
+  API_DELETE:
+    doc: docs/api.md
+    section: "Console Agents API — versions and endpoints › Ownership"
+    quote: >-
+      `DELETE` | `/api/agents/{agent_id}` | `perm:agents.delete` **and** (owner or administrator) —
+      otherwise `403 agent.forbidden` `{agent_id, owner}` before any AWS call. `409
+      agent.deploy_in_progress {job_id, stage, job_status}` while the agent's deploy job is `queued` /
+      `running`
+  API_REDEPLOY:
+    doc: docs/api.md
+    section: "Console Agents API — versions and endpoints › Ownership"
+    quote: >-
+      `POST` | `/api/agents/{agent_id}/redeploy` | `perm:agents.deploy` **and** (owner or
+      administrator) — same 403
+  API_AGENT_ERRORS:
+    doc: docs/api.md
+    section: "Console Agents API — versions and endpoints › Error codes"
+    quote: >-
+      Error codes: `agent.not_found` (404, unknown id, another workspace's agent, **or a deleted
+      agent** — since N11 r3-A every `/api/agents/{id}*` and `/api/chat/{id}*` route answers a deleted
+      row exactly like `/v1` does, instead of `200 status: deleted` or `409 agent.not_active`
+  API_CHAT:
+    doc: docs/api.md
+    section: "Console Chat API"
+    quote: >-
+      One turn as SSE (`meta` → `delta`/`tool`/`auth_required`/`policy_denied`/`error` → `done`)
+  UO_S4:
+    doc: docs/cn/interfaces/users-and-ownership.md
+    section: "4. CN extras"
+    quote: >-
+      Agent redeploy / delete | creator-or-admin (`require_agent_creator`); discovered runtimes detach
+      for any `agents.delete` holder; presets keep `refuse_system_mutation`. **NULL creator →
+      administrator-only** … 403 `agent.forbidden` `{agent_id, created_by, created_by_name}`
+  OBS74:
+    doc: docs/cn/interfaces/agents.md
+    section: "4.1 Redeploy answers 202 and flips the row to `deploying` (N16-obs74 ruling)"
+    quote: >-
+      `status` becomes `deploying` … While the job is live, chat answers `409
+      agent.not_active` (N16-obs74 ruling) … the previous version keeps serving on the Runtime's
+      DEFAULT endpoint throughout
+
+nodes:
+  - id: absent
+  - id: deploying
+  - id: active
+  - id: failed
+  - id: redeploying
+  - id: redeploying_cold
+  - id: deleted
+    terminal: true
+
+edges:
+  - id: create
+    from: absent
+    to: deploying
+    via: POST /api/agents (zip_runtime spec)
+    expect: {status: 202}
+    cites: [ARCH_JOB]
+    ui: {page: /v2/agents, view: new, controls: ['v2-agent-method-{m}', v2-agent-wizard-next, v2-agent-wizard-submit]}
+  - id: create_name_reserved
+    from: absent
+    to: absent
+    kind: refusal
+    via: POST /api/agents with a preset family name
+    expect: {status: 422, code: agent.name_reserved}
+    cites: [AGENTS_S3]
+    ui: {page: /v2/agents, view: new, controls: [v2-agent-wizard-submit]}
+  - id: deploy_succeeds
+    from: deploying
+    to: active
+    via: the deploy job runs every stage to success (pipeline.execute_deploy_job, stubbed method)
+    expect: {agent_status: active, job_status: succeeded}
+    cites: [ARCH_JOB]
+    ui: null
+  - id: deploy_fails
+    from: deploying
+    to: failed
+    via: a stage raises inside the deploy job
+    expect: {agent_status: failed, job_status: failed}
+    cites: [ARCH_JOB]
+    ui: null
+  - id: delete_while_deploying
+    from: deploying
+    to: deploying
+    kind: refusal
+    via: DELETE /api/agents/{id} while the job is queued
+    expect: {status: 409, code: agent.deploy_in_progress}
+    cites: [AGENTS_S1, API_DELETE]
+    ui: {page: /v2/agents, view: detail, controls: [v2-agent-delete, v2-confirm-ok]}
+  - id: redeploy_while_deploying
+    from: deploying
+    to: deploying
+    kind: refusal
+    via: POST /api/agents/{id}/redeploy while the job is queued
+    expect: {status: 409, code: agent.deploy_in_progress}
+    cites: [AGENTS_S1]
+    ui: {page: /v2/agents, view: edit, controls: []}
+  - id: chat_while_deploying
+    from: deploying
+    to: deploying
+    kind: refusal
+    via: POST /api/chat/{id}
+    expect: {status: 409, code: agent.not_active}
+    cites: [API_AGENT_ERRORS, OBS74]
+    ui: {page: /v2/chat, view: null, controls: [chat-send]}
+  - id: create_duplicate_while_deploying
+    from: deploying
+    to: deploying
+    kind: refusal
+    via: POST /api/agents with the same name
+    expect: {status: 409, code: agent.name_exists}
+    cites: [AGENTS_S3]
+    ui: {page: /v2/agents, view: new, controls: [v2-agent-wizard-submit]}
+  - id: row_marked_deleted_mid_job
+    from: deploying
+    to: deleted
+    via: the row is marked deleted while a stage runs; the job notices at the stage boundary
+    expect: {agent_status: deleted, job_status: cancelled}
+    cites: [AGENTS_S2]
+    ui: null
+  - id: redeploy
+    from: active
+    to: redeploying
+    via: POST /api/agents/{id}/redeploy with an edited spec
+    expect: {status: 202}
+    cites: [AGENTS_S4_1, API_REDEPLOY]
+    ui: {page: /v2/agents, view: edit, controls: []}
+  - id: redeploy_succeeds
+    from: redeploying
+    to: active
+    via: the update-mode job runs every stage to success
+    expect: {agent_status: active, job_status: succeeded}
+    cites: [ARCH_JOB]
+    ui: null
+  - id: redeploy_fails_keeps_live
+    from: redeploying
+    to: active
+    via: a stage before `deploy` raises inside the update-mode job
+    expect: {agent_status: active, job_status: failed, last_deploy_failed: true}
+    cites: [AGENTS_S4_3, ARCH_JOB]
+    ui: null
+  - id: redeploy_from_failed
+    from: failed
+    to: redeploying_cold
+    via: POST /api/agents/{id}/redeploy after a failed first deploy (no live version exists)
+    expect: {status: 202}
+    cites: [AGENTS_S4_2, API_REDEPLOY]
+    ui: {page: /v2/agents, view: detail, controls: [v2-agent-edit]}
+  - id: cold_redeploy_succeeds
+    from: redeploying_cold
+    to: active
+    via: the update-mode job of a never-live agent runs every stage to success
+    expect: {agent_status: active, job_status: succeeded}
+    cites: [ARCH_JOB]
+    ui: null
+  - id: cold_redeploy_fails
+    from: redeploying_cold
+    to: failed
+    via: a stage raises inside the update-mode job of a never-live agent (nothing serves, so nothing is kept)
+    expect: {agent_status: failed, job_status: failed}
+    cites: [AGENTS_S4_2, ARCH_JOB]
+    ui: null
+  - id: delete_while_cold_redeploying
+    from: redeploying_cold
+    to: redeploying_cold
+    kind: refusal
+    via: DELETE /api/agents/{id} while the update job is queued
+    expect: {status: 409, code: agent.deploy_in_progress}
+    cites: [AGENTS_S1]
+    ui: {page: /v2/agents, view: detail, controls: [v2-agent-delete, v2-confirm-ok]}
+  - id: chat_while_cold_redeploying
+    from: redeploying_cold
+    to: redeploying_cold
+    kind: refusal
+    via: POST /api/chat/{id}
+    expect: {status: 409, code: agent.not_active}
+    cites: [OBS74]
+    ui: {page: /v2/chat, view: null, controls: [chat-send]}
+  - id: delete_active
+    from: active
+    to: deleted
+    via: DELETE /api/agents/{id}
+    expect: {status: 200, deleted: true}
+    cites: [API_DELETE]
+    ui: {page: /v2/agents, view: detail, controls: [v2-agent-delete, v2-confirm-ok]}
+  - id: delete_failed
+    from: failed
+    to: deleted
+    via: DELETE /api/agents/{id} once the job is `failed`
+    expect: {status: 200, deleted: true}
+    cites: [AGENTS_S1]
+    ui: {page: /v2/agents, view: detail, controls: [v2-agent-delete, v2-confirm-ok]}
+  - id: delete_while_redeploying
+    from: redeploying
+    to: redeploying
+    kind: refusal
+    via: DELETE /api/agents/{id} while the update job is queued
+    expect: {status: 409, code: agent.deploy_in_progress}
+    cites: [AGENTS_S1]
+    ui: {page: /v2/agents, view: detail, controls: [v2-agent-delete, v2-confirm-ok]}
+  - id: chat_while_redeploying
+    from: redeploying
+    to: redeploying
+    kind: refusal
+    via: POST /api/chat/{id}
+    expect: {status: 409, code: agent.not_active}
+    cites: [OBS74]
+    ui: {page: /v2/chat, view: null, controls: [chat-send]}
+  - id: delete_deleted
+    from: deleted
+    to: deleted
+    kind: refusal
+    via: DELETE /api/agents/{id} again
+    expect: {status: 404, code: agent.not_found}
+    cites: [API_AGENT_ERRORS]
+    ui: {page: /v2/agents, view: detail, controls: [v2-agent-delete, v2-confirm-ok]}
+  - id: redeploy_deleted
+    from: deleted
+    to: deleted
+    kind: refusal
+    via: POST /api/agents/{id}/redeploy
+    expect: {status: 404, code: agent.not_found}
+    cites: [API_AGENT_ERRORS]
+    ui: {page: /v2/agents, view: edit, controls: []}
+  - id: chat_deleted
+    from: deleted
+    to: deleted
+    kind: refusal
+    via: POST /api/chat/{id}
+    expect: {status: 404, code: agent.not_found}
+    cites: [API_AGENT_ERRORS]
+    ui: {page: /v2/chat, view: null, controls: [chat-send]}
+  - id: create_after_delete_same_name
+    from: deleted
+    to: deploying
+    via: POST /api/agents with the deleted agent's name
+    expect: {status: 202}
+    cites: [AGENTS_S4_4, AGENTS_S3]
+    ui: {page: /v2/agents, view: new, controls: [v2-agent-wizard-submit]}
+  - id: member_redeploy_other
+    from: active
+    to: active
+    kind: refusal
+    via: another member's POST /api/agents/{id}/redeploy
+    expect: {status: 403, code: agent.forbidden}
+    cites: [UO_S4, API_REDEPLOY]
+    ui: {page: /v2/agents, view: detail, controls: [v2-agent-edit]}
+  - id: member_delete_other
+    from: active
+    to: active
+    kind: refusal
+    via: another member's DELETE /api/agents/{id}
+    expect: {status: 403, code: agent.forbidden}
+    cites: [UO_S4, API_DELETE]
+    ui: {page: /v2/agents, view: detail, controls: [v2-agent-delete]}
+  - id: chat_active
+    from: active
+    to: active
+    via: POST /api/chat/{id} — one turn through the stubbed runtime
+    expect: {status: 200}
+    cites: [API_CHAT]
+    ui: {page: /v2/chat, view: null, controls: [agent-select, chat-send]}

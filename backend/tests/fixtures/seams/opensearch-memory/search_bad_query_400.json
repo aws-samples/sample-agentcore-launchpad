@@ -1,0 +1,37 @@
+{
+ "seam": "opensearch-memory",
+ "case": "search_bad_query_400",
+ "captured_at": "2026-10-19T09:14:15Z",
+ "notes": "",
+ "response_or_error": {
+  "http_status": 400,
+  "headers_subset": {
+   "Content-Type": "application/json; charset=UTF-8",
+   "Content-Length": "317"
+  },
+  "body": {
+   "error": {
+    "root_cause": [
+     {
+      "type": "parsing_exception",
+      "reason": "unknown query [no_such_query]",
+      "line": 1,
+      "col": 29
+     }
+    ],
+    "type": "parsing_exception",
+    "reason": "unknown query [no_such_query]",
+    "line": 1,
+    "col": 29,
+    "caused_by": {
+     "type": "named_object_not_found_exception",
+     "reason": "[1:29] unknown field [no_such_query]"
+    }
+   },
+   "status": 400
+  }
+ },
+ "status": 400,
+ "elapsed_s": 10.049,
+ "source": "t1 host, instance role (uv env boto3 1.43.109), via SSM"
+}

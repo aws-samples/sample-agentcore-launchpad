@@ -1,0 +1,4 @@
+# Cross-build for the Graviton (arm64) hub host: `cargo build --release --target
+# aarch64-unknown-linux-gnu` (packaging/build-artifact.sh). Needs gcc-aarch64-linux-gnu.
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"

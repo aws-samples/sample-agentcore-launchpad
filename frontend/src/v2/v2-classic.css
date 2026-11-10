@@ -1,9 +1,10 @@
-/* ============ console V2 — classic module pages on the V2 light theme ============
-   The classic pages are styled entirely through the design tokens in
-   theme/tokens.css. While the V2 shell is mounted (body.v2-body) those tokens are
-   re-pointed to the V2 palette; on <body> rather than the shell root so portaled
-   UI (toasts, confirm dialogs, row menus) follows. The shape tweaks below are
-   scoped to `.v2-classic`, the content area wrapping a classic page. */
+/* ============ token-styled agent flows on the V2 light theme ============
+   The agent flows without a native V2 page yet (system presets, Runtime import, a
+   preset's configure flow, the Studio canvas) are styled entirely through the
+   design tokens in theme/tokens.css. While the V2 shell is mounted (body.v2-body)
+   those tokens are re-pointed to the V2 palette; on <body> rather than the shell
+   root so portaled UI (toasts, confirm dialogs, row menus) follows. The shape
+   tweaks below are scoped to `.v2-classic`, the content area wrapping such a page. */
 
 body.v2-body {
   --bg: #f4f6fa;

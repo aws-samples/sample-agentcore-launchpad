@@ -1,64 +1,88 @@
-"""Launchpad direct managed knowledge-base tools.
+"""Launchpad direct knowledge-base tools (self-hosted OpenSearch, N6).
 
-Rendered from one source for both generated Strands ZIP entrypoints and
-converted Harness bundles. Retrieval uses the Runtime execution role directly;
-it never depends on a Gateway URL or AgentCore Identity token.
+Rendered from one source for both generated Strands ZIP entrypoints and converted
+Harness bundles. Retrieval is a k-NN query against the knowledge base's own OpenSearch
+index (`launchpad-kb-<id>`, `launchpad-<env>-kb-<id>` in a named environment — D17), signed
+with the runtime execution role (ruling R10 — no
+Bedrock Knowledge Base, no FM query planner); the query is embedded with the same Titan
+client and Global Bedrock API key the memory library resolved for the agent's model.
+The OpenSearch host comes from LAUNCHPAD_KB_OS_ENDPOINT, the region from AWS_REGION.
 """
 
 import os
-from typing import Any
+import re
 
-import boto3
 from strands import tool
 
 MOUNTED_KBS: list[dict[str, str]] = __LAUNCHPAD_MOUNTED_KBS__
 KB_RESULTS = __LAUNCHPAD_KB_RESULTS__
-KB_DEEP_ITERATIONS_SINGLE = __LAUNCHPAD_KB_DEEP_ITERATIONS_SINGLE__
-KB_DEEP_ITERATIONS_MULTI = __LAUNCHPAD_KB_DEEP_ITERATIONS_MULTI__
+KB_DEEP_RESULTS = KB_RESULTS * 2
 
 
-def _kb_runtime():
-    return boto3.client(
-        "bedrock-agent-runtime", region_name=os.environ.get("AWS_REGION", "us-west-2")
-    )
+def _kb_lib() -> dict:
+    """Where the shared OpenSearch/Titan helpers live: this module's own globals when the
+    source is inlined under the memory library in a generated main.py, else the sibling
+    ``launchpad_memory`` module a converted Harness bundle carries beside this file."""
+    if "OpenSearchHttp" in globals():
+        return globals()
+    import launchpad_memory
+
+    return vars(launchpad_memory)
 
 
-def _format_passages(kb_name: str, results: list[dict[str, Any]]) -> str:
-    if not results:
+def _kb_opensearch():
+    lib = _kb_lib()
+    clients = lib["_MEMORY_CLIENTS"]
+    if "kb_os" not in clients:
+        clients["kb_os"] = lib["OpenSearchHttp"](
+            os.environ.get("LAUNCHPAD_KB_OS_ENDPOINT", ""),
+            os.environ.get("AWS_REGION", "cn-northwest-1"),
+            lib["_memory_credentials"],
+        )
+    return clients["kb_os"]
+
+
+def _kb_embedder():
+    return _kb_lib()["_memory_embedder"]()
+
+
+def _kb_index(kb_id: str) -> str:
+    # D17: the library resolves the environment prefix (LAUNCHPAD_ENV_NAME) once.
+    return _kb_lib()["launchpad_kb_index"](kb_id)
+
+
+def _format_passages(kb_name: str, hits: list[dict]) -> str:
+    if not hits:
         return f"[{kb_name}] no matching passages."
-    lines = [f"[{kb_name}] {len(results)} passage(s):"]
-    for index, result in enumerate(results, start=1):
-        text = (result.get("content") or {}).get("text", "").strip()
-        score = result.get("score")
-        source = ""
-        for value in (result.get("location") or {}).values():
-            if isinstance(value, dict):
-                source = value.get("uri") or value.get("url") or ""
-                if source:
-                    break
+    lines = [f"[{kb_name}] {len(hits)} passage(s):"]
+    for index, hit in enumerate(hits, start=1):
         header = f"{index}."
+        score = hit.get("_score")
         if score is not None:
-            header += f" score={score:.4f}"
+            header += f" score={float(score):.4f}"
+        source = hit.get("doc_uri") or hit.get("doc_name") or ""
         if source:
             header += f" · source={source}"
-        lines.append(f"{header}\n{text}")
+        lines.append(f"{header}\n{str(hit.get('text') or '').strip()}")
     return "\n".join(lines)
 
 
-def _retrieve_one(kb: dict[str, str], query: str) -> str:
-    """One Retrieve call, failures folded into the returned text — a broken or
-    unauthorized knowledge base must never abort the turn."""
+def _knn(kb: dict[str, str], query: str, k: int) -> list[dict]:
+    """One k-NN query against this knowledge base's index, filtered to its kb_id."""
+    vector = _kb_embedder().embed(query)
+    return _kb_opensearch().knn_search(
+        _kb_index(kb["kb_id"]), vector, k, [{"term": {"kb_id": kb["kb_id"]}}]
+    )
+
+
+def _retrieve_one(kb: dict[str, str], query: str, k: int = KB_RESULTS) -> str:
+    """One search, failures folded into the returned text — a broken or unauthorized
+    knowledge base must never abort the turn."""
     try:
-        response = _kb_runtime().retrieve(
-            knowledgeBaseId=kb["kb_id"],
-            retrievalQuery={"text": query},
-            retrievalConfiguration={
-                "managedSearchConfiguration": {"numberOfResults": KB_RESULTS}
-            },
-        )
+        hits = _knn(kb, query, k)
     except Exception as exc:
         return f"[{kb['name']}] search failed: {type(exc).__name__}: {exc}"
-    return _format_passages(kb["name"], response.get("retrievalResults", []))
+    return _format_passages(kb["name"], hits)
 
 
 def _kb_targets(kb_id: str) -> list[dict[str, str]] | str:
@@ -77,10 +101,11 @@ def _kb_targets(kb_id: str) -> list[dict[str, str]] | str:
 
 @tool
 def kb_search(query: str, kb_id: str = "") -> str:
-    """Search the mounted managed knowledge bases and return matching passages.
+    """Search the mounted knowledge bases with one k-NN similarity search per
+    knowledge base and return the matching passages with their source.
 
-    One similarity search — fast and cheap. Leave kb_id empty to search every
-    mounted knowledge base; pass one kb_id to target a single one.
+    Fast and cheap — prefer it for a single fact you can name. Leave kb_id empty
+    to search every mounted knowledge base; pass one kb_id to target a single one.
     """
     targets = _kb_targets(kb_id)
     if isinstance(targets, str):
@@ -90,106 +115,50 @@ def kb_search(query: str, kb_id: str = "") -> str:
     return "\n\n".join(_retrieve_one(kb, query) for kb in targets)
 
 
-_AGENTIC_ERROR_MEMBERS = (
-    "accessDeniedException",
-    "badGatewayException",
-    "conflictException",
-    "dependencyFailedException",
-    "internalServerException",
-    "resourceNotFoundException",
-    "serviceQuotaExceededException",
-    "throttlingException",
-    "validationException",
-)
+_CLAUSE_SPLIT = re.compile(r"[;?!]|,\s|\band\b")
 
 
-def _format_agentic(result: dict[str, Any], steps: list[str], notes: list[str]) -> str:
-    """result event → text. Agentic results carry no score/location: the source
-    uri lives in metadata['_source_uri'] and the KB id in sourceRetriever."""
-    generated = result.get("generatedResponse") or {}
-    answer = (generated.get("answer") or "").strip()
-    citations = generated.get("citations") or []
-    passages = result.get("results") or []
-    lines = []
-    if steps:
-        lines.append("planner steps: " + ", ".join(steps))
-    for note in notes:
-        lines.append(f"note: {note}")
-    if answer:
-        lines.append(f"answer ({len(citations)} citation(s)):\n{answer}")
-    if not passages:
-        lines.append("no supporting passages returned.")
-        return "\n".join(lines)
-    lines.append(f"supporting passages ({len(passages)}):")
-    for index, passage in enumerate(passages, start=1):
-        text = (passage.get("content") or {}).get("text", "").strip()
-        metadata = passage.get("metadata") or {}
-        source = metadata.get("_source_uri") or metadata.get("_document_title") or ""
-        kb = (passage.get("sourceRetriever") or {}).get("identifier", "")
-        header = f"{index}."
-        if kb:
-            header += f" kb={kb}"
-        if source:
-            header += f" · source={source}"
-        lines.append(f"{header}\n{text}")
-    return "\n".join(lines)
+def _sub_queries(query: str) -> list[str]:
+    """The question's clauses (split on ; ? ! , and 'and'), longer than three
+    characters and distinct from the whole question."""
+    whole = query.strip()
+    out: list[str] = []
+    for part in _CLAUSE_SPLIT.split(whole):
+        part = part.strip()
+        if len(part) > 3 and part != whole and part not in out:
+            out.append(part)
+    return out
+
+
+def _deep_one(kb: dict[str, str], queries: list[str]) -> str:
+    best: dict[tuple, dict] = {}
+    try:
+        for query in queries:
+            for hit in _knn(kb, query, KB_DEEP_RESULTS):
+                key = (hit.get("doc_uri"), hit.get("chunk_index"))
+                score = hit.get("_score") or 0.0
+                if key not in best or score > (best[key].get("_score") or 0.0):
+                    best[key] = hit
+    except Exception as exc:
+        return f"[{kb['name']}] search failed: {type(exc).__name__}: {exc}"
+    hits = sorted(best.values(), key=lambda h: h.get("_score") or 0.0, reverse=True)
+    return _format_passages(kb["name"], hits[:KB_DEEP_RESULTS])
 
 
 @tool
 def kb_deep_search(query: str, kb_id: str = "") -> str:
-    """Deep-search the mounted knowledge bases with agentic (multi-step) retrieval.
+    """Deep-search the mounted knowledge bases with a multi-query similarity pass.
 
-    A planning loop decomposes the question into sub-queries, searches across the
-    knowledge bases over several rounds, and returns a cited answer plus the
-    supporting passages. Slower and more expensive than kb_search — use it for
-    comparisons, exhaustive lists, summaries, or evidence spread across
-    documents. Leave kb_id empty to search every mounted knowledge base.
+    Runs the whole question plus up to three of its clauses as separate k-NN
+    searches with a wider result set, de-duplicates the passages and returns the
+    best-scoring ones with their sources. Slower than kb_search — use it for
+    comparisons, exhaustive lists, or evidence spread across documents. Leave
+    kb_id empty to search every mounted knowledge base.
     """
     targets = _kb_targets(kb_id)
     if isinstance(targets, str):
         return targets
     if not query.strip():
-        return "kb_deep_search needs a non-empty query."
-    iterations = (
-        KB_DEEP_ITERATIONS_SINGLE if len(targets) == 1 else KB_DEEP_ITERATIONS_MULTI
-    )
-    steps: list[str] = []
-    notes: list[str] = []
-    result: dict[str, Any] | None = None
-    try:
-        stream = _kb_runtime().agentic_retrieve_stream(
-            messages=[{"role": "user", "content": {"text": query}}],
-            retrievers=[
-                {
-                    "description": kb["description"][:200],
-                    "configuration": {"knowledgeBase": {"knowledgeBaseId": kb["kb_id"]}},
-                }
-                for kb in targets
-            ],
-            agenticRetrieveConfiguration={
-                "foundationModelType": "MANAGED",
-                "rerankingModelType": "MANAGED",
-                "maxAgentIteration": iterations,
-            },
-        )["stream"]
-        for event in stream:
-            if "traceEvent" in event:
-                attributes = (event["traceEvent"] or {}).get("attributes") or {}
-                steps.append(f"{attributes.get('step')}:{attributes.get('status')}")
-                for failure in attributes.get("failures") or []:
-                    notes.append(str(failure.get("message", ""))[:200])
-            elif "result" in event:
-                result = event["result"] or {}
-            else:
-                # modeled errors arrive INSIDE the stream, not only as raises
-                for member in _AGENTIC_ERROR_MEMBERS:
-                    if member in event:
-                        message = (event[member] or {}).get("message", "")
-                        return f"deep search failed: {member}: {message}"
-            # responseEvent deltas are skipped — result.generatedResponse.answer
-            # is the same text, already complete, and a tool return isn't streamed
-    except Exception as exc:
-        return f"deep search failed: {type(exc).__name__}: {exc}"
-    if result is None:
-        return "deep search returned no result event."
-    return _format_agentic(result, steps, notes)
+        return "kb_search needs a non-empty query."  # one message for both tools (kb-runtime.md)
+    queries = [query.strip()] + _sub_queries(query)[:3]
+    return "\n\n".join(_deep_one(kb, queries) for kb in targets)

@@ -1,5 +1,5 @@
 """Target-based canary infra helpers (Phase 2a): naming, versions, candidate
-minting, dedicated gateway, and named endpoints — all with stubbed clients and
+minting and named endpoints (CN: no per-canary gateway) — all with stubbed clients and
 injected build/upload seams (no real pip / S3 / AWS)."""
 
 from pathlib import Path
@@ -9,7 +9,6 @@ from unittest.mock import MagicMock
 import pytest
 
 import app.optimization.canary_infra as infra
-import app.optimization.service as exp_svc
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
@@ -143,112 +142,7 @@ def test_mint_candidate_reads_version_from_update_and_leaves_ledger_untouched(
         db3.close()
 
 
-def test_mint_candidate_container_is_follow_up(monkeypatch, tmp_path):
-    workspace = _workspace(monkeypatch)
-    spec = AgentSpec(name="containeragent", method="container", system_prompt="p")
-    with pytest.raises(NotImplementedError, match="container"):
-        infra.mint_candidate_version(
-            agent=SimpleNamespace(name="c", resource_id="c-x"),
-            edited_spec=spec,
-            control_client=MagicMock(),
-            workspace=workspace,
-            canary_id="can123",
-            build_root=tmp_path,
-        )
-
-
-# ─── dedicated per-canary gateway ────────────────────────────────────────────
-def test_create_canary_gateway_is_unique_and_iam(monkeypatch):
-    control = MagicMock()
-    control.create_gateway.return_value = {"gatewayId": "gw-can"}
-    control.get_gateway.return_value = {
-        "status": "READY",
-        "gatewayArn": "arn:gw",
-        "gatewayUrl": "https://gw",
-    }
-    out = infra.create_canary_gateway(
-        control_client=control, workspace=_workspace(monkeypatch), canary_id="abc123def456"
-    )
-    assert out == {
-        "gateway_id": "gw-can",
-        "gateway_arn": "arn:gw",
-        "gateway_url": "https://gw",
-    }
-    kwargs = control.create_gateway.call_args.kwargs
-    assert kwargs["name"] == "lp-canary-abc123def456"
-    assert kwargs["authorizerType"] == "AWS_IAM"
-    assert kwargs["roleArn"] == "arn:role/gw"
-
-
-def test_create_canary_gateway_adopts_on_conflict(monkeypatch):
-    control = MagicMock()
-    control.create_gateway.side_effect = ConflictException("already exists")
-    control.list_gateways.return_value = {
-        "items": [
-            {"name": "other", "gatewayId": "gw-other"},
-            {"name": "lp-canary-dupe123456", "gatewayId": "gw-existing"},
-        ]
-    }
-    control.get_gateway.return_value = {
-        "status": "READY",
-        "gatewayArn": "arn:gw",
-        "gatewayUrl": "https://gw",
-    }
-    out = infra.create_canary_gateway(
-        control_client=control, workspace=_workspace(monkeypatch), canary_id="dupe123456"
-    )
-    # a prior attempt's gateway is adopted by name rather than re-created
-    assert out == {
-        "gateway_id": "gw-existing",
-        "gateway_arn": "arn:gw",
-        "gateway_url": "https://gw",
-    }
-    control.get_gateway.assert_called_with(gatewayIdentifier="gw-existing")
-
-
-def test_delete_canary_gateway():
-    control = MagicMock()
-    infra.delete_canary_gateway(control, "gw-1")
-    control.delete_gateway.assert_called_once_with(gatewayIdentifier="gw-1")
-
-
-def test_delete_canary_gateway_retries_until_ab_test_drains(monkeypatch):
-    """DeleteGateway is rejected for minutes while the async-deleting A/B test
-    drains (real-AWS e2e finding) — retry until it takes, don't leak."""
-    monkeypatch.setattr(infra, "_sleep", lambda *_a, **_k: None)
-    control = MagicMock()
-    control.delete_gateway.side_effect = [
-        RuntimeError("gateway has an associated A/B test"),
-        RuntimeError("gateway has an associated A/B test"),
-        None,
-    ]
-    infra.delete_canary_gateway(control, "gw-1", interval_s=0)
-    assert control.delete_gateway.call_count == 3
-
-
-def test_delete_canary_gateway_treats_not_found_as_deleted(monkeypatch):
-    monkeypatch.setattr(infra, "_sleep", lambda *_a, **_k: None)
-    control = MagicMock()
-
-    class ResourceNotFoundException(Exception):
-        pass
-
-    control.delete_gateway.side_effect = ResourceNotFoundException("gone")
-    infra.delete_canary_gateway(control, "gw-1")
-    assert control.delete_gateway.call_count == 1  # already gone == success
-
-
-def test_delete_canary_gateway_raises_after_budget(monkeypatch):
-    """If the delete never takes within the budget, raise so the caller records
-    the skip rather than hanging forever."""
-    monkeypatch.setattr(infra, "_sleep", lambda *_a, **_k: None)
-    control = MagicMock()
-    control.delete_gateway.side_effect = RuntimeError("still busy")
-    with pytest.raises(RuntimeError):
-        infra.delete_canary_gateway(control, "gw-1", timeout_s=0.0, interval_s=0)
-
-
-# ─── stable / treatment endpoints ────────────────────────────────────────────
+# ─── stable / treatment named endpoints ──────────────────────────────────────
 def test_ensure_canary_endpoints_pins_and_waits_both():
     control = MagicMock()
     control.get_agent_runtime_endpoint.return_value = {"status": "READY"}
@@ -314,18 +208,3 @@ def test_delete_endpoint_quiet_swallows_not_found_but_reraises_real_errors():
 
 
 # ─── qualifier passthrough on the shared target helper ───────────────────────
-def test_create_runtime_target_passes_qualifier_through():
-    control = MagicMock()
-    control.create_gateway_target.return_value = {"targetId": "t1"}
-    control.get_gateway_target.return_value = {"status": "READY"}
-
-    tid = exp_svc.create_runtime_target_idempotent(
-        control, "gw-1", "tname", "arn:agent", qualifier="treatment"
-    )
-    assert tid == "t1"
-    cfg = control.create_gateway_target.call_args.kwargs["targetConfiguration"]
-    assert cfg["http"]["agentcoreRuntime"]["qualifier"] == "treatment"
-
-    exp_svc.create_runtime_target_idempotent(control, "gw-1", "tname2", "arn:agent")
-    cfg2 = control.create_gateway_target.call_args.kwargs["targetConfiguration"]
-    assert cfg2["http"]["agentcoreRuntime"]["qualifier"] == "DEFAULT"

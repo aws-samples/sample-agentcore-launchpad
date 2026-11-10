@@ -57,11 +57,13 @@
   subtitle timing. Deliver the video with poster, narration text, SRT/WebVTT,
   chapter metadata, and a working preview/player link. Keep generated media out of Git.
 - **Publish through the shared video library.** Follow [Video library](video-library.md).
-  Upload the media to the existing private S3 / CloudFront deployment under a new
-  immutable revision path; `scripts/publish_videos.mjs` remains available for entries
-  in the one-time legacy manifest. An administrator adds the permanent CDN URL and
-  metadata in `/v2/video-management`, saves the draft, previews it, then publishes.
+  Stage the media on the console host under a new immutable revision directory,
+  `/home/ubuntu/launchpad-media/<section>/<YYYYMMDD-v2-cn-hr>/` (served as `/media/`;
+  the CN build ships no media stack or publish script — the staging steps are in
+  `docs/cn/interfaces/deploy.md` §8.8). An administrator adds the permanent
+  `https://<console>/media/…` URL and
+  metadata on the Manage tab of `/v2/videos` (`?view=manage`), saves the draft, previews it, then publishes.
   Do not use expiring URLs or create a media stack per environment. Include duration,
-  chapters, bilingual metadata, captions, and poster when available; verify CDN
-  Range/CORS and playback in `/videos`. Media upload and directory publication are
-  separate actions.
+  chapters, bilingual metadata, captions, and poster when available; verify a
+  `Range` request against the staged files and playback in `/v2/videos`. Media
+  staging and directory publication are separate actions.
