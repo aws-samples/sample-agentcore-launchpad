@@ -35,7 +35,21 @@ def _judge(instructions):
     return {"evaluatorConfig": {"llmAsAJudge": {"instructions": instructions}}}
 
 
-def test_builtin_only_selection_makes_no_aws_call():
+class RegionControl(StubControl):
+    """Also answers ListEvaluators with the built-ins the region offers."""
+
+    def __init__(self, builtins, **kw):
+        super().__init__(**kw)
+        self.builtins = builtins
+        self.listings = 0
+
+    def list_evaluators(self, **kw):
+        self.listings += 1
+        return {"evaluators": [{"evaluatorId": e, "evaluatorType": "Builtin"}
+                               for e in self.builtins]}
+
+
+def test_builtin_only_selection_makes_no_get_evaluator_call():
     control = StubControl()
     chosen = normalize_online_evaluators(
         ["Builtin.Helpfulness", "Builtin.Refusal"], control
@@ -160,6 +174,44 @@ def test_existing_rejections_unchanged():
         normalize_online_evaluators(["Builtin.NotAThing"], control)
     assert unknown_builtin.value.status_code == 400
     assert control.calls == []
+
+
+def test_builtin_the_region_does_not_offer_is_refused():
+    """A documented built-in still rolling out here would fail CreateOnlineEvaluationConfig
+    only after the caller's earlier steps (gateway, target) ran — refuse it up front."""
+    control = RegionControl(["Builtin.Helpfulness", "Builtin.GoalSuccessRate"])
+    with pytest.raises(AppError) as excinfo:
+        normalize_online_evaluators(
+            ["Builtin.Helpfulness", "Builtin.ContextRelevance"], control,
+            code_prefix="online_eval",
+        )
+    assert excinfo.value.code == "online_eval.evaluator_unsupported"
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == {"evaluator": "Builtin.ContextRelevance",
+                                    "reason": "region_unavailable"}
+    assert control.listings == 1 and control.calls == []
+
+
+def test_region_offered_builtins_pass_with_one_listing():
+    control = RegionControl(["Builtin.Helpfulness", "Builtin.Refusal"])
+    chosen = normalize_online_evaluators(["Builtin.Helpfulness", "Builtin.Refusal"], control)
+    assert chosen == ["Builtin.Helpfulness", "Builtin.Refusal"]
+    assert control.listings == 1
+
+
+def test_listing_naming_no_builtins_hides_none():
+    # an empty or failing listing says nothing about built-ins — never refuse on it
+    assert normalize_online_evaluators(
+        ["Builtin.ContextRelevance"], RegionControl([])
+    ) == ["Builtin.ContextRelevance"]
+
+
+def test_default_and_custom_only_selections_skip_the_listing():
+    control = RegionControl(["Builtin.Helpfulness"],
+                            evaluators={"judge": _judge("Rate {assistant_turn}.")})
+    assert normalize_online_evaluators(None, control) == list(ONLINE_EVAL_DEFAULT)
+    assert normalize_online_evaluators(["judge"], control) == ["judge"]
+    assert control.listings == 0
 
 
 # ─── numeric-scale check (canary verdicts compare arm means) ─────────────────

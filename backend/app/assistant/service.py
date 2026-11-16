@@ -871,27 +871,34 @@ def _agent_resources(workspace: WorkspaceContext) -> dict[str, Any]:
 
 def catalog_evaluators(workspace: WorkspaceContext, warnings: list[str]) -> list[dict[str, Any]]:
     """The ready-made evaluators a proposal may reference as ``kind: existing``: the
-    AWS built-ins (a static list — no call) plus the account's third-party evaluators
-    (one read-only ``ListEvaluators``). Custom evaluators are deliberately absent: the
+    AWS built-ins (the static list) plus the account's third-party evaluators (one
+    read-only ``ListEvaluators``). Custom evaluators are deliberately absent: the
     architect proposes new judges/rules explicitly, it never adopts another agent's.
-    A failing listing degrades to the built-ins plus a warning."""
+    The same listing drops a documented built-in this region does not offer yet (as
+    the console catalog does); a listing that names no built-ins hides none. A failing
+    listing degrades to the full built-in list plus a warning."""
+    listed: list[dict[str, Any]] = []
+    try:
+        listed = ac.list_evaluators(control_client(workspace))
+    except Exception as exc:  # the built-ins still stand
+        warnings.append(f"third-party evaluator listing unavailable: {_short(exc)}")
+    ids = [str(ev.get("evaluatorId") or "") for ev in listed]
+    offered = {eid for eid in ids if eid.startswith("Builtin.")}
     out = [
         {"evaluator_id": eid, "level": level, "source": "builtin"}
         for eid, level in ac.ALL_BUILTIN_EVALUATORS.items()
+        if not offered or eid in offered
     ] + [
         {"evaluator_id": eid, "level": level, "source": "builtin",
          "requires": "expected_trajectory"}
         for eid, level in ac.TRAJECTORY_EVALUATORS.items()
+        if not offered or eid in offered
     ]
-    try:
-        for ev in ac.list_evaluators(control_client(workspace)):
-            eid = str(ev.get("evaluatorId") or "")
-            if not eid.startswith("ThirdParty.") or ev.get("status") not in (None, "ACTIVE"):
-                continue
-            out.append({"evaluator_id": eid, "level": ev.get("level") or "TRACE",
-                        "source": "third_party", "provider": ev.get("provider") or ""})
-    except Exception as exc:  # the built-ins still stand
-        warnings.append(f"third-party evaluator listing unavailable: {_short(exc)}")
+    for eid, ev in zip(ids, listed, strict=True):
+        if not eid.startswith("ThirdParty.") or ev.get("status") not in (None, "ACTIVE"):
+            continue
+        out.append({"evaluator_id": eid, "level": ev.get("level") or "TRACE",
+                    "source": "third_party", "provider": ev.get("provider") or ""})
     return out[:CATALOG_MAX_ENTRIES]
 
 
