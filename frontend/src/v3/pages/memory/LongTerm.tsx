@@ -3,12 +3,15 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ErrorCallout } from "../../../components/ErrorCallout";
+import { MemoryRecordText } from "../../../components/MemoryRecordText";
+import { memoryRecordPlainText } from "../../../lib/memory-record";
+import { isFullSession, type MemoryRecordSelection, scopedMemoryRecord } from "../../../lib/memory-summary";
 import { api, errorMessage, type MemoryActor, type MemoryNamespace, type MemoryRecord, type MemoryStrategy } from "../../../lib/api";
-import { actorText, fmtRelevance, shortId, type TokenPaged, useTokenPaged } from "../../../v2/pages/memory/common";
+import { actorText, fmtRelevance, shortId, type TokenPaged, useMemoryReadScope, useMemoryRequestScope, useTokenPaged } from "../../../v2/pages/memory/common";
 import { useFailure } from "../../failure";
 import { ago } from "../../format";
 import { Reasoned } from "../../reason";
-import { Btn, Dialog, Empty, Notice, Panel, Skeleton } from "../../ui";
+import { Btn, Chip, Dialog, Empty, Notice, Panel, Skeleton } from "../../ui";
 import { LoadMore, SourceBadge } from "./common";
 import { Select } from "../../select";
 
@@ -26,7 +29,9 @@ function RecordDialog({ record, strategyName, onClose }: { record: MemoryRecord;
           <dt>{t("v3.memory.created")}</dt><dd>{ago(record.created_at)}</dd>
           {record.score != null && <><dt>{t("v3.memory.score")}</dt><dd className="mono">{fmtRelevance(record.score)}</dd></>}
         </dl>
-        <p style={{ margin: 0, whiteSpace: "pre-wrap", color: "var(--v3-text)" }}>{record.text}</p>
+        {isFullSession(record) && <Chip>{t("memoryPage.fullSummary.title")}</Chip>}
+        {isFullSession(record) ? <MemoryRecordText text={record.text} />
+          : <p style={{ margin: 0, whiteSpace: "pre-wrap", color: "var(--v3-text)" }}>{record.text}</p>}
         {/* a structured payload gets its fields broken out; the raw stays underneath */}
         {record.structured && (
           <>
@@ -74,34 +79,40 @@ export function LongTerm({
   const [nsError, setNsError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [topK, setTopK] = useState(5);
-  const [results, setResults] = useState<MemoryRecord[] | null>(null);
+  const [recordType, setRecordType] = useState<"FULL_SESSION" | undefined>();
+  const readScope = useMemoryReadScope();
+  const requestKey = JSON.stringify([readScope.workspaceId, readScope.projectId, actorId, strategyId, recordType]);
+  const requestScope = useMemoryRequestScope(requestKey);
+  const [results, setResults] = useState<{ key: string; items: MemoryRecord[] } | null>(null);
   const [searching, setSearching] = useState(false);
-  const [detail, setDetail] = useState<MemoryRecord | null>(null);
+  const [detail, setDetail] = useState<MemoryRecordSelection | null>(null);
+  const shownDetail = scopedMemoryRecord(detail, requestKey);
 
   useEffect(() => {
     setNamespaces([]);
     setNsError(null);
     if (!actorId) return;
     let live = true;
-    api.memoryNamespaces(actorId)
+    api.memoryNamespaces(actorId, undefined, readScope)
       .then((res) => live && setNamespaces(res.items))
       .catch((err: unknown) => live && setNsError(errorMessage(err)));
     return () => {
       live = false;
     };
-  }, [actorId]);
+  }, [actorId, readScope]);
 
   const selected = namespaces.find((n) => n.strategy_id === strategyId) ?? null;
   const usable = selected?.resolvable ? selected : null;
   const records = useTokenPaged<MemoryRecord>(
-    actorId && usable ? (token) => api.memoryRecords({ actor_id: actorId, strategy_id: usable.strategy_id ?? undefined }, token) : null,
-    `v3-records:${actorId ?? ""}:${usable?.strategy_id ?? ""}`,
+    actorId && usable ? (token) => api.memoryRecords({ actor_id: actorId, strategy_id: usable.strategy_id ?? undefined, record_type: recordType }, token, readScope) : null,
+    `v3-records:${requestKey}:${usable?.strategy_id ?? ""}`,
   );
   // listing and retrieval answer different questions: never show a stale ranking next to a fresh list
   useEffect(() => {
     setResults(null);
     setDetail(null);
-  }, [actorId, strategyId]);
+    setSearching(false);
+  }, [requestKey]);
 
   const strategyName = useMemo(() => {
     const names = new Map<string, string>();
@@ -112,15 +123,16 @@ export function LongTerm({
 
   const runSearch = () => {
     if (!actorId || !query.trim()) return;
+    const current = requestScope.begin();
     setSearching(true);
-    api.memorySearchRecords({ query: query.trim(), actor_id: actorId, strategy_id: usable?.strategy_id ?? undefined, top_k: topK })
-      .then((res) => setResults(res.items))
-      .catch((err: unknown) => failed.fail(err, t("v3.memory.loadFailed", { msg: errorMessage(err) })))
-      .finally(() => setSearching(false));
+    api.memorySearchRecords({ query: query.trim(), actor_id: actorId, strategy_id: usable?.strategy_id ?? undefined, top_k: topK, record_type: recordType }, readScope)
+      .then((res) => { if (current()) setResults({ key: requestKey, items: res.items }); })
+      .catch((err: unknown) => { if (current()) failed.fail(err, t("v3.memory.loadFailed", { msg: errorMessage(err) })); })
+      .finally(() => { if (current()) setSearching(false); });
   };
 
-  const isSearch = results !== null;
-  const rows = results ?? records.items;
+  const isSearch = results !== null && results.key === requestKey;
+  const rows = isSearch ? results.items : records.items;
   const empty = !actorId
     ? t("v3.memory.pickActor")
     : isSearch
@@ -153,6 +165,12 @@ export function LongTerm({
               ))}
             </Select>
           </Reasoned>
+          <Select className="v3-select" style={{ width: 220 }} value={recordType ?? ""}
+            aria-label={t("memoryPage.fullSummary.filterLabel")} data-testid="v3-memory-record-type"
+            onChange={(e) => setRecordType(e.target.value === "FULL_SESSION" ? "FULL_SESSION" : undefined)}>
+            <option value="">{t("memoryPage.fullSummary.allRecords")}</option>
+            <option value="FULL_SESSION">{t("memoryPage.fullSummary.onlyFull")}</option>
+          </Select>
           {selected && <span className="mono v3-mem-muted" style={{ fontSize: 12 }} title={selected.template}>{selected.namespace}{selected.prefix ? "/…" : ""}</span>}
           <span style={{ marginLeft: "auto" }}><Btn size="sm" kind="ghost" disabled={!usable}
             disabledReason={!actorId ? t("story.reason.pickActor") : t("story.reason.pickStrategy")}
@@ -202,8 +220,11 @@ export function LongTerm({
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={r.record_id ?? `${r.text}-${i}`} className="click" onClick={() => setDetail(r)}>
-                  <td><span className="v3-mem-clamp" title={r.text}>{r.text}</span> <SourceBadge source={r.source} /></td>
+                <tr key={r.record_id ?? `${r.text}-${i}`} className="click" onClick={() => setDetail({ key: requestKey, record: r })}>
+                  <td>{isFullSession(r) && <Chip>{t("memoryPage.fullSummary.title")}</Chip>}
+                    <span className="v3-mem-clamp" title={isFullSession(r) ? memoryRecordPlainText(r.text) : r.text}>
+                      {isFullSession(r) ? memoryRecordPlainText(r.text) : r.text}
+                    </span> <SourceBadge source={r.source} /></td>
                   <td style={{ color: "var(--v3-text-2)", whiteSpace: "nowrap" }} title={r.strategy_id ?? ""}>{strategyName(r.strategy_id)}</td>
                   {isSearch && <td className="num" style={{ color: "var(--v3-info)" }}>{fmtRelevance(r.score)}</td>}
                   <td className="num" style={{ color: "var(--v3-text-3)" }}>{ago(r.created_at)}</td>
@@ -214,7 +235,7 @@ export function LongTerm({
         )}
         {!isSearch && <LoadMore list={records} />}
       </Panel>
-      {detail && <RecordDialog record={detail} strategyName={strategyName} onClose={() => setDetail(null)} />}
+      {shownDetail && <RecordDialog record={shownDetail} strategyName={strategyName} onClose={() => setDetail(null)} />}
     </>
   );
 }

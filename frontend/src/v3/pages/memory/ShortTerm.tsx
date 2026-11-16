@@ -1,12 +1,16 @@
 import { MessagesSquare, RefreshCw, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+
 import { Link } from "react-router-dom";
 
+import { MemoryRecordText } from "../../../components/MemoryRecordText";
 import { api, type MemoryActor, type MemoryEvent, type MemorySessionRow } from "../../../lib/api";
-import { actorText, agentLabel, fmtBytes, shortId, type TokenPaged, useTokenPaged } from "../../../v2/pages/memory/common";
+import { summaryNamespaceKey } from "../../../lib/memory-summary";
+import { actorText, agentLabel, fmtBytes, shortId, type SessionSummaryView, type TokenPaged, useSessionSummary, useTokenPaged } from "../../../v2/pages/memory/common";
 import { ago } from "../../format";
-import { Btn, Chip, Panel } from "../../ui";
+import { Select } from "../../select";
+import { Btn, Chip, Notice, Panel, Skeleton } from "../../ui";
 import { LoadMore, PaneState, SourceBadge } from "./common";
 
 /** ~3 lines show; long or many-line text offers expand rather than being cut. */
@@ -56,6 +60,43 @@ function EventCard({ event }: { event: MemoryEvent }) {
  * session → event. The actor is the platform's scoped `<agent>__<human>` id,
  * decoded for display.
  */
+export function SessionSummary({ summary }: { summary: SessionSummaryView }) {
+  const { t } = useTranslation();
+  if (summary.status === "idle") return null;
+  return (
+    <section style={{ display: "grid", gap: 10, marginBottom: 16 }} data-testid="v3-memory-full-summary">
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+        <b>{t("memoryPage.fullSummary.title")}</b>
+        <Btn size="sm" kind="ghost" busy={summary.status === "loading"} onClick={summary.refresh}>{t("v3.memory.refresh")}</Btn>
+      </div>
+      <p className="v3-mem-muted" style={{ margin: 0 }}>{t("memoryPage.fullSummary.description")}</p>
+      {summary.namespaces.length > 1 && (
+        <Select className="v3-select" aria-label={t("v3.memory.strategy")} value={summary.selected ? summaryNamespaceKey(summary.selected) : ""}
+          onChange={(e) => summary.select(e.target.value)}>
+          {summary.namespaces.map((n) => <option key={summaryNamespaceKey(n)} value={summaryNamespaceKey(n)}>
+            {n.strategy_name ?? n.strategy_id}{n.source ? ` · ${t(`memoryPage.fullSummary.source.${n.source}`)}` : ""}
+          </option>)}
+        </Select>
+      )}
+      {summary.status === "loading" && <div role="status"><Skeleton rows={2} /></div>}
+      {summary.status === "unavailable" && <Notice s="wait">{t("memoryPage.fullSummary.unavailable")}</Notice>}
+      {summary.status === "pending" && <Notice s="wait">{t("memoryPage.fullSummary.pending")}</Notice>}
+      {summary.warning && <Notice s="wait">{t("memoryPage.fullSummary.sharedUnavailable", { msg: summary.warning })}</Notice>}
+      {summary.error && <Notice s="act">{t("v3.memory.loadFailed", { msg: summary.error })}
+        <Btn size="sm" kind="ghost" onClick={summary.refresh}>{t("v3.memory.retry")}</Btn>
+      </Notice>}
+      {summary.records.map((record, index) => (
+        <div key={record.record_id ?? index}>
+          <Chip>{t("memoryPage.fullSummary.title")}</Chip> <SourceBadge source={record.source} />
+          <MemoryRecordText text={record.text} />
+          <details><summary>{t("v2.memory.raw")}</summary><pre className="v3-pre">{record.raw_text}</pre></details>
+        </div>
+      ))}
+      {summary.token && <Btn size="sm" kind="ghost" busy={summary.loadingMore} onClick={summary.loadMore}>{t("v3.memory.loadMore")}</Btn>}
+    </section>
+  );
+}
+
 export function ShortTerm({
   actors,
   actorId,
@@ -71,6 +112,7 @@ export function ShortTerm({
 }) {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
+  const summary = useSessionSummary(actorId, sessionId);
   const sessions = useTokenPaged<MemorySessionRow>(
     actorId ? (token) => api.memorySessions(actorId, token) : null,
     `v3-sessions:${actorId ?? ""}`,
@@ -147,6 +189,7 @@ export function ShortTerm({
             {actor ? actorText(t, actor) : shortId(actorId, 12)} / {shortId(sessionId, 12)}
           </div>
         )}
+        <SessionSummary summary={summary} />
         <div className="v3-mem-list timeline">
           {!sessionId ? <div className="v3-mem-empty">{t("v3.memory.pickSession")}</div> : <PaneState list={events} empty={t("v3.memory.noEvents")} />}
           {events.items.map((e, i) => <EventCard key={e.event_id ?? `${e.at}-${i}`} event={e} />)}

@@ -580,6 +580,11 @@ def test_memory_console_hides_hidden_agents_actors(memory_world):
              ("GET", f"/api/memory/events?actor_id={a}&session_id=s-1"),
              ("GET", "/api/memory/events?actor_id=default&session_id=s-ada-mem"),
              ("GET", f"/api/memory/namespaces?actor_id={a}"),
+             ("GET", f"/api/memory/namespaces?actor_id={a}&session_id=s-1"),
+             ("GET", "/api/memory/namespaces?actor_id=default&session_id=s-ada-mem"),
+             ("GET", f"/api/memory/records?actor_id={a}&session_id=s-1&record_type=FULL_SESSION"),
+             ("GET", "/api/memory/records?actor_id=default"
+              "&session_id=s-ada-mem&record_type=FULL_SESSION"),
              ("GET", f"/api/memory/records?actor_id={a}"),
              ("GET", f"/api/memory/records?namespace=/facts/{a}"),
              ("POST", "/api/memory/records/search", {"query": "q", "actor_id": a}),

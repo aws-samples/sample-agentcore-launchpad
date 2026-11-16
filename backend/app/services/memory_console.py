@@ -19,7 +19,6 @@ the router can also read the old shared memory during a project's dual-read wind
 """
 
 import json
-import re
 from datetime import datetime
 from typing import Any
 
@@ -44,9 +43,25 @@ EXTRACTION_PAGE_MAX = 50
 # `Member must satisfy enum value set: [FAILED]`. Jobs of other statuses are
 # still listed — you just cannot filter *for* them.
 EXTRACTION_STATUS_FILTERS = ("FAILED",)
+
+
 # Namespace templates carry placeholders like ``{actorId}``; anything left after
 # substitution means we cannot build a concrete namespace for this actor.
-_PLACEHOLDER = re.compile(r"\{[^}]+\}")
+def _has_placeholder(value: str) -> bool:
+    """Match the old non-empty brace predicate without overlapping backtracking.
+
+    Each search advances beyond an empty pair or stops at the first closing
+    brace; no part of the input is rescanned for every unmatched opening brace.
+    """
+    start = value.find("{")
+    while start != -1:
+        end = value.find("}", start + 1)
+        if end == -1:
+            return False
+        if end > start + 1:
+            return True
+        start = value.find("{", end + 1)
+    return False
 
 
 def _iso(value: Any) -> str | None:
@@ -378,6 +393,8 @@ def resolve_namespaces(
     workspace: WorkspaceContext,
     actor_id: str,
     strategies: list[dict[str, Any]] | None = None,
+    session_id: str | None = None,
+    memory_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Turn each strategy's namespace template into a concrete namespace.
 
@@ -392,13 +409,17 @@ def resolve_namespaces(
     that reads every session's records for the actor at once. A placeholder in
     the middle of the path cannot be bridged that way and is returned as
     ``resolvable: False`` so the UI can disable it rather than sending a broken
-    namespace to AWS.
+    namespace to AWS. With a session id, bind actor/session/strategy instead and
+    require a session-scoped template: unknown variables never collapse into a prefix.
     """
     resolved: list[dict[str, Any]] = []
-    for strategy in strategies if strategies is not None else get_strategies(workspace):
+    for strategy in strategies if strategies is not None else get_strategies(workspace, memory_id):
         templates = strategy["namespace_templates"] or strategy["namespaces"]
         for template in templates:
-            namespace, prefix = _resolve_template(template, actor_id)
+            namespace, prefix = _resolve_template(
+                template, actor_id, session_id, strategy["strategy_id"]
+            )
+            session_scoped = "{actorId}" in template and "{sessionId}" in template
             resolved.append(
                 {
                     "strategy_id": strategy["strategy_id"],
@@ -406,27 +427,54 @@ def resolve_namespaces(
                     "strategy_type": strategy["type"],
                     "template": template,
                     "namespace": namespace,
-                    "resolvable": not _PLACEHOLDER.search(namespace),
+                    "resolvable": (
+                        not _has_placeholder(namespace) and (not session_id or session_scoped)
+                    ),
                     "prefix": prefix,
                 }
             )
     return resolved
 
 
-def _resolve_template(template: str, actor_id: str) -> tuple[str, bool]:
+def _resolve_template(
+    template: str,
+    actor_id: str,
+    session_id: str | None = None,
+    strategy_id: str | None = None,
+) -> tuple[str, bool]:
     """Substitute the actor, then drop trailing placeholder-only segments.
 
     Returns ``(namespace, prefix)`` — ``prefix`` is True when segments were
     dropped, i.e. the namespace addresses a subtree rather than one leaf.
     """
     namespace = template.replace("{actorId}", actor_id)
+    if strategy_id:
+        namespace = namespace.replace("{memoryStrategyId}", strategy_id)
+    if session_id:
+        # Exact session reads must never collapse unresolved variables into a prefix.
+        return namespace.replace("{sessionId}", session_id), False
     segments = namespace.split("/")
     trimmed = list(segments)
-    while len(trimmed) > 2 and _PLACEHOLDER.search(trimmed[-1]):
+    while len(trimmed) > 2 and _has_placeholder(trimmed[-1]):
         trimmed.pop()
     if len(trimmed) == len(segments):
         return namespace, False
     return "/".join(trimmed), True
+
+
+RECORD_TYPE_KEY = "x-amz-agentcore-memory-recordType"
+
+
+def _record_type_filter(record_type: str | None) -> dict[str, Any]:
+    if record_type is None:
+        return {}
+    return {
+        "metadataFilters": [{
+            "left": {"metadataKey": RECORD_TYPE_KEY},
+            "operator": "EQUALS_TO",
+            "right": {"metadataValue": {"stringValue": record_type}},
+        }]
+    }
 
 
 def _record(raw: dict[str, Any]) -> dict[str, Any]:
@@ -435,7 +483,12 @@ def _record(raw: dict[str, Any]) -> dict[str, Any]:
     # parsed object for record detail, and `raw_text` never loses the original.
     stored = (raw.get("content") or {}).get("text", "")
     display, structured = decode_record_text(stored)
+    type_metadata = (raw.get("metadata") or {}).get(RECORD_TYPE_KEY)
+    record_type = raw.get("memoryRecordType")
+    if not record_type and isinstance(type_metadata, dict):
+        record_type = type_metadata.get("stringValue")
     return {
+        "record_type": record_type if isinstance(record_type, str) else None,
         "record_id": raw.get("memoryRecordId"),
         "text": display,
         "structured": structured,
@@ -455,13 +508,16 @@ def list_records(
     next_token: str | None = None,
     max_results: int | None = None,
     memory_id: str | None = None,
+    record_type: str | None = None,
+    exact_namespace: bool = False,
 ) -> dict[str, Any]:
     mem_id = memory_id or require_memory_id(workspace)
     kwargs: dict[str, Any] = {
         "memoryId": mem_id,
-        "namespacePath": namespace,
+        "namespace" if exact_namespace else "namespacePath": namespace,
         "maxResults": _page_size(max_results),
         **_token(next_token),
+        **_record_type_filter(record_type),
     }
     if strategy_id:
         kwargs["memoryStrategyId"] = strategy_id
@@ -480,9 +536,12 @@ def search_records(
     top_k: int = 5,
     strategy_id: str | None = None,
     memory_id: str | None = None,
+    record_type: str | None = None,
 ) -> dict[str, Any]:
     mem_id = memory_id or require_memory_id(workspace)
-    criteria: dict[str, Any] = {"searchQuery": query, "topK": top_k}
+    criteria: dict[str, Any] = {
+        "searchQuery": query, "topK": top_k, **_record_type_filter(record_type)
+    }
     if strategy_id:
         criteria["memoryStrategyId"] = strategy_id
     page = data_client(workspace).retrieve_memory_records(

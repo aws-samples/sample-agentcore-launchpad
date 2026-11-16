@@ -4,9 +4,11 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { api, type MemoryActor, type MemoryEvent, type MemorySessionRow } from "../../../lib/api";
+import { MemoryRecordText } from "../../../components/MemoryRecordText";
+import { summaryNamespaceKey } from "../../../lib/memory-summary";
 import { fmtTime } from "../../format";
-import { Alert, Button, Card, LinkButton, SearchInput, Spin, Tag } from "../../ui";
-import { actorText, agentLabel, fmtBytes, shortId, type TokenPaged, useTokenPaged } from "./common";
+import { Alert, Button, Card, FilterSelect, LinkButton, SearchInput, Spin, Tag } from "../../ui";
+import { actorText, agentLabel, fmtBytes, shortId, type SessionSummaryView, type TokenPaged, useSessionSummary, useTokenPaged } from "./common";
 import { LoadMore } from "./widgets";
 
 /** The clamp shows ~3 lines; pretty-printed JSON can exceed that in far fewer
@@ -104,9 +106,45 @@ interface Props {
  * drill-down mirrors that hierarchy exactly: actor → session → event. The actor
  * is the platform's scoped `<agent>__<human>` id, decoded for display.
  */
+export function SessionSummary({ summary }: { summary: SessionSummaryView }) {
+  const { t } = useTranslation();
+  if (summary.status === "idle") return null;
+  return (
+    <section className="v2-stack" style={{ gap: 10, marginBottom: 16 }} data-testid="v2-memory-full-summary">
+      <div className="v2-row" style={{ justifyContent: "space-between", gap: 8 }}>
+        <b>{t("memoryPage.fullSummary.title")}</b>
+        <Button size="sm" disabled={summary.status === "loading"} onClick={summary.refresh}>{t("v2.common.refresh")}</Button>
+      </div>
+      <p className="v2-muted" style={{ margin: 0 }}>{t("memoryPage.fullSummary.description")}</p>
+      {summary.namespaces.length > 1 && (
+        <FilterSelect label={t("memoryPage.long.strategyLabel")} value={summary.selected ? summaryNamespaceKey(summary.selected) : ""}
+          onChange={summary.select} options={summary.namespaces.map((n) => ({ value: summaryNamespaceKey(n),
+            label: `${n.strategy_name ?? n.strategy_id}${n.source ? ` · ${t(`memoryPage.fullSummary.source.${n.source}`)}` : ""}` }))} />
+      )}
+      {summary.status === "loading" && <div role="status"><Spin /> {t("v2.common.loading")}</div>}
+      {summary.status === "unavailable" && <Alert tone="info">{t("memoryPage.fullSummary.unavailable")}</Alert>}
+      {summary.status === "pending" && <Alert tone="info">{t("memoryPage.fullSummary.pending")}</Alert>}
+      {summary.warning && <Alert tone="warn">{t("memoryPage.fullSummary.sharedUnavailable", { msg: summary.warning })}</Alert>}
+      {summary.error && <Alert tone="error" action={<LinkButton onClick={summary.refresh}>{t("v2.common.retry")}</LinkButton>}>
+        {t("memoryPage.loadFailed", { msg: summary.error })}
+      </Alert>}
+      {summary.records.map((record, index) => (
+        <div key={record.record_id ?? index} className="v2-memory-body">
+          <Tag tone="blue">{t("memoryPage.fullSummary.title")}</Tag>
+          {record.source && <Tag tone="gray">{t(`memoryPage.fullSummary.source.${record.source}`)}</Tag>}
+          <MemoryRecordText text={record.text} />
+          <details><summary>{t("v2.memory.raw")}</summary><pre className="v2-pre">{record.raw_text}</pre></details>
+        </div>
+      ))}
+      <LoadMore token={summary.token} loading={summary.loadingMore} onClick={summary.loadMore} />
+    </section>
+  );
+}
+
 export function ShortTermTab({ actors, actorId, sessionId, onSelectActor, onSelectSession }: Props) {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
+  const summary = useSessionSummary(actorId, sessionId);
 
   const sessions = useTokenPaged<MemorySessionRow>(
     actorId ? (token) => api.memorySessions(actorId, token) : null,
@@ -227,6 +265,7 @@ export function ShortTermTab({ actors, actorId, sessionId, onSelectActor, onSele
             {shortId(sessionId, 12)}
           </div>
         )}
+        <SessionSummary summary={summary} />
         <div className="v2-memory-list v2-memory-timeline">
           {!sessionId ? (
             <div className="v2-memory-empty">{t("memoryPage.short.pickSession")}</div>

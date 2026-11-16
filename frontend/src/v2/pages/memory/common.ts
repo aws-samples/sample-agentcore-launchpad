@@ -1,7 +1,10 @@
 import type { TFunction } from "i18next";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { errorMessage, type MemoryActor } from "../../../lib/api";
+import { api, errorMessage, type MemoryActor, type MemoryNamespace, type MemoryReadScope, type MemoryRecord } from "../../../lib/api";
+import { MemoryRequestScope, summaryNamespaceKey, summaryNamespaces, summaryPageStatus } from "../../../lib/memory-summary";
+import { useProject } from "../../../workspace/project-context";
+import { useWorkspace } from "../../../workspace/workspace-context";
 import type { TagTone } from "../../ui";
 
 /** Memory / strategy status → Tag tone (CREATING / DELETING and anything the
@@ -118,5 +121,109 @@ export function useTokenPaged<T>(fetchPage: Fetcher<T> | null, key: string): Tok
     error,
     loadMore: () => run(token, true),
     reload: () => run(null, false),
+  };
+}
+
+
+/** Pin sequential reads to this console's selection, not another tab's storage. */
+export function useMemoryReadScope(): MemoryReadScope {
+  const { current: workspace } = useWorkspace();
+  const { current: project } = useProject();
+  const workspaceId = workspace?.id;
+  const projectId = project?.id;
+  return useMemo(() => ({ workspaceId, projectId }), [workspaceId, projectId]);
+}
+
+/** Scope changes invalidate in-flight work during render, before effects run. */
+export function useMemoryRequestScope(key: string): MemoryRequestScope {
+  const ref = useRef<MemoryRequestScope | null>(null);
+  if (ref.current === null) ref.current = new MemoryRequestScope();
+  const scope = ref.current;
+  scope.enter(key);
+  useEffect(() => () => scope.invalidate(), [scope]);
+  return scope;
+}
+
+export interface SessionSummaryView {
+  status: "idle" | "loading" | "unavailable" | "pending" | "ready" | "error";
+  namespaces: MemoryNamespace[];
+  selected: MemoryNamespace | null;
+  records: MemoryRecord[];
+  token: string | null;
+  error: string | null;
+  warning: string | null;
+  loadingMore: boolean;
+  refresh: () => void;
+  select: (key: string) => void;
+  loadMore: () => void;
+}
+
+type SummaryData = Omit<SessionSummaryView, "refresh" | "select" | "loadMore"> & { key: string };
+
+function emptySummary(key: string, status: SessionSummaryView["status"]): SummaryData {
+  return { key, status, namespaces: [], selected: null, records: [], token: null, error: null, warning: null, loadingMore: false };
+}
+
+/** The session inspector reads an exact AWS summary namespace, never an actor prefix. */
+export function useSessionSummary(actorId: string | null, sessionId: string | null): SessionSummaryView {
+  const [selection, setSelection] = useState("");
+  const [revision, setRevision] = useState(0);
+  const readScope = useMemoryReadScope();
+  const key = JSON.stringify([readScope.workspaceId, readScope.projectId, actorId, sessionId, selection, revision]);
+  const scope = useMemoryRequestScope(key);
+  const [data, setData] = useState<SummaryData>(() => emptySummary("", "idle"));
+
+  useEffect(() => {
+    const current = scope.begin();
+    const base = emptySummary(key, actorId && sessionId ? "loading" : "idle");
+    setData(base);
+    if (!actorId || !sessionId || !readScope.workspaceId || !readScope.projectId) return;
+    const load = async () => {
+      const response = await api.memoryNamespaces(actorId, sessionId, readScope);
+      const warning = response.shared_error ?? null;
+      if (!current()) return;
+      const namespaces = summaryNamespaces(response.items);
+      const selected = namespaces.find((n) => summaryNamespaceKey(n) === selection) ?? namespaces[0] ?? null;
+      setData({ ...base, warning, namespaces, selected, status: selected ? "loading" : "unavailable" });
+      if (!selected) return;
+      const page = await api.memoryRecords({
+        actor_id: actorId, session_id: sessionId, namespace: selected.namespace,
+        strategy_id: selected.strategy_id ?? undefined, record_type: "FULL_SESSION", source: selected.source,
+      }, null, readScope);
+      if (!current()) return;
+      setData({ ...base, namespaces, selected, records: page.items, token: page.next_token,
+        warning: page.shared_error ?? warning, status: summaryPageStatus(page.items) });
+    };
+    void load().catch((err: unknown) => {
+      if (current()) setData((prev) => ({ ...prev, status: "error", error: errorMessage(err) }));
+    });
+  }, [actorId, sessionId, selection, key, scope, readScope]);
+
+  // Hide an earlier session/strategy immediately, not one render after its key changes.
+  const shown = data.key === key ? data : emptySummary(key, actorId && sessionId ? "loading" : "idle");
+  return {
+    ...shown,
+    refresh: () => setRevision((n) => n + 1),
+    select: setSelection,
+    loadMore: () => {
+      if (!actorId || !sessionId || !shown.selected || !shown.token || shown.loadingMore) return;
+      const selected = shown.selected;
+      const current = scope.begin();
+      setData((prev) => ({ ...prev, loadingMore: true, error: null }));
+      api.memoryRecords({
+        actor_id: actorId, session_id: sessionId, namespace: selected.namespace,
+        strategy_id: selected.strategy_id ?? undefined, record_type: "FULL_SESSION", source: selected.source,
+      }, shown.token, readScope)
+        .then((page) => {
+          if (current()) setData((prev) => {
+            const records = [...prev.records, ...page.items];
+            return { ...prev, records, token: page.next_token, status: summaryPageStatus(records),
+              warning: page.shared_error ?? prev.warning, loadingMore: false };
+          });
+        })
+        .catch((err: unknown) => {
+          if (current()) setData((prev) => ({ ...prev, status: "error", error: errorMessage(err), loadingMore: false }));
+        });
+    },
   };
 }

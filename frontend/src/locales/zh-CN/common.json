@@ -5022,6 +5022,20 @@
     "loadMore": "加载更多",
     "loadFailed": "读取记忆失败：{{msg}}",
     "errorTitle": "无法读取记忆",
+    "fullSummary": {
+      "title": "完整会话摘要",
+      "description": "AWS 持续维护整场会话的摘要。新增事件后，可刷新读取当前可用的最新摘要。",
+      "unavailable": "未配置可用的会话摘要策略。摘要命名空间必须同时标识参与者和会话。",
+      "pending": "暂时没有完整会话摘要。AWS 会异步生成和更新摘要，请稍后刷新。",
+      "sharedUnavailable": "无法读取共享记忆：{{msg}}。仍可查看项目记忆。",
+      "filterLabel": "记录类型",
+      "allRecords": "全部记录",
+      "onlyFull": "仅完整会话摘要",
+      "source": {
+        "project": "项目记忆",
+        "shared": "共享记忆"
+      }
+    },
     "notConfiguredTitle": "尚未创建记忆资源",
     "notConfiguredBody": "该控制台读取一个共享的 AgentCore Memory 资源。请先执行引导脚本创建，然后刷新此页面。",
     "resources": {

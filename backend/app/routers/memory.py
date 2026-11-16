@@ -20,6 +20,7 @@ the shared memory answers 404. A shared project — every single-project workspa
 sees no ``source`` keys and exactly the responses it saw before.
 """
 
+import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -37,11 +38,14 @@ from app.services.agent_access import HiddenAgents
 from app.services.memory import is_eval_actor
 from app.services.visibility import Viewer, require_viewer
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 
+LEGACY_MEMORY_UNAVAILABLE = "Shared memory is unavailable. Please try again later."
 SOURCE_PROJECT = "project"
 SOURCE_SHARED = "shared"
 Source = Literal["project", "shared"]
+RecordType = Literal["FULL_SESSION"]
 # legacy actors merged into the first actors page: ListActors pages of 100
 _LEGACY_ACTOR_PAGES = 5
 
@@ -54,6 +58,7 @@ class SearchRequest(BaseModel):
     strategy_id: str | None = None
     namespace: str | None = None
     top_k: int = Field(default=5, ge=1, le=100)
+    record_type: RecordType | None = None
 
 
 def _guard(fn, *args, **kwargs):
@@ -395,15 +400,125 @@ def events(
     return {**page, "source": SOURCE_SHARED}
 
 
+def _require_session_visible(hidden: HiddenAgents, session_id: str) -> None:
+    if hidden.hides_session(session_id):
+        raise _actor_not_found()
+
+
+def _session_namespaces(
+    ws: WorkspaceScope, actor_id: str, session_id: str, memory_id: str | None = None
+) -> list[dict[str, Any]]:
+    # Identifiers are substituted into a path, not interpreted as path fragments.
+    if any(c in actor_id for c in "/{}"):
+        raise AppError("memory.namespace_required", "Invalid session actor.", status_code=400)
+    return _guard(
+        memory_console.resolve_namespaces, ws.context, actor_id,
+        session_id=session_id, memory_id=memory_id,
+    )
+
+
+def _optional_legacy_read(fn, *args, **kwargs) -> tuple[Any, str | None]:
+    try:
+        return fn(*args, **kwargs), None
+    except Exception as exc:
+        # A broken legacy resource must not hide a healthy project recap. Keep the
+        # failure explicit; never swallow an application authorization/validation error.
+        if not (mapped_aws_error(exc) or (
+            isinstance(exc, AppError) and exc.code == "memory.unavailable"
+        )):
+            raise
+        logger.warning("Optional shared memory lookup failed", exc_info=True)
+        return None, LEGACY_MEMORY_UNAVAILABLE
+
+
 @router.get("/namespaces")
 def namespaces(
     actor_id: str = Query(min_length=1),
+    session_id: str | None = Query(default=None, min_length=1, pattern=r"^[^/{}]+$"),
     db: Session = Depends(get_db),
     ws: WorkspaceScope = Depends(require_workspace),
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
-    _require_actor_visible(_hidden(db, ws, viewer), actor_id)
-    return {"items": _guard(memory_console.resolve_namespaces, ws.context, actor_id)}
+    hidden = _hidden(db, ws, viewer)
+    _require_actor_visible(hidden, actor_id)
+    if session_id is None:
+        return {"items": _guard(memory_console.resolve_namespaces, ws.context, actor_id)}
+    _require_session_visible(hidden, session_id)
+    items = _session_namespaces(ws, actor_id, session_id)
+    dual = _dual(ws)
+    shared_error = None
+    if dual is not None and dual.allows_actor(actor_id):
+        # Keep both resources selectable: a pre-migration recap may exist only in shared memory.
+        legacy, shared_error = _optional_legacy_read(
+            _session_namespaces, ws, actor_id, session_id, dual.memory_id
+        )
+        items = _tag(items, SOURCE_PROJECT) + _tag(legacy or [], SOURCE_SHARED)
+    for item in items:
+        _require_namespace_visible(hidden, item["namespace"])
+    return {"items": items, **({"shared_error": shared_error} if shared_error else {})}
+
+
+def _session_records(
+    ws: WorkspaceScope,
+    actor_id: str | None,
+    session_id: str,
+    strategy_id: str | None,
+    namespace: str | None,
+    next_token: str | None,
+    max_results: int | None,
+    source: Source | None,
+    record_type: RecordType | None,
+    hidden: HiddenAgents,
+) -> dict[str, Any]:
+    if not actor_id:
+        raise AppError(
+            "memory.namespace_required", "Session reads require actor_id.", status_code=400
+        )
+    dual = _dual(ws)
+    memory_id = _shared_for_actor(dual, actor_id) if source == SOURCE_SHARED else None
+    candidates = _session_namespaces(ws, actor_id, session_id, memory_id)
+    usable = [c for c in candidates if c["resolvable"] and not c["prefix"]
+              and (not strategy_id or c["strategy_id"] == strategy_id)
+              and (not namespace or c["namespace"] == namespace)]
+    if len(usable) != 1:
+        raise AppError(
+            "memory.namespace_required", "Select one exact session namespace.", status_code=400
+        )
+    selected = usable[0]
+    _require_namespace_visible(hidden, selected["namespace"])
+    options = {"record_type": record_type, "exact_namespace": True}
+    reader = (_tolerant if source != SOURCE_SHARED and dual is not None
+              and dual.allows_actor(actor_id) else _guard)
+    page = reader(
+        memory_console.list_records, ws.context, selected["namespace"],
+        selected["strategy_id"], next_token, max_results, memory_id=memory_id, **options,
+    )
+    if source == SOURCE_SHARED:
+        _tag(page["items"], SOURCE_SHARED)
+    elif dual is not None and dual.allows_actor(actor_id):
+        _tag(page["items"], SOURCE_PROJECT)
+        if source is None and not next_token:
+            legacy, shared_error = _optional_legacy_read(
+                _session_namespaces, ws, actor_id, session_id, dual.memory_id
+            )
+            if shared_error:
+                page["shared_error"] = shared_error
+            matches = [c for c in (legacy or []) if c["resolvable"] and not c["prefix"]
+                       and c["template"] == selected["template"]
+                       and c["strategy_name"] == selected["strategy_name"]
+                       and c["strategy_type"] == selected["strategy_type"]]
+            if len(matches) == 1:
+                shared = matches[0]
+                _require_namespace_visible(hidden, shared["namespace"])
+                old, shared_error = _optional_legacy_read(
+                    _tolerant, memory_console.list_records, ws.context, shared["namespace"],
+                    shared["strategy_id"], None, max_results, memory_id=dual.memory_id, **options,
+                )
+                if shared_error:
+                    page["shared_error"] = shared_error
+                if old is not None:
+                    page["items"] = _merge(page["items"], old["items"], "record_id")
+    return page
 
 
 @router.get("/records")
@@ -411,6 +526,8 @@ def records(
     actor_id: str | None = None,
     strategy_id: str | None = None,
     namespace: str | None = None,
+    session_id: str | None = Query(default=None, min_length=1, pattern=r"^[^/{}]+$"),
+    record_type: RecordType | None = None,
     next_token: str | None = None,
     max_results: int | None = Query(default=None, ge=1, le=100),
     source: Source | None = None,
@@ -421,23 +538,30 @@ def records(
     hidden = _hidden(db, ws, viewer)
     _require_actor_visible(hidden, actor_id)
     _require_namespace_visible(hidden, namespace)
+    if session_id is not None:
+        _require_session_visible(hidden, session_id)
+        return _session_records(
+            ws, actor_id, session_id, strategy_id, namespace, next_token, max_results,
+            source, record_type, hidden,
+        )
     resolved = _resolve_namespace(ws, namespace, actor_id, strategy_id)
     _require_namespace_visible(hidden, resolved)
+    options = {"record_type": record_type} if record_type else {}
     args = (ws.context, resolved, strategy_id, next_token, max_results)
     dual = _dual(ws)
     if source == SOURCE_SHARED:
         page = _guard(memory_console.list_records, ws.context, resolved, None,
                       next_token, max_results,
-                      memory_id=_shared_for_namespace(dual, resolved))
+                      memory_id=_shared_for_namespace(dual, resolved), **options)
         _tag(page["items"], SOURCE_SHARED)
         return page
-    page = _guard(memory_console.list_records, *args)
+    page = _guard(memory_console.list_records, *args, **options)
     if (dual is not None and source is None and not next_token
             and dual.allows_namespace(resolved)):
         # the shared memory's strategy ids differ from the project memory's: the
         # namespace alone selects there
         legacy = _tolerant(memory_console.list_records, ws.context, resolved, None, None,
-                           max_results, memory_id=dual.memory_id)
+                           max_results, memory_id=dual.memory_id, **options)
         page["items"] = _merge(page["items"], legacy["items"], "record_id")
     return page
 
@@ -454,6 +578,7 @@ def search_records(
     _require_namespace_visible(hidden, req.namespace)
     resolved = _resolve_namespace(ws, req.namespace, req.actor_id, req.strategy_id)
     _require_namespace_visible(hidden, resolved)
+    options = {"record_type": req.record_type} if req.record_type else {}
     out = _guard(
         memory_console.search_records,
         ws.context,
@@ -461,11 +586,12 @@ def search_records(
         req.query,
         req.top_k,
         req.strategy_id,
+        **options,
     )
     dual = _dual(ws)
     if dual is not None and dual.allows_namespace(resolved):
         legacy = _tolerant(memory_console.search_records, ws.context, resolved,
-                           req.query, req.top_k, None, memory_id=dual.memory_id)
+                           req.query, req.top_k, None, memory_id=dual.memory_id, **options)
         merged = _merge(out["items"], legacy["items"], "record_id")
         out["items"] = sorted(merged, key=lambda r: -(r.get("score") or 0))[: req.top_k]
     return out

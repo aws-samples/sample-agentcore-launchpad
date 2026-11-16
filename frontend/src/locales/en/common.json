@@ -5022,6 +5022,20 @@
     "loadMore": "LOAD MORE",
     "loadFailed": "Memory lookup failed: {{msg}}",
     "errorTitle": "Could not read memory",
+    "fullSummary": {
+      "title": "Full session summary",
+      "description": "AWS maintains one running recap of the whole session. Refresh after new events to read the latest available summary.",
+      "unavailable": "No usable session summary strategy is configured. Summary namespaces must identify both the actor and session.",
+      "pending": "No full session summary is available yet. AWS generates and updates summaries asynchronously; refresh later.",
+      "sharedUnavailable": "Shared memory could not be read: {{msg}}. Project memory remains available.",
+      "filterLabel": "Record type",
+      "allRecords": "All records",
+      "onlyFull": "Full session summaries only",
+      "source": {
+        "project": "Project memory",
+        "shared": "Shared memory"
+      }
+    },
     "notConfiguredTitle": "No memory resource yet",
     "notConfiguredBody": "This console reads one shared AgentCore Memory resource. Run the bootstrap to create it, then reload this page.",
     "resources": {
