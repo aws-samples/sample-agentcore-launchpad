@@ -19,7 +19,6 @@ the router can also read the old shared memory during a project's dual-read wind
 """
 
 import json
-import re
 from datetime import datetime
 from typing import Any
 
@@ -44,9 +43,25 @@ EXTRACTION_PAGE_MAX = 50
 # `Member must satisfy enum value set: [FAILED]`. Jobs of other statuses are
 # still listed — you just cannot filter *for* them.
 EXTRACTION_STATUS_FILTERS = ("FAILED",)
+
+
 # Namespace templates carry placeholders like ``{actorId}``; anything left after
 # substitution means we cannot build a concrete namespace for this actor.
-_PLACEHOLDER = re.compile(r"\{[^}]+\}")
+def _has_placeholder(value: str) -> bool:
+    """Match the old non-empty brace predicate without overlapping backtracking.
+
+    Each search advances beyond an empty pair or stops at the first closing
+    brace; no part of the input is rescanned for every unmatched opening brace.
+    """
+    start = value.find("{")
+    while start != -1:
+        end = value.find("}", start + 1)
+        if end == -1:
+            return False
+        if end > start + 1:
+            return True
+        start = value.find("{", end + 1)
+    return False
 
 
 def _iso(value: Any) -> str | None:
@@ -413,7 +428,7 @@ def resolve_namespaces(
                     "template": template,
                     "namespace": namespace,
                     "resolvable": (
-                        not _PLACEHOLDER.search(namespace) and (not session_id or session_scoped)
+                        not _has_placeholder(namespace) and (not session_id or session_scoped)
                     ),
                     "prefix": prefix,
                 }
@@ -440,7 +455,7 @@ def _resolve_template(
         return namespace.replace("{sessionId}", session_id), False
     segments = namespace.split("/")
     trimmed = list(segments)
-    while len(trimmed) > 2 and _PLACEHOLDER.search(trimmed[-1]):
+    while len(trimmed) > 2 and _has_placeholder(trimmed[-1]):
         trimmed.pop()
     if len(trimmed) == len(segments):
         return namespace, False

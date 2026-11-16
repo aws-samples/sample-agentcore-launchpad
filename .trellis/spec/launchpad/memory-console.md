@@ -118,8 +118,13 @@ During dual-read, session namespace discovery exposes both resources with
 `source=project|shared`; each resource resolves its own strategy identifier. Explicit
 shared selection is restricted to the current project's actors and does not mask AWS
 errors. Automatic session merges match strategy name/type/template rather than IDs.
-A failed optional legacy read reports `shared_error` while keeping the primary recap;
-application authorization/validation errors are never swallowed. Pagination preserves
+A failed optional legacy read reports a fixed, safe `shared_error` warning while
+keeping the primary recap. Never serialize an exception's message or `str(exc)` into
+this successful-response field: those can contain internal paths, traceback fragments
+or upstream diagnostics. `_optional_legacy_read` logs the full exception server-side
+and returns `LEGACY_MEMORY_UNAVAILABLE`; application authorization/validation errors
+are still re-raised, and explicit shared-read failures keep their normal error path.
+Pagination preserves
 the existing per-resource tokens; explicit shared reads can page shared records.
 
 The shared frontend loader pins workspace/project headers across discovery, records,
@@ -133,6 +138,16 @@ must leave a record-less summary pending. Use manual refresh only.
 
 Authoritative AWS source:
 https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/summary-strategy.html
+
+**Placeholder scanning must remain linear.** Actor/session substitutions can carry
+untrusted data even when the template comes from AWS. The old `\{[^}]+\}` search
+restarted on each unmatched opening brace and had quadratic worst-case behavior.
+`_has_placeholder` advances `str.find` beyond empty pairs or stops at the first closing
+brace. It preserves the old predicate, including nested braces and excluding `{}`,
+without overlapping backtracking. Use it for both resolvability and trailing-segment
+trimming; do not fix only one call site or weaken the unresolved-variable guard.
+Regression tests compare short inputs against the original predicate and instrument
+search offsets on long inputs rather than relying on flaky wall-clock thresholds.
 
 **Event payload normalization** (`_payload_entry` + `_decode_turn`):
 

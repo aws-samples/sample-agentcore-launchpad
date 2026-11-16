@@ -1,11 +1,14 @@
 """Full session summaries: exact namespaces, AWS filters and migration read safety."""
 
 import copy
+import re
+from itertools import product
 from types import SimpleNamespace
 
 import pytest
 from botocore.exceptions import ClientError
 
+from app.core.errors import AppError
 from app.routers import memory as router
 from app.services import memory_console as mc
 from app.services.project_memory import DualRead
@@ -258,7 +261,9 @@ def test_other_project_cannot_select_shared_session_memory(client, monkeypatch):
 
 
 @pytest.mark.parametrize("code", ["ResourceNotFoundException", "AccessDeniedException"])
-def test_legacy_discovery_failure_keeps_primary_candidates_and_records(client, monkeypatch, code):
+def test_legacy_discovery_failure_keeps_primary_candidates_and_records(
+    client, monkeypatch, code, caplog
+):
     data = dual_memory(monkeypatch)
     control = mc.control_client()
     original = control.get_memory
@@ -275,18 +280,22 @@ def test_legacy_discovery_failure_keeps_primary_candidates_and_records(client, m
     discovery = client.get("/api/memory/namespaces", params=params)
     assert discovery.status_code == 200
     assert len(discovery.json()["items"]) == 1
-    assert "legacy unavailable" in discovery.json()["shared_error"]
+    assert discovery.json()["shared_error"] == router.LEGACY_MEMORY_UNAVAILABLE
+    assert "legacy unavailable" not in discovery.text
+    assert "legacy unavailable" in caplog.text
+    assert caplog.records[-1].exc_info is not None
     res = client.get("/api/memory/records", params={**params, "record_type": "FULL_SESSION"})
     assert res.status_code == 200
     assert [r["record_id"] for r in res.json()["items"]] == [MEM_ID]
-    assert "legacy unavailable" in res.json()["shared_error"]
+    assert res.json()["shared_error"] == router.LEGACY_MEMORY_UNAVAILABLE
+    assert "legacy unavailable" not in res.text
     assert all(kw["memoryId"] == MEM_ID for op, kw in data.calls if op == "list_memory_records")
     # An explicit shared read still reports its failure; no success is fabricated.
     shared = client.get("/api/memory/records", params={**params, "source": "shared"})
     assert shared.status_code != 200
 
 
-def test_legacy_record_failure_does_not_hide_the_primary_recap(client, monkeypatch):
+def test_legacy_record_failure_does_not_hide_the_primary_recap(client, monkeypatch, caplog):
     data = dual_memory(monkeypatch)
 
     def list_memory_records(kwargs):
@@ -300,9 +309,82 @@ def test_legacy_record_failure_does_not_hide_the_primary_recap(client, monkeypat
     res = client.get("/api/memory/records", params=params)
     assert res.status_code == 200
     assert [r["record_id"] for r in res.json()["items"]] == [MEM_ID]
-    assert "legacy denied" in res.json()["shared_error"]
+    assert res.json()["shared_error"] == router.LEGACY_MEMORY_UNAVAILABLE
+    assert "legacy denied" not in res.text
+    assert "legacy denied" in caplog.text
+    assert caplog.records[-1].exc_info is not None
     shared = client.get("/api/memory/records", params={**params, "source": "shared"})
     assert shared.status_code == 403
+
+
+def test_placeholder_detection_preserves_the_old_predicate():
+    original = re.compile(r"\{[^}]+\}")
+    for length in range(8):
+        for chars in product("{}a", repeat=length):
+            text = "".join(chars)
+            assert mc._has_placeholder(text) == bool(original.search(text)), text
+    for text in ("{用户}", "{\n}", "{}", "{{}", "{}{{}", "x{actorId}/y{sessionId}"):
+        assert mc._has_placeholder(text) == bool(original.search(text)), text
+
+
+def test_placeholder_detection_advances_searches_on_long_inputs():
+    class TrackedText(str):
+        def __new__(cls, value):
+            instance = super().__new__(cls, value)
+            instance.starts = []
+            return instance
+
+        def find(self, substring, start=0):
+            self.starts.append(start)
+            return super().find(substring, start)
+
+    unmatched = TrackedText("{" * 200_000)
+    assert not mc._has_placeholder(unmatched)
+    assert unmatched.starts == [0, 1]  # do not restart at each opening brace
+    for raw, expected in (("{}" * 10_000, False), ("{}" * 10_000 + "{actorId}", True)):
+        text = TrackedText(raw)
+        assert mc._has_placeholder(text) is expected
+        assert text.starts == sorted(text.starts)
+        assert len(text.starts) <= len(text) + 1
+
+
+def test_namespace_resolution_handles_long_unmatched_braces_without_broadening():
+    actor = "{" * 200_000
+    template = "/summaries/{actorId}/{sessionId}"
+    namespace, prefix = mc._resolve_template(template, actor)
+    assert namespace == f"/summaries/{actor}" and prefix
+    strategies = [{"strategy_id": "summary", "name": "summary", "type": "SUMMARIZATION",
+                   "namespace_templates": [template + "/{custom}"], "namespaces": []}]
+    resolved = mc.resolve_namespaces(None, actor, strategies, session_id="session-1")
+    assert not resolved[0]["resolvable"] and not resolved[0]["prefix"]
+    assert resolved[0]["namespace"] == f"/summaries/{actor}/session-1/{{custom}}"
+
+
+def test_optional_internal_failures_keep_details_in_logs_only(caplog):
+    marker = "Traceback: synthetic internal path /private/service.py"
+
+    def failure():
+        raise RuntimeError(marker)
+
+    value, warning = router._optional_legacy_read(router._guard, failure)
+    assert value is None and warning == router.LEGACY_MEMORY_UNAVAILABLE
+    assert marker not in warning
+    assert marker in caplog.text
+    assert caplog.records[-1].exc_info is not None
+
+
+@pytest.mark.parametrize("code", ["memory.actor_not_found", "memory.namespace_required"])
+def test_optional_legacy_read_does_not_swallow_domain_refusals(code, caplog):
+    refusal = AppError(code, "refused")
+
+    def failure():
+        raise refusal
+
+    caplog.clear()
+    with pytest.raises(AppError) as caught:
+        router._optional_legacy_read(failure)
+    assert caught.value is refusal
+    assert not any(record.name == router.logger.name for record in caplog.records)
 
 
 def test_resolved_namespace_visibility_is_checked_before_reading(client, monkeypatch):

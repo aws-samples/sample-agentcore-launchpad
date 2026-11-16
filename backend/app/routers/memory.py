@@ -20,6 +20,7 @@ the shared memory answers 404. A shared project — every single-project workspa
 sees no ``source`` keys and exactly the responses it saw before.
 """
 
+import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -37,8 +38,10 @@ from app.services.agent_access import HiddenAgents
 from app.services.memory import is_eval_actor
 from app.services.visibility import Viewer, require_viewer
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 
+LEGACY_MEMORY_UNAVAILABLE = "Shared memory is unavailable. Please try again later."
 SOURCE_PROJECT = "project"
 SOURCE_SHARED = "shared"
 Source = Literal["project", "shared"]
@@ -424,7 +427,8 @@ def _optional_legacy_read(fn, *args, **kwargs) -> tuple[Any, str | None]:
             isinstance(exc, AppError) and exc.code == "memory.unavailable"
         )):
             raise
-        return None, getattr(exc, "message", None) or str(exc)
+        logger.warning("Optional shared memory lookup failed", exc_info=True)
+        return None, LEGACY_MEMORY_UNAVAILABLE
 
 
 @router.get("/namespaces")
