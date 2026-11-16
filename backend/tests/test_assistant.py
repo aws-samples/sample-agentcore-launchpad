@@ -856,20 +856,26 @@ def test_catalog_lists_builtin_and_third_party_evaluators_and_gates_existing_ids
     ``existing`` id outside the list is a reference error once the snapshot has one."""
     from app.evaluation import agentcore_eval as ac
 
+    # the region lists every documented built-in but one still rolling out
+    region = [e for e in {**ac.ALL_BUILTIN_EVALUATORS, **ac.TRAJECTORY_EVALUATORS}
+              if e != "Builtin.ContextRelevance"]
+
     class Control:
-        def __init__(self, fail=False):
+        def __init__(self, fail=False, builtins=region):
             self.fail = fail
+            self.builtins = builtins
 
         def list_evaluators(self, **kwargs):
             if self.fail:
                 raise RuntimeError("AccessDenied")
             return {"evaluators": [
+                {"evaluatorId": e, "evaluatorType": "Builtin"} for e in self.builtins
+            ] + [
                 {"evaluatorId": "ThirdParty.DeepEval.Toxicity", "level": "TRACE",
                  "status": "ACTIVE", "provider": "DeepEval"},
                 {"evaluatorId": "ThirdParty.AutoEval.Humor", "level": "TRACE",
                  "status": "CREATING", "provider": "AutoEval"},
                 {"evaluatorId": "mine-abc123", "evaluatorType": "Custom", "status": "ACTIVE"},
-                {"evaluatorId": "Builtin.Helpfulness", "level": "TRACE"},
             ]}
 
     class WS:
@@ -881,9 +887,15 @@ def test_catalog_lists_builtin_and_third_party_evaluators_and_gates_existing_ids
         mp.setattr(service, "control_client", lambda workspace: ok)
         listed = service.catalog_evaluators(WS(), warnings)
     ids = [e["evaluator_id"] for e in listed]
-    assert set(ac.ALL_BUILTIN_EVALUATORS) <= set(ids)
-    assert set(ac.TRAJECTORY_EVALUATORS) <= set(ids)
+    # a documented built-in the region does not offer yet is not proposed
+    assert [e for e in ids if e.startswith("Builtin.")] == region
+    assert "Builtin.ContextRelevance" not in ids
     assert ids.count("Builtin.Helpfulness") == 1  # the live listing does not duplicate it
+    # a listing that names no built-ins says nothing about them — it hides none
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(service, "control_client", lambda workspace: Control(builtins=[]))
+        unnamed = [e["evaluator_id"] for e in service.catalog_evaluators(WS(), warnings)]
+    assert set(ac.ALL_BUILTIN_EVALUATORS) | set(ac.TRAJECTORY_EVALUATORS) <= set(unnamed)
     assert "ThirdParty.DeepEval.Toxicity" in ids
     assert "ThirdParty.AutoEval.Humor" not in ids and "mine-abc123" not in ids
     assert warnings == []

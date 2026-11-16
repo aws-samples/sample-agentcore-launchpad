@@ -49,8 +49,11 @@ def normalize_online_evaluators(
 
     ``None``/empty falls back to :data:`ONLINE_EVAL_DEFAULT`. Inspecting a custom
     judge costs one ``GetEvaluator``, so it happens after dedup and the count cap
-    and only for non-``Builtin.`` ids — a built-in-only selection, the common
-    case, makes no AWS call at all.
+    and only for non-``Builtin.`` ids. A documented built-in this region does not
+    offer yet (``ac.region_builtins``) is refused here — one ``ListEvaluators``,
+    only for an explicit selection naming a built-in — instead of by
+    ``CreateOnlineEvaluationConfig`` after the caller's earlier steps ran. The
+    default fallback makes no AWS call at all.
 
     ``require_numeric`` additionally refuses a custom LLM judge whose rating scale
     is categorical (``{code_prefix}.evaluator_categorical``): a caller that compares
@@ -89,6 +92,16 @@ def normalize_online_evaluators(
             {"count": len(chosen)},
             status_code=400,
         )
+    builtins = [e for e in chosen if e in ac.ALL_BUILTIN_EVALUATORS]
+    offered = ac.region_builtins(control) if builtins else None
+    for evaluator in builtins:
+        if offered and evaluator not in offered:
+            raise AppError(
+                code,
+                f"{evaluator} is not available in this region yet — pick another evaluator",
+                {"evaluator": evaluator, "reason": "region_unavailable"},
+                status_code=400,
+            )
     for evaluator in (e for e in chosen if not e.startswith("Builtin.")):
         _assert_no_ground_truth(
             control, evaluator, code,

@@ -895,6 +895,21 @@ def update_code_evaluator(
     )
 
 
+def region_builtins(client: Any) -> set[str] | None:
+    """The built-ins this region's ListEvaluators names; None (check nothing) when the
+    listing fails or names none — it then says nothing about them. A documented
+    built-in can still be rolling out in a region (``Builtin.ContextRelevance`` in
+    us-west-2/us-east-2 as of 2026-11-12), and the service refuses a whole batch or
+    online config over one it does not have. One page: the service lists built-ins
+    first, and they fit well within it."""
+    try:
+        listed = client.list_evaluators(maxResults=100).get("evaluators") or []
+        ids = {str(e.get("evaluatorId") or "") for e in listed}
+    except Exception:
+        return None
+    return {e for e in ids if e.startswith("Builtin.")} or None
+
+
 def list_evaluators(client: Any) -> list[dict[str, Any]]:
     """All evaluators in the account/region (built-ins first, then custom)."""
     out: list[dict[str, Any]] = []

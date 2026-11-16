@@ -190,7 +190,7 @@ def _assert_target_references(
     offered = None
     if any(e in coverage.KNOWN_BUILTINS for e in evaluators):
         control = control_client(ws.context)
-        offered = _region_builtins(control)
+        offered = ac.region_builtins(control)
     for evaluator in dict.fromkeys(evaluators):
         if evaluator in hidden:
             # workspace isolation: a hidden custom evaluator is a missing one
@@ -279,18 +279,6 @@ def _assert_target_references(
             "evaluator.",
             {"evaluators": problems}, status_code=422,
         )
-
-
-def _region_builtins(control: Any) -> set[str] | None:
-    """The built-ins this region's ListEvaluators names; None (check nothing) when the
-    listing fails or names none — it then says nothing about them. One page: the
-    service lists built-ins first, and they fit well within it."""
-    try:
-        listed = control.list_evaluators(maxResults=100).get("evaluators") or []
-        ids = {str(e.get("evaluatorId") or "") for e in listed}
-    except Exception:
-        return None
-    return {e for e in ids if e.startswith("Builtin.")} or None
 
 
 def _evaluator_missing(evaluator: str) -> AppError:
