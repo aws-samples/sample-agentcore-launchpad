@@ -2817,10 +2817,13 @@ export interface MemoryNamespace {
   /** true when trailing `{sessionId}`-style segments were dropped, so the
    *  namespace addresses every session of the actor (AWS matches by prefix) */
   prefix: boolean;
+  source?: MemorySource;
 }
 
 export interface MemoryRecord {
   record_id: string | null;
+  /** AWS system metadata; older records may not declare a type. */
+  record_type?: string | null;
   /** Human-readable line: prose for SEMANTIC records, the extracted display
    *  field for strategies that store a structured object. */
   text: string;
@@ -2843,13 +2846,20 @@ export interface MemoryPage<T> {
   next_token: string | null;
 }
 
+export interface MemoryReadScope {
+  workspaceId?: string | null;
+  projectId?: string | null;
+}
+
 export interface MemoryRecordPage extends MemoryPage<MemoryRecord> {
   namespace: string;
+  shared_error?: string;
   query?: string;
 }
 
 export interface MemorySearchInput {
   query: string;
+  record_type?: "FULL_SESSION";
   actor_id?: string | null;
   strategy_id?: string | null;
   namespace?: string | null;
@@ -7190,21 +7200,25 @@ export const api = {
         next_token: nextToken,
       })}`,
     ),
-  memoryNamespaces: (actorId: string) =>
-    request<{ items: MemoryNamespace[] }>(
-      `/api/memory/namespaces${memoryQuery({ actor_id: actorId })}`,
+  memoryNamespaces: (actorId: string, sessionId?: string, scope?: MemoryReadScope) =>
+    request<{ items: MemoryNamespace[]; shared_error?: string }>(
+      `/api/memory/namespaces${memoryQuery({ actor_id: actorId, session_id: sessionId })}`,
+      { headers: { ...pinnedWorkspace(scope?.workspaceId), ...pinnedProject(scope?.projectId) } },
     ),
   memoryRecords: (
-    params: { namespace?: string; actor_id?: string; strategy_id?: string },
+    params: { namespace?: string; actor_id?: string; strategy_id?: string; session_id?: string; record_type?: "FULL_SESSION"; source?: MemorySource },
     nextToken?: string | null,
+    scope?: MemoryReadScope,
   ) =>
     request<MemoryRecordPage>(
       `/api/memory/records${memoryQuery({ ...params, next_token: nextToken })}`,
+      { headers: { ...pinnedWorkspace(scope?.workspaceId), ...pinnedProject(scope?.projectId) } },
     ),
-  memorySearchRecords: (input: MemorySearchInput) =>
+  memorySearchRecords: (input: MemorySearchInput, scope?: MemoryReadScope) =>
     request<MemoryRecordPage>("/api/memory/records/search", {
       method: "POST",
       body: JSON.stringify(input),
+      headers: { ...pinnedWorkspace(scope?.workspaceId), ...pinnedProject(scope?.projectId) },
     }),
   memoryResources: (projectId?: string | null) =>
     request<MemoryResourceList>("/api/memory/resources", { headers: pinnedProject(projectId) }),

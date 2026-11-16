@@ -47,9 +47,9 @@ GET  /api/memory/overview
 GET  /api/memory/actors            ?next_token&max_results
 GET  /api/memory/sessions          ?actor_id*&next_token&max_results
 GET  /api/memory/events            ?actor_id*&session_id*&include_payloads&next_token&max_results
-GET  /api/memory/namespaces        ?actor_id*
-GET  /api/memory/records           ?actor_id|namespace&strategy_id&next_token&max_results
-POST /api/memory/records/search    {query*, actor_id, strategy_id, namespace, top_k}
+GET  /api/memory/namespaces        ?actor_id*&session_id
+GET  /api/memory/records           ?actor_id|namespace&strategy_id&session_id&record_type&source&next_token&max_results
+POST /api/memory/records/search    {query*, actor_id, strategy_id, namespace, top_k, record_type}
 GET  /api/memory/extraction-jobs   ?actor_id&session_id&strategy_id&status&next_token&max_results
 ```
 
@@ -91,6 +91,48 @@ being re-derived in TypeScript. Any remaining `{...}` placeholder (e.g.
 `{sessionId}`) sets `resolvable: False`; the UI disables those instead of sending
 a broken namespace. Resolution order on `/records` and `/records/search`:
 explicit `namespace` → `(actor_id[, strategy_id])` → error.
+
+**Full session summaries (V2/V3).** Summary-enabled memories automatically maintain
+one running `FULL_SESSION` record per session, alongside summary chunks. No new
+strategy, extraction call, indexed key or permission is required. The list/search
+`record_type` accepts only `FULL_SESSION` or omission (all records); reject unknown
+values with 422. Filter using `x-amz-agentcore-memory-recordType`, `EQUALS_TO`, and
+`right.metadataValue.stringValue`: listing puts `metadataFilters` at the operation
+root; retrieval puts it inside `searchCriteria`. Apply it to every migration read,
+not just the primary. `_record` adds nullable `record_type` from the metadata's
+`stringValue` (or a future top-level field), retaining original metadata/raw text.
+Unknown or absent record types must not be relabelled as summary chunks.
+
+With `session_id`, namespace resolution binds `{actorId}`, `{sessionId}` and
+`{memoryStrategyId}` from server-owned templates; it never drops remaining variables
+into a prefix. Templates lacking actor/session scoping or retaining unknown variables
+are unresolvable. Session records require an actor and one exact resolved candidate
+(selected strategy and/or matching explicit namespace); another session's namespace
+is refused with `memory.namespace_required` (400). Reject path separators/braces in
+session identifiers (422), and in substituted session actors (400). Preserve trailing
+slashes and use `ListMemoryRecords.namespace`, not `namespacePath`, for session reads.
+Check hidden actors, hidden sessions and the resolved namespace before data-plane
+reads. Actor-only callers retain their prefix behavior.
+
+During dual-read, session namespace discovery exposes both resources with
+`source=project|shared`; each resource resolves its own strategy identifier. Explicit
+shared selection is restricted to the current project's actors and does not mask AWS
+errors. Automatic session merges match strategy name/type/template rather than IDs.
+A failed optional legacy read reports `shared_error` while keeping the primary recap;
+application authorization/validation errors are never swallowed. Pagination preserves
+the existing per-resource tokens; explicit shared reads can page shared records.
+
+The shared frontend loader pins workspace/project headers across discovery, records,
+refresh and pagination; its request identity also includes actor/session/namespace.
+Changing scope hides stale summary data immediately and invalidates pending requests.
+Long-term list/search filters default to all records and reset stale retrieval/detail
+state. In-flight searches use the same request-generation guard. Keep summary loading
+independent of events, expose unavailable/pending/error states, retain the raw content,
+and never label record creation time as last update. Even empty continuation pages
+must leave a record-less summary pending. Use manual refresh only.
+
+Authoritative AWS source:
+https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/summary-strategy.html
 
 **Event payload normalization** (`_payload_entry` + `_decode_turn`):
 
@@ -189,6 +231,14 @@ switching tabs does not refetch.
   because the preview API rejects empty strings inside `filter`.
 
 ### 6. Tests Required
+
+`backend/tests/test_memory_full_session.py` pins system metadata projection, exact
+platform/AWS-default namespace binding, unsupported templates, pagination, validation,
+per-memory strategy IDs, explicit shared ownership, optional legacy failures and
+resolved-namespace visibility. `test_agent_visibility.py` also pins hidden-session
+refusals on session namespace and record reads. Frontend tests cover typed requests
+(including a cross-tab storage change), request-generation invalidation, empty pages
+and V2/V3 static summary states without adding DOM dependencies.
 
 `backend/tests/test_memory_console.py`, hermetic (stubbed clients, no AWS):
 

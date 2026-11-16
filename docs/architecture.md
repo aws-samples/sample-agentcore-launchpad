@@ -4284,6 +4284,31 @@ the console modules stays intact.
 | `long-term` | records for a resolved namespace, plus semantic retrieval with relevance scores. Templates that end in `{sessionId}` segments (summaries, episodes) resolve to the actor-level prefix (`/summaries/<actor>`, flagged `prefix`) because both APIs match namespaces by prefix — the picker reads every session's records at once; only a placeholder in the middle of a path is unresolvable | `ListMemoryRecords`, `RetrieveMemoryRecords` |
 | `resources` | every memory in the account/region (workspace default marked, plus the agents whose spec pins each one); create a memory (name, description, event expiry, strategy picks that mirror the bootstrap layout, and — API-only for now — up to 5 flexible namespace variable keys: CreateMemory `namespaceKeys` with optional `allowedValues`/`regexPattern` rules; the platform's canned strategies don't reference them and the invoke path supplies no `extractionConfig.namespaceVariables` on CreateEvent, so the console form hides the editor (`SHOW_NS_KEYS` in `ResourcesTab.tsx`) and the keys are pre-registered for externally managed templates); edit one's description and event expiry (7–365 days) inline — `UpdateMemory` is sent exactly `memoryId` + the changed fields and **never** `namespaceKeys`, which the API documents as replacing the existing set wholesale (an omitted key is removed), then the detail is read back with `GetMemory`; strategies, namespace variables and the execution role are not editable, editing is never blocked, and the confirm dialog names the agents on the memory since a shorter expiry reaches all of them; and delete one — the workspace default and any memory a live agent references are delete-protected | `ListMemories`, `GetMemory`, `CreateMemory`, `UpdateMemory`, `DeleteMemory` |
 
+**Full session summaries (V2 and V3).** The selected session's detail pane reads the
+AWS-generated running recap separately from the event timeline. Summary-enabled
+memories produce it automatically; no bootstrap setting or extraction job is added.
+`GET /api/memory/namespaces?actor_id=…&session_id=…` binds the actor, session and
+strategy ID server-side. Session reads through `/api/memory/records` require one
+exact resolved namespace and use `ListMemoryRecords.namespace`, never an actor-wide
+prefix. Unsupported templates remain unavailable instead of broadening the read.
+Multiple strategies and migration-source namespaces are selectable independently.
+Loading, pending generation and read failure are distinct, with user-triggered
+refresh/retry and no background polling. `created_at` is still record creation time,
+not an invented last-updated timestamp.
+
+Both consoles' long-term lists and semantic searches offer a default-all versus
+full-session-only filter. `record_type=FULL_SESSION` becomes an AWS metadata filter
+on `x-amz-agentcore-memory-recordType`: at the root for `ListMemoryRecords`, inside
+`searchCriteria` for `RetrieveMemoryRecords`. The nullable record projection derives
+`record_type` from that system metadata (the pinned SDK does not declare a top-level
+field), preserving original metadata and content. Missing/unknown types are not
+labelled as full summaries. Reads pin the initiating workspace/project; stale
+session/strategy/filter responses are discarded. Session reads retain hidden-actor,
+hidden-session and resolved-namespace checks. During project migration each memory
+resolves its own strategy ID; a broken legacy resource reports `shared_error` without
+hiding a healthy project recap. Explicit shared reads still report their own errors.
+These additions are optional, leaving existing unfiltered requests unchanged.
+
 `ListEvents` payload entries are a tagged union — `conversational`, `blob` and, since
 the August 2026 Memory release, `json` (`{json: {content: <any JSON value>}}`). The
 console projects each to `{kind, role, text, parts, blob_bytes}`: a `json` entry keeps

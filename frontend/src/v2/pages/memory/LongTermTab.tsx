@@ -12,10 +12,11 @@ import {
 } from "../../../lib/api";
 import { MemoryRecordText } from "../../../components/MemoryRecordText";
 import { memoryRecordPlainText } from "../../../lib/memory-record";
+import { isFullSession, type MemoryRecordSelection, scopedMemoryRecord } from "../../../lib/memory-summary";
 import { fmtTime } from "../../format";
 import { useV2Toast } from "../../hooks";
-import { Alert, Button, Card, type Column, Descriptions, Drawer, FilterSelect, LinkButton, Table } from "../../ui";
-import { actorText, fmtRelevance, shortId, type TokenPaged, useTokenPaged } from "./common";
+import { Alert, Button, Card, type Column, Descriptions, Drawer, FilterSelect, LinkButton, Table, Tag } from "../../ui";
+import { actorText, fmtRelevance, shortId, type TokenPaged, useMemoryReadScope, useMemoryRequestScope, useTokenPaged } from "./common";
 import { LoadMore } from "./widgets";
 
 const TOP_K = [3, 5, 10, 20];
@@ -34,6 +35,7 @@ function RecordDrawer({
     <Drawer open={record !== null} title={t("memoryPage.long.detailTitle")} onClose={onClose} testId="v2-memory-record">
       {record && (
         <div className="v2-stack" style={{ gap: 16 }}>
+          {isFullSession(record) && <Tag tone="blue">{t("memoryPage.fullSummary.title")}</Tag>}
           <Descriptions
             one
             items={[
@@ -117,9 +119,14 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
   const [nsError, setNsError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [topK, setTopK] = useState(5);
-  const [results, setResults] = useState<MemoryRecord[] | null>(null);
+  const [recordType, setRecordType] = useState<"FULL_SESSION" | undefined>();
+  const readScope = useMemoryReadScope();
+  const requestKey = JSON.stringify([readScope.workspaceId, readScope.projectId, actorId, strategyId, recordType]);
+  const requestScope = useMemoryRequestScope(requestKey);
+  const [results, setResults] = useState<{ key: string; items: MemoryRecord[] } | null>(null);
   const [searching, setSearching] = useState(false);
-  const [detail, setDetail] = useState<MemoryRecord | null>(null);
+  const [detail, setDetail] = useState<MemoryRecordSelection | null>(null);
+  const shownDetail = scopedMemoryRecord(detail, requestKey);
 
   useEffect(() => {
     setNamespaces([]);
@@ -127,22 +134,22 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
     if (!actorId) return;
     let live = true;
     api
-      .memoryNamespaces(actorId)
+      .memoryNamespaces(actorId, undefined, readScope)
       .then((res) => live && setNamespaces(res.items))
       .catch((err: unknown) => live && setNsError(errorMessage(err)));
     return () => {
       live = false;
     };
-  }, [actorId]);
+  }, [actorId, readScope]);
 
   const selected = namespaces.find((n) => n.strategy_id === strategyId) ?? null;
   const usable = selected?.resolvable ? selected : null;
 
   const records = useTokenPaged<MemoryRecord>(
     actorId && usable
-      ? (token) => api.memoryRecords({ actor_id: actorId, strategy_id: usable.strategy_id ?? undefined }, token)
+      ? (token) => api.memoryRecords({ actor_id: actorId, strategy_id: usable.strategy_id ?? undefined, record_type: recordType }, token, readScope)
       : null,
-    `records:${actorId ?? ""}:${usable?.strategy_id ?? ""}`,
+    `records:${requestKey}:${usable?.strategy_id ?? ""}`,
   );
 
   // Listing and retrieval are different questions; a stale result set next to a
@@ -150,7 +157,8 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
   useEffect(() => {
     setResults(null);
     setDetail(null);
-  }, [actorId, strategyId]);
+    setSearching(false);
+  }, [requestKey]);
 
   const strategyName = useMemo(() => {
     const names = new Map<string, string>();
@@ -161,6 +169,7 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
 
   const runSearch = () => {
     if (!actorId || !query.trim()) return;
+    const current = requestScope.begin();
     setSearching(true);
     api
       .memorySearchRecords({
@@ -168,25 +177,29 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
         actor_id: actorId,
         strategy_id: usable?.strategy_id ?? undefined,
         top_k: topK,
-      })
-      .then((res) => setResults(res.items))
-      .catch((err: unknown) => toast("error", t("memoryPage.loadFailed", { msg: errorMessage(err) })))
-      .finally(() => setSearching(false));
+        record_type: recordType,
+      }, readScope)
+      .then((res) => { if (current()) setResults({ key: requestKey, items: res.items }); })
+      .catch((err: unknown) => { if (current()) toast("error", t("memoryPage.loadFailed", { msg: errorMessage(err) })); })
+      .finally(() => { if (current()) setSearching(false); });
   };
 
-  const isSearch = results !== null;
-  const rows = results ?? records.items;
+  const isSearch = results !== null && results.key === requestKey;
+  const rows = isSearch ? results.items : records.items;
 
   const columns: Column<MemoryRecord>[] = [
     {
       key: "text",
       title: t("v2.memory.colContent"),
       render: (r) => (
-        <LinkButton onClick={() => setDetail(r)}>
-          <span className="v2-memory-clamp" title={memoryRecordPlainText(r.text)}>
-            {memoryRecordPlainText(r.text)}
-          </span>
-        </LinkButton>
+        <>
+          {isFullSession(r) && <Tag tone="blue">{t("memoryPage.fullSummary.title")}</Tag>}
+          <LinkButton onClick={() => setDetail({ key: requestKey, record: r })}>
+            <span className="v2-memory-clamp" title={memoryRecordPlainText(r.text)}>
+              {memoryRecordPlainText(r.text)}
+            </span>
+          </LinkButton>
+        </>
       ),
     },
     {
@@ -218,7 +231,7 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
       width: 80,
       render: (r) => (
         <div className="v2-actions">
-          <LinkButton onClick={() => setDetail(r)}>{t("v2.common.view")}</LinkButton>
+          <LinkButton onClick={() => setDetail({ key: requestKey, record: r })}>{t("v2.common.view")}</LinkButton>
         </div>
       ),
     },
@@ -270,6 +283,11 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
             }))}
             testId="v2-memory-strategy"
           />
+          <FilterSelect label={t("memoryPage.fullSummary.filterLabel")} value={recordType ?? ""}
+            allLabel={t("memoryPage.fullSummary.allRecords")}
+            onChange={(value) => setRecordType(value === "FULL_SESSION" ? value : undefined)}
+            options={[{ value: "FULL_SESSION", label: t("memoryPage.fullSummary.onlyFull") }]}
+            testId="v2-memory-record-type" />
           {selected && (
             <span className="mono v2-muted" title={selected.template}>
               {selected.namespace}
@@ -326,13 +344,13 @@ export function LongTermTab({ actors, strategies, actorId, strategyId, onSelectA
           error={isSearch ? null : records.error}
           onRetry={records.reload}
           empty={empty}
-          selectedKey={detail?.record_id ?? null}
+          selectedKey={shownDetail?.record_id ?? null}
           testId="v2-memory-records"
         />
         {!isSearch && <LoadMore token={records.token} loading={records.loading} onClick={records.loadMore} testId="v2-memory-records-more" />}
         {strategies.length === 0 && <Alert tone="warn">{t("memoryPage.overview.noStrategies")}</Alert>}
       </Card>
-      <RecordDrawer record={detail} strategyName={strategyName} onClose={() => setDetail(null)} />
+      <RecordDrawer record={shownDetail} strategyName={strategyName} onClose={() => setDetail(null)} />
     </>
   );
 }
