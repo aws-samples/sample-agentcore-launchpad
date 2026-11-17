@@ -309,7 +309,7 @@ def preresolve(
         try:
             proc = runner(
                 [
-                    "uv", "pip", "compile", str(src), "--quiet",
+                    "uv", "pip", "compile", str(src), "--no-config", "--quiet",
                     "--python-version", python_version,
                     "--python-platform", uv_platform(),
                     "--only-binary=:all:",

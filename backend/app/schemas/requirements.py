@@ -216,7 +216,7 @@ def resolve_pins(
         src.write_text("\n".join([*platform, *loose]) + "\n", encoding="utf-8")
         proc = runner(
             [
-                "uv", "pip", "compile", str(src), "--quiet",
+                "uv", "pip", "compile", str(src), "--no-config", "--quiet",
                 "--python-version", _TARGET_PYTHON,
                 "--python-platform", _uv_platform(),
                 # Keep conversion-time pins inside the same wheel-only artifact
