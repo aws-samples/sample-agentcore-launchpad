@@ -819,6 +819,9 @@ def test_convert_happy_path_and_in_flight_guard(client, monkeypatch):
     assert body["method"] == "zip_runtime"
     assert body["status"] == "deploying"
     assert body["spec"]["source_harness"]["agent_id"] == source.id
+    assert body["spec"]["runtime_config"] == {
+        "platform_version": "V2", "billing_model": "consumption", "minimum_memory_mib": None,
+    }
     assert "resolve_system_prompt()" in body["spec"]["code_bundle"]["main.py"]
     assert started, "deploy job must be kicked"
 

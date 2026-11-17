@@ -83,7 +83,7 @@ def external_entries(live: list[dict] | None, platform_entries: list[dict],
 
 
 def runtime_update_mounts(control, runtime_id: str, spec: AgentSpec, *, managed_paths,
-                          vpc, log) -> list[dict] | None:
+                          vpc, log, live_runtime: dict | None = None) -> list[dict] | None:
     """``filesystemConfigurations`` for an UpdateAgentRuntime: the spec's entries plus
     the mounts on the live runtime that the platform did not set. Without them the
     update would detach a mount added in the AWS console. A runtime moving to PUBLIC
@@ -92,7 +92,10 @@ def runtime_update_mounts(control, runtime_id: str, spec: AgentSpec, *, managed_
     from app.services.agentcore import runtime as rt
 
     platform = filesystem_configurations(spec)
-    live = rt.get_runtime(control, runtime_id).get("filesystemConfigurations") or []
+    # Reuse the deployer's read for both mounts and Runtime billing preservation.
+    # Existing callers without a detail still perform exactly one live read.
+    detail = live_runtime if live_runtime is not None else rt.get_runtime(control, runtime_id)
+    live = detail.get("filesystemConfigurations") or []
     kept = external_entries(live, platform, managed_paths)
     if kept and vpc is None:
         for fs in kept:

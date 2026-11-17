@@ -11,6 +11,7 @@ from app.core.config import Settings, get_settings
 from app.schemas.attachments import AttachmentRequest, SessionIdField
 from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
 from app.schemas.requirements import assert_all_pinned, assert_plain_ranges
+from app.schemas.runtime_config import RUNTIME_CONFIG_METHODS, RuntimeConfig
 from app.schemas.strands_builder import (
     CODE_INTERPRETER_ID_RE,
     AgentToolRef,
@@ -727,6 +728,12 @@ class AgentSpec(BaseModel):
     # its project).
     project_id: str | None = Field(default=None, max_length=32, exclude=True)
     method: Method
+    # None preserves old dumps and means no explicit change, NOT consumption.
+    # Genuine new Runtime agents get V2/consumption at create_deployment, before
+    # their snapshot is recorded; parsing a legacy spec never upgrades it.
+    runtime_config: RuntimeConfig | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     model_id: str = Field(default_factory=agent_default_model_id)
     # Defaults to "bedrock" for BACKWARD COMPATIBILITY, not because it is the
     # preferred choice: agent specs are stored as JSON in the ledger and every
@@ -894,6 +901,12 @@ class AgentSpec(BaseModel):
     code_interpreter_id: str | None = Field(
         default=None, pattern=CODE_INTERPRETER_ID_RE, exclude_if=lambda v: v is None
     )
+
+    @model_validator(mode="after")
+    def _runtime_config_supported(self) -> "AgentSpec":
+        if self.runtime_config is not None and self.method not in RUNTIME_CONFIG_METHODS:
+            raise ValueError("runtime_config is supported only by Runtime-backed methods")
+        return self
 
     @model_validator(mode="after")
     def _strands_builder_fields(self) -> "AgentSpec":

@@ -79,6 +79,7 @@ import { InboundCard } from "./InboundAuthFields";
 import { ConversationOutputCard, ModelParamsCard, PromptTemplateCard, StrandsGroup } from "./StrandsSections";
 import { groupIssues, STRANDS_GROUPS, type StrandsGroupKey, strandsReadouts } from "./strandsGroups";
 import { WizardReview } from "./WizardReview";
+import { RuntimeConfigCard } from "./RuntimeConfigCard";
 
 const METHODS: AgentMethod[] = ["harness", "zip_runtime", "container", "byoc"];
 
@@ -905,6 +906,8 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
           {inboundCard}
         </>
       )}
+
+      {step === 1 && <RuntimeConfigCard form={form} set={set} touched={touched} preserve={Boolean(edit)} />}
 
       {step === 2 && (
         <WizardReview

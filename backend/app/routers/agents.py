@@ -27,6 +27,7 @@ from app.deployer import container as container_method
 from app.deployer import harness as harness_method
 from app.deployer import zip_runtime as zip_method
 from app.deployer.pipeline import create_deployment, network_gate, start_deploy_async
+from app.deployer.runtime_config import carry_runtime_config
 from app.models.ledger import Agent, Deployment, IdentityProvider, Job
 from app.routers.auth import require_identity, require_permission
 from app.routers.workspaces import WorkspaceScope, require_workspace
@@ -1128,6 +1129,7 @@ def _start_redeploy(
     note: str | None = None,
     viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
+    spec = AgentSpec.model_validate(carry_runtime_config(spec.model_dump(), agent.spec or {}))
     # only pins ADDED relative to the stored spec must be visible: an agent pinned
     # while the workspace was shared keeps re-publishing after a switch to isolated
     agent_access.check_pins(

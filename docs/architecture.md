@@ -340,6 +340,43 @@ no stored-spec migration. There is deliberately **no dispatch** on the field yet
 `app/deployer/container.py` and `app/templates/claude_sdk_agent/` stay
 unconditional until the category has a second member.
 
+### Runtime platform and billing (`AgentSpec.runtime_config`)
+
+Runtime-backed agents (`zip_runtime`, `studio`, `container`, `byoc`, including
+hosted MCP servers) can declare `runtime_config` with `platform_version` (`V1` or
+`V2`), `billing_model` (`consumption` or `committed_baseline`), and an optional
+`minimum_memory_mib`. A committed baseline requires V2 and exactly 1024, 2048,
+4096 or 8192 MiB; consumption forbids a non-null baseline. Unknown configuration
+fields and explicit Runtime settings on Harness are rejected.
+
+The full V2 creation/edit wizard offers these choices and shows them in review.
+New Runtime agents default to **V2 / consumption** at deployment creation,
+before the existing spec snapshot is recorded; this includes Studio, IDE handoff
+and converted twins. This is not a schema default: legacy specs keep the field
+absent, old jobs and platform workers keep their existing behavior. Classic and
+canvas edits preserve settings even though they do not expose separate controls.
+
+The shared Runtime wrappers send `platformVersion` and, for committed billing,
+`resourceConfigurations=[{"minimumMemoryInMiB": size}]`. On updates, AWS preserves
+an omitted platform version but **resets an omitted resource configuration to
+consumption**. Agent deployers and canary mint/restore therefore echo selected
+baselines; unconfigured legacy updates reuse the live AWS read to preserve
+resources, and a failed read stops the update. Explicit consumption deliberately
+omits the list. An ordinary rollback restores explicit snapshot configuration;
+a legacy snapshot cannot establish historical settings and retains current ones.
+Promotion and canary replacement also carry omitted target intent. Failure recovery
+is different from an ordinary snapshot rollback: canary restore reads the proven
+pre-candidate immutable Runtime version, and direct promotion captures legacy AWS
+settings before publishing. Missing historical proof or unsupported metadata stops
+recovery for operator review instead of echoing the rejected candidate's billing.
+
+V2 prepares a snapshot during create/update, so readiness can take minutes; the
+existing bounded wait permits 1200 seconds. The UI links to the
+[AWS guide](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-how-it-works.html#runtime-platform-versions)
+and explains region availability and baseline charges during idle session time.
+Runtime charges are separate from the console's token-cost estimates. SDK shape
+validation and deployment tests are hermetic; no live V2 deployment is implied.
+
 ### File systems (`AgentSpec.filesystem`)
 
 `AgentSpec.filesystem` maps onto AgentCore `filesystemConfigurations` through one

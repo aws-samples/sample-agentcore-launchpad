@@ -1561,6 +1561,9 @@ def test_the_first_deploy_creates_a_byoc_agent_stamped_with_the_caller(
     assert agent.spec["byoc"]["artifact_kind"] == "code_zip"
     assert agent.spec["byoc"]["upload_id"] == "up1"
     assert agent.spec["byoc"]["entrypoint"] == "main.py"
+    assert agent.spec["runtime_config"] == {
+        "platform_version": "V2", "billing_model": "consumption", "minimum_memory_mib": None,
+    }
     assert agent.spec["system_prompt"] == "d", "the repo description by default"
     assert staged.calls[0]["uploaded_by"] == "ada"
     assert staged.calls[0]["filename"] == "weather-bot.zip"

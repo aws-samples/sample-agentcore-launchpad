@@ -49,6 +49,7 @@ from app.deployer.network import describe as describe_network
 from app.deployer.network import spec_vpc
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.deployer.return_url import RETURN_URL_WARNING, register_return_url_stage
+from app.deployer.runtime_config import runtime_config_kwargs
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec, ByocConfig, McpStdioWrapper, parse_ecr_image_uri
 from app.services import agent_iam, byoc_uploads, cost_tags, mcp_servers, project_storage
@@ -641,6 +642,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                     "filesystem_configurations": mounts,
                     "vpc": vpc,
                     "tags": tags,
+                    **runtime_config_kwargs(spec),
                 }
             return {
                 "container_uri": _container_uri(ctx, row, cfg),
@@ -651,6 +653,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "filesystem_configurations": mounts,
                 "vpc": vpc,
                 "tags": tags,
+                **runtime_config_kwargs(spec),
             }
 
         create_fn = rt.create_code_runtime if code_runtime else rt.create_container_runtime
@@ -660,9 +663,14 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             runtime_id = row.resource_id
             # keep the mounts added outside the platform (UpdateAgentRuntime would
             # detach them): the spec's entries + the live runtime's foreign ones
-            update_kwargs = {**_kwargs(), "filesystem_configurations": runtime_update_mounts(
-                client, runtime_id, spec,
-                managed_paths=published_mount_paths(db, row.id), vpc=vpc, log=ctx.log)}
+            live = rt.get_runtime(client, runtime_id)
+            update_kwargs = {
+                **_kwargs(),
+                **runtime_config_kwargs(spec, updating=True, live=live),
+                "filesystem_configurations": runtime_update_mounts(
+                    client, runtime_id, spec, live_runtime=live,
+                    managed_paths=published_mount_paths(db, row.id), vpc=vpc, log=ctx.log),
+            }
             updated = agent_iam.retry_iam_propagation(
                 lambda: update_fn(client, runtime_id=runtime_id, **update_kwargs),
                 ctx.log,

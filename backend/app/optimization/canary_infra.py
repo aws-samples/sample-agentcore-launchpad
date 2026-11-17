@@ -26,6 +26,11 @@ from typing import Any
 from app.deployer.environment import runtime_environment
 from app.deployer.filesystem import filesystem_configurations
 from app.deployer.network import spec_vpc
+from app.deployer.runtime_config import (
+    carry_runtime_config,
+    original_runtime_config,
+    runtime_config_kwargs,
+)
 from app.deployer.zip_runtime import (
     _generate_code,
     build_agent_zip,
@@ -137,6 +142,7 @@ def mint_candidate_version(
     workspace: WorkspaceContext,
     canary_id: str,
     role: str = "candidate",
+    original_version: str | None = None,
     log: Log = _noop,
     pip_runner: Callable[..., Any] = subprocess.run,
     uploader: Callable[[str, str, str], None] | None = None,
@@ -148,7 +154,9 @@ def mint_candidate_version(
 
     ``canary_id``/``role`` key the uploaded zip (see ``candidate_s3_key``); the
     caller records the returned key on the canary artifacts so cleanup can
-    delete it.
+    delete it. A legacy ``restore`` must name setup's proven ``original_version``:
+    billing/platform come from that immutable version, not the rejected current
+    candidate. An explicit original spec configuration needs no version read.
 
     The candidate zip is built with the same blocks as the deploy pipeline
     (``_generate_code`` / ``build_agent_zip``), uploaded to
@@ -180,6 +188,18 @@ def mint_candidate_version(
         raise RuntimeError(
             "artifacts_bucket missing from this workspace's resource map — run its bootstrap"
         )
+    if role == "candidate":
+        edited_spec = AgentSpec.model_validate(
+            carry_runtime_config(edited_spec.model_dump(), getattr(agent, "spec", None) or {})
+        )
+    elif role == "restore" and edited_spec.runtime_config is None:
+        # Current AWS settings belong to the rejected candidate, NOT the original.
+        # Setup persisted its immutable pre-mint version; legacy rows without that
+        # proof must refuse recovery before any build/upload/update.
+        edited_spec = edited_spec.model_copy(update={"runtime_config": original_runtime_config(
+            control_client, agent.resource_id, original_version,
+        )})
+
     # A candidate is a new *version of the same runtime*, so it keeps whatever role
     # production is already on. Swapping in the shared role would measure the
     # candidate with permissions production does not have, and a promotion would
@@ -232,6 +252,7 @@ def mint_candidate_version(
         filesystem_configurations=_candidate_mounts(live, edited_spec, agent, log),
         # every update sends the network: a VPC agent's candidate must stay in its VPC
         vpc=spec_vpc(edited_spec, agent.workspace_id),
+        **runtime_config_kwargs(edited_spec, updating=True, live=live),
     )
     v_candidate = str(resp["agentRuntimeVersion"])
     log(f"UpdateAgentRuntime published candidate version {v_candidate}")

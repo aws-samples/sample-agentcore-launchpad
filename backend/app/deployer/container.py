@@ -25,6 +25,7 @@ from app.deployer.mounts import published_mount_paths, with_mounts_env, with_pro
 from app.deployer.network import describe as describe_network
 from app.deployer.network import spec_vpc
 from app.deployer.pipeline import StageContext, StageResult, register_method
+from app.deployer.runtime_config import runtime_config_kwargs
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 from app.services import agent_iam, cost_tags, ecr, project_storage
@@ -290,15 +291,22 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "authorizer_configuration": authorizer,
                 # cost-tags §1.2: the full set (agent id, workspace) on create and update
                 "tags": cost_tags.agent_tags(row, row.workspace_id),
+                **runtime_config_kwargs(spec),
             }
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)
             runtime_id = row.resource_id
             # keep the mounts added outside the platform (UpdateAgentRuntime would
             # detach them): the spec's entries + the live runtime's foreign ones
-            update_kwargs = {**_kwargs(), "filesystem_configurations": runtime_update_mounts(
-                client, runtime_id, AgentSpec(**row.spec),
-                managed_paths=published_mount_paths(db, row.id), vpc=vpc, log=ctx.log)}
+            live = rt.get_runtime(client, runtime_id)
+            spec = AgentSpec(**row.spec)
+            update_kwargs = {
+                **_kwargs(),
+                **runtime_config_kwargs(spec, updating=True, live=live),
+                "filesystem_configurations": runtime_update_mounts(
+                    client, runtime_id, spec, live_runtime=live,
+                    managed_paths=published_mount_paths(db, row.id), vpc=vpc, log=ctx.log),
+            }
             updated = agent_iam.retry_iam_propagation(
                 lambda: rt.update_container_runtime(client, runtime_id=runtime_id,
                                                     **update_kwargs),
