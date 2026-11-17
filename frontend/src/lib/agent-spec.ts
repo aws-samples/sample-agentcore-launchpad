@@ -15,6 +15,7 @@ import type {
   ContextLayerRef,
   HarnessNativeTool,
   InboundAuth,
+  RuntimeConfigInput,
   Toolkit,
 } from "./api";
 import type { ModelSource, ReasoningEffort } from "./models";
@@ -26,6 +27,7 @@ import {
   specDefaultModelId,
 } from "./models";
 import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
+import { defaultRuntimeConfig, runtimeConfigSupported, runtimeConfigValid } from "./runtime-config";
 import { type CatalogMountRow, catalogMountsSpec, catalogRowsFromSpec, MAX_BYO_MOUNTS } from "./api/storage";
 import { BYO_MOUNT_METHODS } from "./storage-mounts";
 import { emptyStrandsForm, type StrandsForm, strandsFormFromSpec, strandsSpec, strandsValid } from "./strands-builder";
@@ -473,6 +475,9 @@ export interface AgentForm {
   modelId: string;
   modelSource: ModelSource;
   agentSdk: AgentSdk;
+  /** Optional for forms without controls; null preserves a legacy agent's current
+   *  settings. New forms start with explicit V2/consumption, never legacy edits. */
+  runtimeConfig?: RuntimeConfigInput | null;
   systemPrompt: string;
   // harness-only inference knobs; free text so a half-typed number is validated
   maxTokens: string;
@@ -629,6 +634,7 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   modelId: defaultModelForMethod(method),
   modelSource: sourceForMethod(method),
   agentSdk: DEFAULT_AGENT_SDK,
+  runtimeConfig: defaultRuntimeConfig(),
   systemPrompt: "",
   maxTokens: "",
   reasoningEffort: EFFORT_NONE,
@@ -684,6 +690,7 @@ export interface StoredAgentSpec {
   model_id?: string;
   model_source?: ModelSource;
   agent_sdk?: AgentSdk;
+  runtime_config?: RuntimeConfigInput | null;
   // harness-only inference knobs (absent on every spec written before they existed)
   max_tokens?: number | null;
   reasoning_effort?: ReasoningEffort | null;
@@ -750,6 +757,7 @@ export function formFromStoredSpec(
     modelId: storedModel,
     modelSource: spec.model_source ?? "bedrock",
     agentSdk: spec.agent_sdk ?? base.agentSdk,
+    runtimeConfig: spec.runtime_config ?? null,
     systemPrompt: spec.system_prompt ?? "",
     maxTokens: spec.max_tokens == null ? "" : String(spec.max_tokens),
     reasoningEffort: spec.reasoning_effort ?? EFFORT_NONE,
@@ -969,6 +977,14 @@ export interface NetworkProfileRefInput {
 /** The network step is complete: "VPC profile" needs a profile picked. */
 export const networkValid = (form: AgentForm) => !(form.networkVpc && !form.networkProfileId);
 
+/** Only a Runtime form's explicit selection is posted. Legacy/unowned fields
+ *  stay omitted so neither opening an edit nor a classic save installs defaults. */
+export function runtimeConfigSpec(form: AgentForm): Pick<AgentSpecInput, "runtime_config"> {
+  return runtimeConfigSupported(form.method) && form.runtimeConfig != null
+    ? { runtime_config: { ...form.runtimeConfig } }
+    : {};
+}
+
 export function buildMcpServerSpec(form: AgentForm): AgentSpecInput {
   const env = byocEnv(form.byocEnvRows);
   // code_zip + stdio on only (mcpStdioSpec returns null otherwise)
@@ -985,6 +1001,7 @@ export function buildMcpServerSpec(form: AgentForm): AgentSpecInput {
     byoc: byocArtifact(form) as ByocConfigInput,
     ...filesystemSpec(form),
     ...networkSpec(form),
+    ...runtimeConfigSpec(form),
   };
 }
 
@@ -1029,6 +1046,7 @@ export function buildByocSpec(form: AgentForm): AgentSpecInput {
     },
     ...filesystemSpec(form),
     ...networkSpec(form),
+    ...runtimeConfigSpec(form),
   };
 }
 
@@ -1124,6 +1142,7 @@ export function buildOrdinarySpec(form: AgentForm, cat: AgentFormCatalogs): Agen
       ? filesystemSpec(form)
       : {}),
     ...networkSpec(form),
+    ...runtimeConfigSpec(form),
   } as AgentSpecInput;
 }
 
@@ -1150,6 +1169,7 @@ export const REPUBLISH_CARRIED_FIELDS = [
   "conversion_notes",
   // the classic wizard has no inbound input; the V2 form states it (null ⇒ inherit)
   "inbound_auth",
+  "runtime_config", // classic has no controls; V2 posts an explicit choice only when owned
   // a converted agent's re-resolve input when the platform's pins move past its own
   "requirement_ranges",
   "requirements",
@@ -1397,6 +1417,7 @@ export function agentFormValid(
   if (!inboundValid(form)) return false;
   if (!networkValid(form)) return false;
   if (!contextLayerValid(form)) return false;
+  if (runtimeConfigSupported(form.method) && !runtimeConfigValid(form.runtimeConfig)) return false;
   if (form.method === "byoc") {
     return AGENT_NAME_RE.test(form.name) && byocValid(form) && !opts.byocUploading;
   }

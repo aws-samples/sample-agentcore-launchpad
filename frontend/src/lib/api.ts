@@ -1047,6 +1047,13 @@ export interface ByocUploadInfo {
   };
 }
 
+/** Agent-owned Runtime platform/billing intent; absent on legacy and Harness specs. */
+export interface RuntimeConfigInput {
+  platform_version: "V1" | "V2";
+  billing_model: "consumption" | "committed_baseline";
+  minimum_memory_mib?: number | null;
+}
+
 /** SB-1: the Strands builder's optional fields (tools, model parameters, conversation,
  *  output schema, prompt template) — `lib/strands-builder.ts` owns their shape and
  *  sends only the ones set (zip_runtime only). */
@@ -1063,6 +1070,9 @@ export interface AgentSpecInput extends StrandsSpecFields {
   model_source?: ModelSource;
   /** container method only. Omitted ⇒ backend defaults to "claude_agent_sdk". */
   agent_sdk?: AgentSdk;
+  /** Runtime only. New resources default to V2/consumption; omitted on redeploy
+   *  preserves existing intent. Explicit consumption deliberately removes a baseline. */
+  runtime_config?: RuntimeConfigInput | null;
   /**
    * Harness-only inference knobs (`AgentSpec.max_tokens` / `reasoning_effort`): the
    * per-model-call output ceiling and the OpenAI reasoning effort (native Bedrock

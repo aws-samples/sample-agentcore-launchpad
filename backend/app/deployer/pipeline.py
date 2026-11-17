@@ -27,6 +27,7 @@ from app.core.actor import user_id_for
 from app.core.db import SessionLocal
 from app.core.project_scope import project_context
 from app.models.ledger import Agent, Deployment, Job
+from app.schemas.runtime_config import RUNTIME_CONFIG_METHODS, RuntimeConfig
 from app.services import memory_ownership, workspace_bootstrap
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
@@ -142,6 +143,23 @@ def create_deployment(
     Every call also writes a ledger spec snapshot (T18) in the same transaction —
     ``actor`` names who published (default: the agent's owner) and ``note`` is a free
     label such as "rollback to #2"."""
+    # Only a genuinely new Runtime resource gets the new-agent default. Keep this
+    # before the snapshot and out of schema/deploy parsing: old resumed/failed jobs,
+    # updates, imports and workers must never silently upgrade or change billing.
+    if (
+        mode == "create"
+        and agent.method in RUNTIME_CONFIG_METHODS
+        and not agent.resource_id
+        and not agent.arn
+        and (agent.spec or {}).get("runtime_config") is None
+        and db.query(Deployment.id).filter(Deployment.agent_id == agent.id).first() is None
+    ):
+        agent.spec = {
+            **(agent.spec or {}),
+            "runtime_config": RuntimeConfig(
+                platform_version="V2", billing_model="consumption"
+            ).model_dump(),
+        }
     # The workspace comes off the agent, not the request: a promotion or resumed
     # job must land in the same environment as the agent it deploys.
     deployment = Deployment(

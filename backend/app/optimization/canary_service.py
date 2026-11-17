@@ -10,6 +10,7 @@ from typing import Any
 from app.core.db import SessionLocal
 from app.core.errors import AppError, cleanup_error, is_not_found
 from app.core.project_scope import project_context
+from app.deployer.runtime_config import carry_runtime_config
 from app.evaluation import agentcore_eval as ac
 from app.evaluation.online_evaluators import ONLINE_EVAL_DEFAULT
 from app.models.ledger import Agent
@@ -328,7 +329,7 @@ def start_canary(
         source_experiment_id=source_experiment_id,
         artifacts={
             "agent_meta": _agent_meta(agent, control),
-            "edited_spec": edited_spec.model_dump(),
+            "edited_spec": carry_runtime_config(edited_spec.model_dump(), agent.spec or {}),
             "rounds": [],
             **({"start_stage": int(start_stage)} if start_stage else {}),
             **_evaluator_artifacts(online_evaluators, primary_evaluator),
@@ -737,10 +738,23 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     stable = f"stable{canary_id[:6]}"
     treatment = f"treat{canary_id[:6]}"
 
+    # Older canary rows/bundles may omit settings the target explicitly owns.
+    # Persist the effective candidate intent before minting so completion records it.
+    edited = carry_runtime_config(row.artifacts["edited_spec"], agent.spec or {})
+    spec = AgentSpec.model_validate(edited)
+    _update(canary_id, artifact={"edited_spec": edited})
+
     # (1) Read the LIVE production version BEFORE the mint — UpdateAgentRuntime
     # auto-rolls DEFAULT to the candidate, so v_current must be captured first.
+    # A retry must keep that proof: current may already be the rejected candidate.
     progress("reading current production runtime version…")
-    v_current = canary_infra.current_version(control, runtime_id)
+    saved_setup = row.artifacts.get("setup")
+    if saved_setup:
+        v_current = saved_setup.get("v_current")
+        if not v_current:
+            raise RuntimeError("original Runtime version is not proven; recovery requires review")
+    else:
+        v_current = canary_infra.current_version(control, runtime_id)
 
     # (2) Dedicated per-canary gateway.
     gw = canary_infra.create_canary_gateway(
@@ -772,7 +786,6 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     # (5) Mint the candidate (DEFAULT auto-rolls to it; invoke now routes to the
     # stable endpoint = v_current until the gateway A/B goes live).
     progress("minting candidate runtime version…")
-    edited = row.artifacts["edited_spec"]
 
     def _record_candidate_pins(pins: list[str]) -> None:
         # A converted agent's stale pins were re-resolved to build the candidate.
@@ -1228,7 +1241,7 @@ def act_complete(
         agent = db.get(Agent, meta["id"])
         if agent is None or agent.status == "deleted":
             raise RuntimeError("the agent behind this canary no longer exists")
-        agent.spec = copy.deepcopy(row.artifacts["edited_spec"])
+        agent.spec = carry_runtime_config(row.artifacts["edited_spec"], agent.spec or {})
         agent.version = setup["v_candidate"]
         # a canary win is a publish like any other (no deployment row, though): the
         # promoted spec joins the snapshot history, stamped with the version it made
@@ -1304,7 +1317,7 @@ def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
     _, v_restored, restored_key = canary_infra.mint_candidate_version(
         agent=agent, edited_spec=current_spec, control_client=control,
         workspace=workspace, log=progress, canary_id=canary_id, role="restore",
-        on_repinned=healed.append,
+        original_version=setup.get("v_current"), on_repinned=healed.append,
     )
     db = SessionLocal()
     try:

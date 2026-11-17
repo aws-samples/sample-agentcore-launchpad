@@ -1182,7 +1182,8 @@ def test_rollback_rolls_forward_current_spec(monkeypatch):
     minted: dict = {}
 
     def fake_mint(*, agent, edited_spec, control_client, workspace, log, canary_id, role,
-                  on_repinned=None):
+                  on_repinned=None, original_version=None):
+        assert original_version == "1"
         minted["agent_id"] = agent.id
         minted["spec"] = edited_spec
         minted["role"] = role
@@ -1241,7 +1242,8 @@ def test_rollback_allowed_and_rolls_forward_on_partial_setup(monkeypatch):
     minted: dict = {}
 
     def fake_mint(*, agent, edited_spec, control_client, workspace, log, canary_id, role,
-                  on_repinned=None):
+                  on_repinned=None, original_version=None):
+        assert original_version == "1"
         minted["spec"] = edited_spec
         return ("1", "5", f"agents/subject/canary/{canary_id}-{role}.zip")
 

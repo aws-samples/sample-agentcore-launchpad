@@ -18,6 +18,7 @@ import {
   republishSpec,
   withContextVia,
 } from "./agent-spec";
+import { formFromSharedTemplate } from "../v2/pages/agents/templateForms";
 
 const CATALOGS: AgentFormCatalogs = {
   gatewayTargets: [],
@@ -53,6 +54,69 @@ const STORED = {
 const load = (stored: object) => formFromStoredSpec("zip_runtime", "auth-agent", stored).form;
 const valid = (form: ReturnType<typeof load>, connections: ConnectionRef[] | null) =>
   agentFormValid(form, CATALOGS, { knobIssues: [], byocUploading: false, connections });
+
+describe("Runtime platform and billing round trip", () => {
+  const baseline = { platform_version: "V2" as const, billing_model: "committed_baseline" as const, minimum_memory_mib: 4096 };
+
+  it.each(["zip_runtime", "container", "byoc"] as const)("defaults a new %s agent to V2/consumption", (method) => {
+    const form = { ...emptyAgentForm(method), name: "runtime-agent", systemPrompt: "Help." };
+    expect(buildAgentSpec(form, CATALOGS).runtime_config).toEqual({
+      platform_version: "V2", billing_model: "consumption", minimum_memory_mib: null,
+    });
+  });
+
+  it("uses new-agent defaults for a shared template rather than legacy edit semantics", () => {
+    const template = { id: "t1", title: "Demo", summary: "", method: "zip_runtime", spec: STORED,
+      requirements: [], source_workspace_id: "ws-1", source_agent_name: "source", published_by: null,
+      uses: 0, own: false, created_at: null, updated_at: null };
+    const fresh = formFromSharedTemplate(template);
+    expect(fresh.runtimeConfig).toEqual(emptyAgentForm("zip_runtime").runtimeConfig);
+    expect(formFromSharedTemplate({ ...template, spec: { ...STORED, runtime_config: baseline } }).runtimeConfig).toEqual(baseline);
+  });
+
+  it("never posts Runtime choices for a Harness", () => {
+    expect(buildAgentSpec({ ...emptyAgentForm("harness"), runtimeConfig: baseline }, CATALOGS)).not.toHaveProperty("runtime_config");
+  });
+
+  it.each(["zip_runtime", "container", "byoc"] as const)("hydrates and keeps a %s baseline on unrelated edits", (method) => {
+    const stored = { ...STORED, method, runtime_config: baseline };
+    const form = formFromStoredSpec(method, "runtime-agent", stored).form;
+    expect(form.runtimeConfig).toEqual(baseline);
+    const built = buildAgentSpec({ ...form, systemPrompt: "Changed prompt." }, CATALOGS);
+    expect(republishSpec(built, stored).runtime_config).toEqual(baseline);
+  });
+
+  it("leaves a legacy edit unconfigured rather than installing the fresh default", () => {
+    const form = load(STORED);
+    expect(form.runtimeConfig).toBeNull();
+    expect(buildAgentSpec(form, CATALOGS)).not.toHaveProperty("runtime_config");
+    expect(republishSpec(buildAgentSpec(form, CATALOGS), STORED)).not.toHaveProperty("runtime_config");
+  });
+
+  it("carries a stored baseline for forms without these controls", () => {
+    const form = { ...load(STORED), runtimeConfig: undefined };
+    const stored = { ...STORED, runtime_config: baseline };
+    expect(republishSpec(buildAgentSpec(form, CATALOGS), stored).runtime_config).toEqual(baseline);
+  });
+
+  it("makes an explicit switch to consumption override the carried baseline", () => {
+    const runtimeConfig = { platform_version: "V1" as const, billing_model: "consumption" as const, minimum_memory_mib: null };
+    const form = { ...load(STORED), runtimeConfig };
+    expect(republishSpec(buildAgentSpec(form, CATALOGS), { ...STORED, runtime_config: baseline }).runtime_config).toEqual(runtimeConfig);
+  });
+
+  it("blocks submission until a committed size is chosen, and refuses V1/baseline", () => {
+    const form = { ...load({ ...STORED, tools: [] }), runtimeConfig: { ...baseline, minimum_memory_mib: null } };
+    expect(valid(form, [])).toBe(false);
+    expect(valid({ ...form, runtimeConfig: baseline }, [])).toBe(true);
+    expect(valid({ ...form, runtimeConfig: { ...baseline, platform_version: "V1" } }, [])).toBe(false);
+  });
+
+  it("also posts the selected configuration for hosted MCP servers", () => {
+    const form = { ...emptyAgentForm("byoc"), protocol: "mcp" as const, mcpTargetName: "tools", byocUploadId: "up-1", runtimeConfig: baseline };
+    expect(buildMcpServerSpec(form).runtime_config).toEqual(baseline);
+  });
+});
 
 describe("tool-level auth round trip", () => {
   it("routes auth-carrying tools to the Identity rows, not the MCP picks", () => {

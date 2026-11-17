@@ -87,6 +87,8 @@ def create_code_runtime(
     filesystem_configurations: list[dict[str, Any]] | None = None,
     vpc: dict[str, Any] | None = None,
     tags: dict[str, str] | None = None,
+    platform_version: str | None = None,
+    resource_configurations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """CreateAgentRuntime from a zip on S3, instrumented via ADOT.
 
@@ -100,7 +102,10 @@ def create_code_runtime(
     (`deployer/filesystem.py`) is the session storage plus any S3 Files / EFS
     mounts; the latter need ``vpc`` (storage-mounts §3.2). ``tags`` are added to
     the `launchpad:*` project tags the environment's span attributes imply
-    (`_runtime_tags`)."""
+    (`_runtime_tags`). ``platform_version`` and ``resource_configurations`` are
+    optional passthroughs: callers without them (workers/probes) keep AWS defaults.
+    An update preserves an omitted platform but resets omitted resources to
+    consumption; agent deployers resolve preservation before calling here."""
     _check_mounts_network(filesystem_configurations, vpc)
     params: dict[str, Any] = {
         "agentRuntimeName": runtime_name,
@@ -117,6 +122,10 @@ def create_code_runtime(
         params["protocolConfiguration"] = proto
     if authorizer_configuration:
         params["authorizerConfiguration"] = authorizer_configuration
+    if platform_version is not None:
+        params["platformVersion"] = platform_version
+    if resource_configurations is not None:
+        params["resourceConfigurations"] = resource_configurations
     if filesystem_configurations:
         params["filesystemConfigurations"] = filesystem_configurations
     if resource_tags := _runtime_tags(environment, tags):
@@ -204,6 +213,8 @@ def create_container_runtime(
     authorizer_configuration: dict[str, Any] | None = None,
     protocol: str | None = None,
     tags: dict[str, str] | None = None,
+    platform_version: str | None = None,
+    resource_configurations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """CreateAgentRuntime from an ECR image (Claude SDK container path).
 
@@ -231,6 +242,10 @@ def create_container_runtime(
         params["protocolConfiguration"] = proto
     if authorizer_configuration:
         params["authorizerConfiguration"] = authorizer_configuration
+    if platform_version is not None:
+        params["platformVersion"] = platform_version
+    if resource_configurations is not None:
+        params["resourceConfigurations"] = resource_configurations
     if resource_tags := _runtime_tags(environment, tags):
         params["tags"] = resource_tags
     return client.create_agent_runtime(**params)
@@ -274,6 +289,8 @@ def update_code_runtime(
     filesystem_configurations: list[dict[str, Any]] | None = None,
     vpc: dict[str, Any] | None = None,
     tags: dict[str, str] | None = None,
+    platform_version: str | None = None,
+    resource_configurations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new zip artifact — publishes a new version in
     place (same agentRuntimeId/ARN; the DEFAULT endpoint auto-rolls to it).
@@ -307,6 +324,10 @@ def update_code_runtime(
         params["protocolConfiguration"] = proto
     if authorizer_configuration:
         params["authorizerConfiguration"] = authorizer_configuration
+    if platform_version is not None:
+        params["platformVersion"] = platform_version
+    if resource_configurations is not None:
+        params["resourceConfigurations"] = resource_configurations
     if filesystem_configurations:
         params["filesystemConfigurations"] = filesystem_configurations
     response = client.update_agent_runtime(**params)
@@ -327,6 +348,8 @@ def update_container_runtime(
     authorizer_configuration: dict[str, Any] | None = None,
     protocol: str | None = None,
     tags: dict[str, str] | None = None,
+    platform_version: str | None = None,
+    resource_configurations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new container image — new version, same ARN.
     NB: a version bump resets managed session storage (documented UI note).
@@ -351,13 +374,21 @@ def update_container_runtime(
         params["protocolConfiguration"] = proto
     if authorizer_configuration:
         params["authorizerConfiguration"] = authorizer_configuration
+    if platform_version is not None:
+        params["platformVersion"] = platform_version
+    if resource_configurations is not None:
+        params["resourceConfigurations"] = resource_configurations
     response = client.update_agent_runtime(**params)
     _tag_updated_runtime(client, response, environment, tags)
     return response
 
 
-def get_runtime(client: Any, runtime_id: str) -> dict[str, Any]:
-    return client.get_agent_runtime(agentRuntimeId=runtime_id)
+def get_runtime(client: Any, runtime_id: str, *, version: str | None = None) -> dict[str, Any]:
+    """Read current configuration, or a nominated immutable Runtime version."""
+    params = {"agentRuntimeId": runtime_id}
+    if version is not None:
+        params["agentRuntimeVersion"] = version
+    return client.get_agent_runtime(**params)
 
 
 def list_runtimes(client: Any) -> list[dict[str, Any]]:

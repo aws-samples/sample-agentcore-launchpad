@@ -53,8 +53,12 @@ from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.core.project_scope import project_context
 from app.deployer import pipeline
+from app.deployer.runtime_config import captured_runtime_config, carry_runtime_config
 from app.models.ledger import Agent, Job, Promotion, ReleaseBundle, Workspace
+from app.schemas.runtime_config import RUNTIME_CONFIG_METHODS, RuntimeConfig
 from app.services import agent_names, release_gates
+from app.services.agentcore import runtime as rt
+from app.services.agentcore.client import control_client
 from app.services.audit import record_audit_event
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
@@ -489,6 +493,7 @@ def _stage_provision(run: Run) -> pipeline.StageResult:
             )
         run.log(f"canary not applicable: {reason}")
         previous_spec: dict[str, Any] | None = None
+        previous_runtime_config: dict[str, Any] | None = None
         if existing is None:
             # a promotion that creates its target files it like any new agent
             _require_agent_project(db, run.project_id, run.target_id)
@@ -511,7 +516,17 @@ def _stage_provision(run: Run) -> pipeline.StageResult:
             # what the target served before this run, so a failure after the publish can
             # put it back (a direct release is live the moment it deploys)
             previous_spec = copy.deepcopy(agent.spec or {})
-            agent.spec = spec
+            if (
+                run.action == ACTION_EXECUTE
+                and agent.method in RUNTIME_CONFIG_METHODS
+                and agent.resource_id
+                and previous_spec.get("runtime_config") is None
+            ):
+                # Capture BEFORE the direct publish rolls DEFAULT. A legacy spec
+                # alone cannot restore billing/platform after a failed release.
+                live = rt.get_runtime(control_client(run.target), agent.resource_id)
+                previous_runtime_config = captured_runtime_config(live).model_dump()
+            agent.spec = carry_runtime_config(spec, previous_spec)
             agent.status = "deploying"
             agent.error = None
             db.flush()
@@ -552,6 +567,7 @@ def _stage_provision(run: Run) -> pipeline.StageResult:
             "deploy_mode": mode,
             "target_touched": True,
             "previous_spec": previous_spec if existing is not None and mode == "update" else None,
+            "previous_runtime_config": previous_runtime_config,
         }
         db.commit()
         return pipeline.StageResult(
@@ -881,7 +897,16 @@ def _revert_direct(run: Run, failed_stage: str) -> None:
             # the failed stage was the deploy itself and it never went active: nothing
             # new is serving, so there is nothing to put back
             return
-        agent.spec = copy.deepcopy(previous)
+        restored = copy.deepcopy(previous)
+        if agent.method in RUNTIME_CONFIG_METHODS and restored.get("runtime_config") is None:
+            captured = execution.get("previous_runtime_config")
+            if captured is None:
+                raise RuntimeError(
+                    "original Runtime settings were not captured before publish; "
+                    "recovery requires review"
+                )
+            restored["runtime_config"] = RuntimeConfig.model_validate(captured).model_dump()
+        agent.spec = restored
         agent.status = "deploying"
         agent.error = None
         db.flush()

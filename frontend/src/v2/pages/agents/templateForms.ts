@@ -1,5 +1,6 @@
 import { type AgentForm, type AgentMethod, emptyAgentForm, formFromStoredSpec } from "../../../lib/agent-spec";
 import type { AgentTemplateInfo, SharedTemplateInfo, Toolkit } from "../../../lib/api";
+import { defaultRuntimeConfig } from "../../../lib/runtime-config";
 
 /**
  * Pure form builders for the two kinds of template (T10 scenario templates, T38 shared
@@ -30,7 +31,7 @@ export function formFromTemplate(template: AgentTemplateInfo): AgentForm {
 export function formFromSharedTemplate(template: SharedTemplateInfo): AgentForm {
   const method = (isAgentMethod(template.method) ? template.method : "harness") as AgentMethod;
   const { form } = formFromStoredSpec(method, "", template.spec);
-  return { ...form, name: "", displayName: "" };
+  return { ...form, name: "", displayName: "", runtimeConfig: form.runtimeConfig ?? defaultRuntimeConfig() };
 }
 
 const AGENT_METHODS: AgentMethod[] = ["harness", "zip_runtime", "container", "byoc"];

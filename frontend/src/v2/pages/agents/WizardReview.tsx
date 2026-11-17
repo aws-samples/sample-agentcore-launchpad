@@ -16,6 +16,7 @@ import {
   toolkitToolNames,
 } from "../../../lib/agent-spec";
 import type { InboundAuth } from "../../../lib/api";
+import { runtimeConfigSupported } from "../../../lib/runtime-config";
 import { networkProfilesApi } from "../../../lib/api/projects";
 import { mcpStdioArgs } from "../../../lib/mcp-stdio";
 import { inboundCapable, issuerMismatch, jwtSummary, wizardDeployedJwt } from "../../../lib/inbound-auth";
@@ -89,9 +90,19 @@ export function WizardReview({
       : (form.longTerm ? t("v2.agents.wizard.memoryLong") : t("v2.agents.wizard.memoryShort")) +
         ` · ${form.memoryId || t("v2.agents.wizard.memoryDefault")}`,
   };
+  const runtime = form.runtimeConfig;
+  const runtimeItems = runtimeConfigSupported(method) ? [
+    { label: t("v2.agents.wizard.runtime.platform"), value: runtime?.platform_version ?? t("v2.agents.wizard.runtime.keep") },
+    { label: t("v2.agents.wizard.runtime.billing"), value: runtime ? t(`v2.agents.wizard.runtime.${runtime.billing_model === "consumption" ? "consumption" : "committed"}`) : t("v2.agents.wizard.runtime.keep") },
+    ...(runtime?.billing_model === "committed_baseline" && runtime.minimum_memory_mib != null ? [
+      { label: t("v2.agents.wizard.runtime.baseline"), value: t("v2.agents.wizard.runtime.baselineOption", { memory: runtime.minimum_memory_mib / 1024, cpu: runtime.minimum_memory_mib / 4096 }) },
+      { label: t("v2.agents.wizard.runtime.billingNote"), value: t("v2.agents.wizard.runtime.baselineHint") },
+    ] : []),
+  ] : [];
   const head = [
     { label: t("v2.agents.colName"), value: form.name },
     { label: t("v2.agents.colMethod"), value: t(`v2.agents.wizard.method.${method}`) },
+    ...runtimeItems,
   ];
 
   let items: { label: string; value: React.ReactNode }[];
