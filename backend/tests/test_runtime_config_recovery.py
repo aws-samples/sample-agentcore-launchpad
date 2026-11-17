@@ -94,7 +94,7 @@ def test_carry_keeps_target_choice_but_explicit_consumption_wins_without_mutatio
 
 
 @pytest.mark.parametrize("detail", [
-    {}, {"platformVersion": "V3"},
+    {"resourceConfigurations": [{"minimumMemoryInMiB": 2048}]}, {"platformVersion": "V3"},
     {"platformVersion": "V2", "resourceConfigurations": {}},
     {"platformVersion": "V2", "resourceConfigurations": [{"unknown": 2048}]},
     {"platformVersion": "V2", "resourceConfigurations": [{"minimumMemoryInMiB": "2048"}]},
@@ -103,6 +103,21 @@ def test_carry_keeps_target_choice_but_explicit_consumption_wins_without_mutatio
 def test_capture_refuses_missing_platform_or_unrepresentable_resources(detail):
     with pytest.raises((RuntimeError, ValidationError)):
         captured_runtime_config(detail)
+
+
+@pytest.mark.parametrize("detail", [{}, {"resourceConfigurations": []}])
+def test_capture_reads_pre_platform_runtime_as_v1_consumption(detail):
+    # Live: most runtimes not updated since platform versions shipped report neither
+    # field. Resources exist only on V2, so this is the documented V1 create default.
+    assert captured_runtime_config(detail).model_dump() == V1
+
+
+def pre_platform_control():
+    """A runtime last updated before AWS reported platformVersion at all."""
+    control = VersionedControl(V1)
+    control.live.pop("platformVersion")
+    control.versions["1"].pop("platformVersion")
+    return control
 
 
 @pytest.mark.parametrize("version", [None, "", "DEFAULT", "0", "01", 1, "123456", "１"])
@@ -288,6 +303,51 @@ def test_failed_direct_publish_restores_previous_runtime_settings(
         assert agent.spec["system_prompt"] != "candidate"
         assert db.query(SpecSnapshot).filter_by(seq=2).one().spec["runtime_config"] == original
     assert promotion_exec._execution(run.promotion_id)["reverted"] is True
+
+
+def test_pre_platform_target_promotes_and_restores_v1(monkeypatch):
+    run, agent_id, module, publish = staged_direct_run(monkeypatch, None, CANDIDATE)
+    control = pre_platform_control()
+    monkeypatch.setattr(module, "control_client", lambda _ws: control)
+    monkeypatch.setattr(promotion_exec, "control_client", lambda _ws: control)
+    promotion_exec._stage_provision(run)
+    execution = promotion_exec._execution(run.promotion_id)
+    assert execution["previous_runtime_config"] == V1
+    publish(run, execution["deploy_job_id"])
+    assert_settings(control.updates[0], CANDIDATE)
+
+    promotion_exec._revert_direct(run, "smoke")
+
+    assert_settings(control.updates[-1], V1)
+    with SessionLocal() as db:
+        assert db.get(Agent, agent_id).spec["runtime_config"] == V1
+    assert promotion_exec._execution(run.promotion_id)["reverted"] is True
+
+
+def test_pre_platform_canary_rollback_restores_v1(monkeypatch, tmp_path):
+    agent_id = seed_runtime(None)
+    with SessionLocal() as db:
+        agent = db.get(Agent, agent_id)
+    control = pre_platform_control()
+    stub_mint_build(monkeypatch, tmp_path)
+    monkeypatch.setattr(canary_service, "control_client", lambda _ws: control)
+    monkeypatch.setattr(canary_service, "data_client", lambda _ws: MagicMock())
+    monkeypatch.setattr(canary_service.experiment_service, "_stop_ab_test",
+                        lambda *a, **k: {"executionStatus": "STOPPED"})
+    candidate = AgentSpec(**spec_input(runtime_config=CANDIDATE, system_prompt="rejected"))
+    canary = canary_service.start_canary(agent, candidate, ws_ctx(RESOURCES))
+    current, minted, _ = canary_infra.mint_candidate_version(
+        agent=agent, edited_spec=candidate, control_client=control,
+        workspace=ws_ctx(RESOURCES), canary_id=canary.id,
+    )
+    canary_service._update(canary.id, artifact={"setup": {
+        "v_current": current, "v_candidate": minted, "ab_test_id": "ab1",
+    }})
+
+    result = canary_service.act_rollback(canary.id, lambda _m: None)
+
+    assert result["restored_version"] == "3"
+    assert_settings(control.updates[-1], V1)
 
 
 def test_existing_direct_execution_without_pre_publish_proof_refuses_recovery(monkeypatch):

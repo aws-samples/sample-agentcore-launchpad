@@ -367,8 +367,11 @@ a legacy snapshot cannot establish historical settings and retains current ones.
 Promotion and canary replacement also carry omitted target intent. Failure recovery
 is different from an ordinary snapshot rollback: canary restore reads the proven
 pre-candidate immutable Runtime version, and direct promotion captures legacy AWS
-settings before publishing. Missing historical proof or unsupported metadata stops
-recovery for operator review instead of echoing the rejected candidate's billing.
+settings before publishing. A runtime that reports neither `platformVersion` nor
+`resourceConfigurations` (one not updated since AWS introduced platform versions)
+is read as V1 / consumption, the documented create default. Missing historical
+proof or other unsupported metadata stops recovery for operator review instead of
+echoing the rejected candidate's billing.
 
 V2 prepares a snapshot during create/update, so readiness can take minutes; the
 existing bounded wait permits 1200 seconds. The UI links to the

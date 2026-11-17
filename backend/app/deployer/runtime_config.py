@@ -29,15 +29,21 @@ def captured_runtime_config(detail: dict[str, Any]) -> RuntimeConfig:
     """Capture proven AWS settings before a publish, or from an immutable version.
 
     Unlike ordinary legacy updates, a restore must SEND the original platform.
-    Missing platform metadata cannot prove V1. Unknown resource shapes are refused
-    rather than reduced to consumption or a guessed baseline.
+    A runtime not updated since AWS introduced platform versions reports neither
+    ``platformVersion`` nor ``resourceConfigurations`` (most live runtimes did, as
+    of 2026-11); it is V1 on consumption, the documented create default, since
+    resource configurations exist only on V2. A missing platform alongside
+    resources, an unknown platform, or an unknown resource shape is refused rather
+    than reduced to consumption or a guessed baseline.
     """
     platform = detail.get("platformVersion")
+    resources = detail.get("resourceConfigurations")
+    if platform is None and (resources is None or resources == []):
+        return RuntimeConfig(platform_version="V1", billing_model="consumption")
     if platform not in {"V1", "V2"}:
         raise RuntimeError(
             "original Runtime platform metadata is missing; recovery requires review"
         )
-    resources = detail.get("resourceConfigurations")
     if resources is None or resources == []:
         return RuntimeConfig(platform_version=platform, billing_model="consumption")
     if (

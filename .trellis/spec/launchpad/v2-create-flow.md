@@ -71,9 +71,10 @@ Legacy updates reuse successful live reads; explicit consumption deliberately
 omits resource configurations. `carry_runtime_config` also protects target intent
 when old promotion bundles and canary artifacts omit it. Failure restore must use
 proven original settings: `original_runtime_config` reads the pre-candidate version,
-and direct promotion captures legacy platform/billing before publish. Missing
-version proof, failed reads or unsupported metadata refuse recovery rather than
-preserving the rejected candidate. Ordinary old snapshot rollback remains a
+and direct promotion captures legacy platform/billing before publish. A read with
+neither `platformVersion` nor `resourceConfigurations` (a pre-platform runtime) is
+V1/consumption. Missing version proof, failed reads or other unsupported metadata
+refuse recovery rather than preserving the rejected candidate. Ordinary old snapshot rollback remains a
 preserve-current operation. Runtime worker defaults remain unchanged.
 
 ### 4. Validation & Error Matrix
