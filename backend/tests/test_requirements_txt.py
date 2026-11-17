@@ -339,6 +339,7 @@ def test_preresolve_targets_the_requested_python(monkeypatch):
 
     preresolve("requests==2.32.3\n", python_version="3.11", runner=capture)
     cmd = seen["cmd"]
+    assert "--no-config" in cmd
     assert cmd[cmd.index("--python-version") + 1] == "3.11"
     assert cmd[cmd.index("--python-platform") + 1] == "aarch64-manylinux_2_28"
     assert "--only-binary=:all:" in cmd

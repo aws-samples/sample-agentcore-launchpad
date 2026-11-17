@@ -101,6 +101,9 @@ def _compile_lock(
     — including for the platform's own ranged pins — so nothing about an artifact
     is reproducible and there is no record of what went into it.
 
+    Ignore host uv configuration: backend dependency overrides must not change
+    the agent's dependency metadata or produce a lock pip cannot install.
+
     Deliberately no fallback: if the resolve fails, the stage fails. A supply-chain
     control that silently reverts to the unchecked install is decoration.
     """
@@ -110,7 +113,7 @@ def _compile_lock(
     declared.write_text("\n".join(requirements) + "\n", encoding="utf-8")
     proc = compile_runner(
         [
-            "uv", "pip", "compile", str(declared),
+            "uv", "pip", "compile", str(declared), "--no-config",
             "--generate-hashes", "--quiet",
             "--python-version", python_version or TARGET_PYTHON,
             "--python-platform", uv_platform(),
