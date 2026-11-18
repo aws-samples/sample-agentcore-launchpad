@@ -426,6 +426,7 @@ def _normalize(
         "data_source": {
             "log_groups": list(ds.get("logGroupNames") or ([row.log_group] if row else [])),
             "service_name": (ds.get("serviceNames") or [row.service_name if row else None])[0],
+            "service_names": ds.get("serviceNames") or ([row.service_name] if row else []),
         },
         "mode": mode_of(aws),
         "insights": [i.get("insightId") for i in aws.get("insights") or []],
@@ -572,10 +573,13 @@ def get_config(
 # ─── write side ─────────────────────────────────────────────────────────────
 
 
-def _refuse_duplicate_failure_analysis(control: Any, service_name: str) -> None:
+def _refuse_duplicate_failure_analysis(
+    control: Any, service_names: Sequence[str], *, exclude: str | None = None,
+) -> None:
     """Check the AWS source directly, including configs invisible to this viewer."""
     for summary in ac.list_online_eval_configs(control):
-        if summary.get("executionStatus") == "DISABLED":
+        if (summary.get("executionStatus") == "DISABLED"
+                or summary["onlineEvaluationConfigId"] == exclude):
             continue
         config = ac.get_online_eval_config(
             control, config_id=summary["onlineEvaluationConfigId"],
@@ -583,7 +587,7 @@ def _refuse_duplicate_failure_analysis(control: Any, service_name: str) -> None:
         if config.get("executionStatus") == "DISABLED":
             continue
         source = (config.get("dataSourceConfig") or {}).get("cloudWatchLogs") or {}
-        if service_name in (source.get("serviceNames") or ()) and any(
+        if set(service_names).intersection(source.get("serviceNames") or ()) and any(
             evaluator.get("evaluatorId") == ac.FAILURE_ANALYSIS
             for evaluator in config.get("evaluators") or ()
         ):
@@ -629,7 +633,7 @@ def create_config(
             status_code=400,
         )
     if enable_on_create and ac.FAILURE_ANALYSIS in chosen:
-        _refuse_duplicate_failure_analysis(control, service_name)
+        _refuse_duplicate_failure_analysis(control, [service_name])
     text = (description or f"Launchpad online evaluation · {agent.name}")[:200]
 
     created: dict[str, Any] | None = None
@@ -723,6 +727,11 @@ def patch_config(
         chosen = normalize_online_evaluators(
             patch["evaluators"], control, code_prefix="online_eval"
         )
+        if (current["execution_status"] == "ENABLED" and ac.FAILURE_ANALYSIS in chosen
+                and ac.FAILURE_ANALYSIS not in current["evaluators"]):
+            _refuse_duplicate_failure_analysis(
+                control, current["data_source"]["service_names"], exclude=config_id,
+            )
         fields["evaluators"] = [{"evaluatorId": e} for e in chosen]
     rule_keys = {"sampling_percentage", "session_timeout_minutes", "filters"}
     if any(patch.get(k) is not None for k in rule_keys):
@@ -748,6 +757,11 @@ def set_execution_status(
     current = get_config(db, ws, config_id, control, viewer=viewer)
     _require_owner(current, ("agent", "external"), "resume" if enabled else "pause")
     eval_service.reject_preview_submission(enabled and current["mode"] == "insights")
+    if (enabled and current["execution_status"] != "ENABLED"
+            and ac.FAILURE_ANALYSIS in current["evaluators"]):
+        _refuse_duplicate_failure_analysis(
+            control, current["data_source"]["service_names"], exclude=config_id,
+        )
     ac.update_online_eval_config(
         control, config_id=config_id, executionStatus="ENABLED" if enabled else "DISABLED"
     )

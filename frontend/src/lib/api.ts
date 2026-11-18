@@ -4076,7 +4076,7 @@ export interface OnlineEvalConfigRow {
   session_timeout_minutes: number | null;
   filter_count: number;
   filters: OnlineEvalFilter[];
-  data_source: { log_groups: string[]; service_name: string | null };
+  data_source: { log_groups: string[]; service_name: string | null; service_names?: string[] };
   insights: string[];
   clustering_frequencies: string[];
   execution_role_arn: string | null;

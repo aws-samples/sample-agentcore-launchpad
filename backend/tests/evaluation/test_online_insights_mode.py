@@ -374,3 +374,30 @@ def test_reports_survive_a_batch_listing_failure(client, monkeypatch):
     assert [r["origin"] for r in body["reports"]] == ["console"]
     assert body["reports"][0]["status"] == "EVALUATING"
     db.close()
+
+
+@pytest.mark.parametrize("transition", ["patch", "resume"])
+def test_failure_analysis_enabled_transitions_check_other_configs(client, monkeypatch, transition):
+    target, other = "oe_a-1", "oe_b-1"
+    failure = "Builtin.FailureAnalysis"
+    rows = {
+        target: aws_detail(target, "oe_eval_agent_aaaaaa", enabled=transition == "patch",
+                           evaluators=("Builtin.Helpfulness",) if transition == "patch"
+                           else (failure,)),
+        other: aws_detail(other, "external", evaluators=(failure,)),
+    }
+    with SessionLocal() as db:
+        agent = make_agent(db)
+        ledger_row(db, agent, target)
+    control, _ = stub_environment(monkeypatch, rows)
+    url = f"/api/eval/online/{target}"
+    def change():
+        if transition == "patch":
+            return client.patch(url, json={"evaluators": [failure]})
+        return client.post(url + "/resume")
+    res = change()
+    assert res.status_code == 409
+    assert res.json()["code"] == "online_eval.failure_analysis_already_enabled"
+    control.update_online_evaluation_config.assert_not_called()
+    rows[other]["executionStatus"] = "DISABLED"
+    assert change().status_code == 200

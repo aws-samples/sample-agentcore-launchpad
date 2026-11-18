@@ -524,7 +524,9 @@ def test_get_detail_and_404(client, monkeypatch):
     ledger_row(db, agent, "oe_a-1")
     body = client.get("/api/eval/online/oe_a-1").json()
     assert body["owner"] == "agent" and body["filters"][0]["key"] == "k"
-    assert body["data_source"] == {"log_groups": [LOG_GROUP], "service_name": SERVICE}
+    assert body["data_source"] == {
+        "log_groups": [LOG_GROUP], "service_name": SERVICE, "service_names": [SERVICE],
+    }
     assert body["execution_role_arn"] == ROLE
     res = client.get("/api/eval/online/missing")
     assert res.status_code == 404 and res.json()["code"] == "online_eval.not_found"
