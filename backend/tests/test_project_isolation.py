@@ -339,6 +339,7 @@ def world(app, no_aws):  # noqa: F811
 # project-scoped GET route must be here or in ROUTE_PARAMS (test_every_param_is_filled).
 PARAMS: dict[str, Any] = {
     "agent_id": lambda i: i["agents"],
+    "insight_id": lambda i: f"zz{i['_pid']}insight",
     "candidate_id": lambda i: i["admission_candidates"],
     "task_id": lambda i: i["annotation_tasks"],
     "key_id": lambda i: i["api_keys"],
