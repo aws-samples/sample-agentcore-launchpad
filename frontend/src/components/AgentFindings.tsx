@@ -82,7 +82,8 @@ function LivePage({ agent, cursor, next }: { agent: string; cursor: string | nul
   if (loading) return <p role="status">{t("agentFindings.loading")}</p>;
   if (error) return <LoadProblem message={error} retry={reload} />;
   if (!data) return null;
-  return <><p><code>{data.application_name}</code></p>
+  return <><p><code>{data.application_name}</code>{" "}
+    <button type="button" onClick={() => { setExpanded(""); reload(); }}>{t("agentFindings.refresh")}</button></p>
     {!data.items.length && <p>{t(data.next_cursor || cursor ? "agentFindings.noPage" : "agentFindings.noLive")}</p>}
     {data.items.map((item) => <article className="af-item" key={item.agentInsightId}>
       <button className="af-toggle" type="button" aria-expanded={expanded === item.agentInsightId}
