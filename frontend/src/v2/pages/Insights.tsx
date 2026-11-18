@@ -1,6 +1,8 @@
+import { FindingsBrowser } from "../../components/AgentFindings";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { FAILURE_ANALYSIS_ID } from "../../lib/agent-findings";
 import { api, type V2Range } from "../../lib/api";
 import { evaluatorLabel } from "../../lib/evaluators";
 import { parseTimestamp } from "../../lib/timestamps";
@@ -35,6 +37,7 @@ interface InsightData {
   tasks: V2Task[];
   /** completed insights runs in range — their clusters feed the 评估洞察 panel */
   insightTasks: V2Task[];
+  batchRuns: V2Task[];
   skippedRuns: number;
   failedReads: number;
 }
@@ -68,7 +71,9 @@ async function loadInsights(range: V2Range): Promise<InsightData> {
     }
   });
   const rows = [...runRows.flat(), ...onlineRows.flat()].sort((a, b) => String(b.time ?? "").localeCompare(String(a.time ?? "")));
-  return { rows, tasks: [...runs, ...online], insightTasks, skippedRuns: Math.max(0, runs.length - MAX_RUNS), failedReads };
+  const batchRuns = tasks.filter((task) => task.kind === "run" && task.mode === "evaluators"
+    && task.evaluators.includes(FAILURE_ANALYSIS_ID) && (parseTimestamp(task.createdAt)?.getTime() ?? 0) >= since);
+  return { rows, tasks: [...runs, ...online], insightTasks, batchRuns, skippedRuns: Math.max(0, runs.length - MAX_RUNS), failedReads };
 }
 
 /**
@@ -186,7 +191,7 @@ export function V2Insights() {
       </Card>
       <SummaryKpis summary={summary} />
       <EvaluatorBreakdown summary={summary} />
-      <InsightsPanel tasks={insightScope} loading={loading} needle={q} />
+      <FindingsBrowser runs={data?.batchRuns ?? []} busy={loading} history={<InsightsPanel tasks={insightScope} loading={loading} needle={q} />} />
       <FeedbackCard range={range} />
       <Card title={t("v2.insights.details")}>
         <ResultsTable rows={rows} loading={loading} error={error} onRetry={reload} range={range} exportName={`insights-${range}`} />

@@ -9,7 +9,7 @@ import { useAuth } from "../../../auth/auth-context";
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, type OnlineEvalConfigRow, type OnlineEvalReportRow, type V2Range } from "../../../lib/api";
 import { hasInsightTrees } from "../../../lib/evaluation";
-import { evaluatorLabel } from "../../../lib/evaluators";
+import { evaluatorScoreLabel, evaluatorLabel } from "../../../lib/evaluators";
 import { normalizedScore, RANGES, rangeLabel } from "../../../v2/format";
 import { InsightClusters } from "../../../v2/InsightClusters";
 import {
@@ -29,7 +29,7 @@ import { rowsFromOnline, summarize } from "../../../v2/results";
 import { taskFromOnline } from "../../../v2/tasks";
 import { V2ToastProvider } from "../../../v2/ui";
 import { ago } from "../../format";
-import { useLoad, useToast } from "../../hooks";
+import { useLoad } from "../../hooks";
 import { permReason } from "../../reasons";
 import { Btn, Chip, Dialog, Empty, Filters, Lamp, Notice, PageHead, Panel, Skeleton, Spark, Stat } from "../../ui";
 import { OnlineCostCard } from "../tasks/CostCard";
@@ -128,7 +128,7 @@ function ScoresPanel({ row }: { row: OnlineEvalConfigRow }) {
                         </div>
                       </div>
                     </td>
-                    <td className="num"><span className="v3-onl-score" data-s={s}>{e.mean == null ? "—" : e.mean.toFixed(2)}</span></td>
+                    <td className="num"><span className="v3-onl-score" data-s={s}>{evaluatorScoreLabel(e.mean, e.evaluator_id)}</span></td>
                     <td style={{ width: 140 }}><div className="v3-onl-spark">{series.length > 1 ? <Spark values={series} s={s === "act" ? "act" : "ok"} /> : <span style={{ color: "var(--v3-text-3)" }}>—</span>}</div></td>
                     <td className="num">{t("v2.online.counts", { count: e.count, sessions: e.sessions })}</td>
                     <td>
@@ -206,22 +206,14 @@ function ReportDialog({ configId, report, onClose }: { configId: string; report:
 /** Insights mode: scheduled and on-demand reports, each opened in a dialog. */
 function ReportsPanel({ row }: { row: OnlineEvalConfigRow }) {
   const { t } = useTranslation();
-  const toast = useToast();
-  const { can } = useAuth();
   const [tick, setTick] = useState(0);
   const reports = useLoad(() => api.onlineEvalReports(row.config_id), `v3-online-reports:${row.config_id}:${tick}`);
-  const [range, setRange] = useState<V2Range>("24h");
-  const [busy, setBusy] = useState(false);
-  // a failed "run report" stays on the panel with its AWS details (projects §19)
-  const [runError, setRunError] = useState<unknown>(null);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [showUnattributed, setShowUnattributed] = useState(false);
   const [limit, setLimit] = useState(10);
   const list = useMemo(() => reports.data?.reports ?? [], [reports.data]);
   const unattributed = useMemo(() => reports.data?.unattributed ?? [], [reports.data]);
   const anyActive = list.some(reportActive);
-  const consoleRunning = list.some((r) => r.origin === "console" && reportActive(r));
-  const canRun = isEditable(row) && can("eval.run");
 
   useEffect(() => {
     if (!anyActive) return;
@@ -229,46 +221,21 @@ function ReportsPanel({ row }: { row: OnlineEvalConfigRow }) {
     return () => window.clearInterval(timer);
   }, [anyActive]);
 
-  const run = async () => {
-    setBusy(true);
-    setRunError(null);
-    try {
-      await api.onlineEvalRunReport(row.config_id, range);
-      toast("ok", t("v2.online.reportStarted"));
-      setTick((n) => n + 1);
-    } catch (err) {
-      setRunError(err);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const shown = useMemo(() => (showUnattributed ? [...list, ...unattributed] : list), [showUnattributed, list, unattributed]);
   const opened = shown.find((r) => reportKey(r) === openKey) ?? null;
 
   return (
     <Panel
-      title={t("v3.online.reports")}
+      title={t("v2.online.reportsTitle")}
       flush
       end={
         <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
           <Btn size="sm" kind="ghost" onClick={() => setTick((n) => n + 1)}><RefreshCw size={13} /></Btn>
-          {isEditable(row) && (
-            <>
-              <RangePick value={range} onChange={setRange} />
-              <Btn size="sm" kind="primary" busy={busy} disabled={consoleRunning || isTransient(row) || !canRun}
-                disabledReason={!canRun ? permReason(t, "eval.run") : isTransient(row) ? t("story.reason.settling") : t("v2.online.reportPending")}
-                onClick={() => void run()}>
-                {t("v2.online.runReport")}
-              </Btn>
-            </>
-          )}
         </span>
       }
     >
       <div style={{ padding: "0 20px 12px", display: "grid", gap: 10 }}>
         <p style={{ margin: 0, color: "var(--v3-text-3)", fontSize: 13 }}>{t("v2.online.reportsSub")}</p>
-        {runError != null && <Notice s="act"><ApiErrorDetail error={runError} /></Notice>}
         {reports.data?.aws_unavailable && <Notice s="wait">{t("v2.online.awsUnavailable")}</Notice>}
         {unattributed.length > 0 && (
           <label className="v3-onl-check">
@@ -376,7 +343,7 @@ export function OnlineDetail({ id }: { id: string }) {
             {canToggle(row) && row.execution_status === "ENABLED" && (
               <Btn busy={action.busy} disabled={transient} disabledReason={t("story.reason.settling")} onClick={() => action.ask({ row, action: "pause" })}><Pause size={14} /> {t("v2.tasks.pause")}</Btn>
             )}
-            {canToggle(row) && row.execution_status === "DISABLED" && (
+            {canToggle(row) && row.mode !== "insights" && row.execution_status === "DISABLED" && (
               <Btn busy={action.busy} disabled={transient || !mayRun}
                 disabledReason={!mayRun ? permReason(t, "eval.run") : t("story.reason.settling")} onClick={() => action.ask({ row, action: "resume" })}><Play size={14} /> {t("v2.tasks.resume")}</Btn>
             )}
@@ -393,7 +360,7 @@ export function OnlineDetail({ id }: { id: string }) {
                 <Copy size={14} /> {t("v2.tasks.copy")}
               </Btn>
             )}
-            {isEditable(row) && (
+            {row.mode !== "insights" && isEditable(row) && (
               <Btn kind="primary" busy={action.busy} disabled={transient || !mayRun}
                 disabledReason={!mayRun ? permReason(t, "eval.run") : t("story.reason.settling")} onClick={() => navigate(onlineHref({ view: "edit", id: row.config_id }))}>
                 {t("v3.online.edit")}
@@ -402,6 +369,7 @@ export function OnlineDetail({ id }: { id: string }) {
           </>
         }
       />
+      {mode === "insights" && <Notice>{t("v2.online.legacyReadonly")}</Notice>}
       {row.failure_reason && <Notice s="act">{row.failure_reason}</Notice>}
       {row.duplicate_enabled && <Notice s="wait">{t("v2.online.duplicateWarn")}</Notice>}
       {row.owner === "experiment" && (

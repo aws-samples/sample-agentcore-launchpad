@@ -77,8 +77,8 @@ def test_invalid_insight_rejected(client, monkeypatch):
         "session_ids": ["s1" + "x" * 32],
         "insights": ["Builtin.Insight.Bogus"],
     })
-    assert res.status_code == 422
-    assert res.json()["code"] == "run.invalid_insight"
+    assert res.status_code == 410
+    assert res.json()["code"] == "insights.preview_retired"
 
 
 def test_insights_subset_only_selected_ids(client, monkeypatch):
@@ -88,8 +88,8 @@ def test_insights_subset_only_selected_ids(client, monkeypatch):
     data, calls = stub_environment(monkeypatch)
 
     res = client.post("/api/eval/runs", json={
-        "agent_id": agent.id, "mode": "insights", "lookback_hours": 6,
-        "insights": ["Builtin.Insight.UserIntent"], "wait_seconds": 0,
+        "agent_id": agent.id, "lookback_hours": 6,
+        "evaluators": ["Builtin.FailureAnalysis"], "wait_seconds": 0,
     })
     assert res.status_code == 201
     run = wait_terminal(client, res.json()["id"])
@@ -97,8 +97,8 @@ def test_insights_subset_only_selected_ids(client, monkeypatch):
     assert calls["n"] == 0
 
     kwargs = data.start_batch_evaluation.call_args.kwargs
-    assert kwargs["insights"] == [{"insightId": "Builtin.Insight.UserIntent"}]
-    assert "evaluators" not in kwargs
+    assert kwargs["evaluators"] == [{"evaluatorId": "Builtin.FailureAnalysis"}]
+    assert "insights" not in kwargs
     fc = kwargs["dataSourceConfig"]["cloudWatchLogs"]["filterConfig"]
     assert fc["timeRange"]["endTime"] - fc["timeRange"]["startTime"] == timedelta(hours=6)
 
@@ -224,7 +224,8 @@ def test_log_source_insights_over_picked_sessions(client, monkeypatch):
     monkeypatch.setattr(aws_clients, "client", lambda *a, **k: _Logs(LOG_SOURCE["log_group_names"]))
     sessions = [f"01KK{i}#feishu#oc_1" for i in range(3)]
     res = client.post("/api/eval/runs", json={
-        "log_source": LOG_SOURCE, "mode": "insights", "session_ids": sessions,
+        "log_source": LOG_SOURCE, "evaluators": ["Builtin.FailureAnalysis"],
+        "session_ids": sessions,
         "session_source": "logs", "wait_seconds": 0,
     })
     assert res.status_code == 201, res.text

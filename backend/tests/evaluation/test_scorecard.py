@@ -855,11 +855,13 @@ def test_rerun_refuses_session_log_and_insights_runs(client, submitted):
     for source in (
         _run(agent, session_ids=["s1"]),
         _run(agent, dataset_name="logs:2", session_ids=["s1", "s2"]),
-        _run(agent, mode="insights", dataset_name="window:24h"),
     ):
         res = client.post(f"/api/eval/runs/{source}/rerun")
         assert res.status_code == 422, res.text
         assert res.json()["code"] == "run.rerun_unsupported"
+    legacy = _run(agent, mode="insights", dataset_name="window:24h")
+    res = client.post(f"/api/eval/runs/{legacy}/rerun")
+    assert res.status_code == 410 and res.json()["code"] == "insights.preview_retired"
     assert submitted == []
     assert client.post("/api/eval/runs/nope/rerun").json()["code"] == "run.not_found"
 
@@ -922,3 +924,23 @@ def test_times_on_the_scorecard_carry_utc(client):
     body = client.get("/api/eval/scorecard").json()
     assert body["runs"][0]["created_at"].endswith("+00:00")
     assert body["agents"][0]["versions"][0]["created_at"].endswith("+00:00")
+
+def test_findings_hide_runs_and_agents_from_other_members(ada, bob, monkeypatch):
+    from app.evaluation import routers
+
+    ada_id, _ = ada
+    bob_id, bob_client = bob
+    ada_agent = _agent(name="ada-findings-agent", created_by=ada_id)
+    bob_agent = _agent(name="bob-findings-agent", created_by=bob_id)
+    hidden_run = _run(bob_agent, created_by=ada_id)
+    hidden_agent = _run(ada_agent, created_by=bob_id)
+    _isolate()
+
+    def unexpected_read(*args, **kwargs):
+        raise AssertionError("finding evidence must be authorized before reading AWS")
+
+    monkeypatch.setattr(routers, "batch_findings", unexpected_read)
+    for run_id in (hidden_run, hidden_agent):
+        response = bob_client.get(f"/api/eval/runs/{run_id}/findings")
+        assert response.status_code == 404
+        assert response.json()["code"] == "run.not_found"

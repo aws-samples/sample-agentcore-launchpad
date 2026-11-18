@@ -12,7 +12,7 @@ import {
   type EvaluatorUpdateBody,
   type ScalePoint,
 } from "../../../lib/api";
-import {
+import { FAILURE_ANALYSIS_EVALUATOR,
   defaultJudgeModel,
   evaluatorLabel,
   type EvaluatorLevel,
@@ -159,7 +159,7 @@ export function EvaluatorEditor({ id }: { id: string | null }) {
     );
   }
 
-  const bases = (catalog.data?.evaluators ?? []).filter((e) => e.source !== "custom");
+  const bases = (catalog.data?.evaluators ?? []).filter((e) => e.source !== "custom" && e.id !== FAILURE_ANALYSIS_EVALUATOR);
   const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
   const ph = LEVEL_PLACEHOLDERS[draft.level];
   const tokens = [

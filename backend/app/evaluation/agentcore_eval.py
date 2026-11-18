@@ -91,6 +91,9 @@ def _with_judge_fallback(
     return response
 
 
+FAILURE_ANALYSIS = "Builtin.FailureAnalysis"
+
+
 # Default built-in evaluators used across batch + online evaluation.
 BUILTIN_EVALUATORS = [
     "Builtin.GoalSuccessRate",
@@ -105,6 +108,7 @@ BUILTIN_EVALUATORS = [
 ALL_BUILTIN_EVALUATORS: dict[str, str] = {
     # session level
     "Builtin.GoalSuccessRate": "SESSION",
+    FAILURE_ANALYSIS: "SESSION",
     # trace level — quality
     "Builtin.Helpfulness": "TRACE",
     "Builtin.Correctness": "TRACE",
@@ -149,6 +153,7 @@ TRAJECTORY_EVALUATORS: dict[str, str] = {
 LOWER_IS_BETTER_EVALUATORS = frozenset(
     {
         "Builtin.Refusal",
+        FAILURE_ANALYSIS,
         "ThirdParty.DeepEval.Bias",
         "ThirdParty.DeepEval.Toxicity",
     }
@@ -594,9 +599,7 @@ def poll_batch_evaluation(
     return client.get_batch_evaluation(batchEvaluationId=batch_id)
 
 
-# ─── Insights (failure analysis / user intent / execution summary) ──────────
-# Insights reuse the batch-evaluation API: StartBatchEvaluation with an
-# `insights` list INSTEAD of `evaluators` (the two are mutually exclusive).
+# ─── Historical Insights reports (failure / intent / execution summary) ─────
 INSIGHT_TYPES = [
     "Builtin.Insight.FailureAnalysis",
     "Builtin.Insight.UserIntent",
@@ -604,38 +607,8 @@ INSIGHT_TYPES = [
 ]
 
 
-def start_insights_evaluation(
-    client: Any,
-    *,
-    name: str,
-    service_name: str,
-    log_groups: list[str],
-    insights: list[str] | None = None,
-    session_ids: list[str] | None = None,
-    time_range: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Start an insights analysis over agent sessions.
-
-    Scope with either explicit ``session_ids`` (e.g. a past run's sessions) or
-    a ``time_range`` {startTime, endTime}. Max 500 sessions per analysis.
-    """
-    filter_config: dict[str, Any] = {}
-    if session_ids:
-        filter_config["sessionIds"] = session_ids
-    if time_range:
-        filter_config["timeRange"] = time_range
-    cw: dict[str, Any] = {
-        "serviceNames": [service_name],
-        "logGroupNames": log_groups,
-    }
-    if filter_config:
-        cw["filterConfig"] = filter_config
-    return client.start_batch_evaluation(
-        batchEvaluationName=name,
-        insights=[{"insightId": i} for i in (insights or INSIGHT_TYPES)],
-        dataSourceConfig={"cloudWatchLogs": cw},
-        clientToken=str(uuid.uuid4()),
-    )
+def is_preview_evaluator(evaluator_id: str) -> bool:
+    return evaluator_id.rsplit("/", 1)[-1] in INSIGHT_TYPES
 
 
 def parse_insights(result: dict[str, Any]) -> dict[str, Any]:
@@ -1588,16 +1561,11 @@ def create_online_eval_config(
     rule: dict[str, Any],
     role_arn: str,
     enable_on_create: bool,
-    insights: Sequence[str] | None = None,
-    clustering_frequencies: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """``CreateOnlineEvaluationConfig`` with the platform's fixed data-source shape.
 
     ``rule`` must be complete (sampling + session timeout + filters): AWS treats
     it as one value on Update, so the caller owns its assembly in one place.
-    Exactly one of ``evaluators`` (scores mode) / ``insights`` (insights mode) is
-    sent — AWS forbids both on one config; ``clusteringConfig`` only with insights
-    and only when non-empty (live-verified 2026-09-02).
     """
     kwargs: dict[str, Any] = {
         "onlineEvaluationConfigName": name,
@@ -1610,40 +1578,8 @@ def create_online_eval_config(
         "enableOnCreate": enable_on_create,
         "clientToken": str(uuid.uuid4()),
     }
-    if insights:
-        kwargs["insights"] = [{"insightId": i} for i in insights]
-        if clustering_frequencies:
-            kwargs["clusteringConfig"] = {"frequencies": list(clustering_frequencies)}
-    else:
-        kwargs["evaluators"] = [{"evaluatorId": e} for e in (evaluators or [])]
+    kwargs["evaluators"] = [{"evaluatorId": e} for e in (evaluators or [])]
     return client.create_online_evaluation_config(**kwargs)
-
-
-def start_online_report(
-    client: Any,
-    *,
-    name: str,
-    config_arn: str,
-    time_range: dict[str, Any],
-    description: str | None = None,
-) -> dict[str, Any]:
-    """On-demand report over an online evaluation config's already-sampled sessions
-    (``dataSourceConfig.onlineEvaluationConfigSource``). The batch inherits the
-    config's evaluators/insights — passing either is a ValidationException
-    (live-verified 2026-09-02) — and its record echoes neither back."""
-    kwargs: dict[str, Any] = {
-        "batchEvaluationName": name,
-        "dataSourceConfig": {
-            "onlineEvaluationConfigSource": {
-                "onlineEvaluationConfigArn": config_arn,
-                "timeRange": time_range,
-            }
-        },
-        "clientToken": str(uuid.uuid4()),
-    }
-    if description:
-        kwargs["description"] = description[:200]
-    return client.start_batch_evaluation(**kwargs)
 
 
 def list_batch_evaluations(client: Any, *, limit: int = 300) -> list[dict[str, Any]]:

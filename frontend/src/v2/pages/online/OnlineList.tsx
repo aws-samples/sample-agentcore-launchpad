@@ -208,7 +208,7 @@ export function OnlineList() {
         return (
           <div className="v2-actions">
             <LinkButton onClick={() => open(row)}>{t("v2.common.view")}</LinkButton>
-            {isEditable(row) && (
+            {row.mode !== "insights" && isEditable(row) && (
               <LinkButton disabled={locked || !mayRun} onClick={() => setParams({ view: "edit", kind: "online", id: row.config_id }, back)}>
                 {t("v2.common.edit")}
               </LinkButton>
@@ -218,7 +218,7 @@ export function OnlineList() {
                 {t("v2.tasks.pause")}
               </LinkButton>
             )}
-            {canToggle(row) && row.execution_status === "DISABLED" && (
+            {canToggle(row) && row.mode !== "insights" && row.execution_status === "DISABLED" && (
               <LinkButton disabled={locked || !mayRun} onClick={() => setPending({ row, action: "resume" })}>
                 {t("v2.tasks.resume")}
               </LinkButton>

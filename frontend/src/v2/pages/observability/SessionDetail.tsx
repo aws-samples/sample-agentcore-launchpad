@@ -18,7 +18,7 @@ import {
   type V2Range,
 } from "../../../lib/api";
 import { errorText } from "../../../lib/errors";
-import { evaluatorLabel } from "../../../lib/evaluators";
+import { FAILURE_ANALYSIS_EVALUATOR, evaluatorLabel } from "../../../lib/evaluators";
 import { EvaluatorPicker } from "../../EvaluatorPicker";
 import { fmtDuration, fmtNumber, fmtScore, fmtTime, normalizedScore, scoreTone } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
@@ -144,7 +144,7 @@ function ScoreNow({ sessionId, range }: { sessionId: string; range: V2Range }) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<ObsSessionScore | null>(null);
   const [error, setError] = useState<{ code: string | null; message: string } | null>(null);
-  const list = useMemo(() => evaluators.data?.evaluators ?? [], [evaluators.data]);
+  const list = useMemo(() => (evaluators.data?.evaluators ?? []).filter((e) => e.id !== FAILURE_ANALYSIS_EVALUATOR), [evaluators.data]);
   // the picker is long — bring the outcome into view once it lands
   const outcomeRef = useRef<HTMLDivElement>(null);
   useEffect(() => {

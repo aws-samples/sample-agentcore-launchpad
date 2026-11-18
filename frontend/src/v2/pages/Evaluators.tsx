@@ -13,7 +13,7 @@ import {
   type EvaluatorUpdateBody,
   type ScalePoint,
 } from "../../lib/api";
-import {
+import { FAILURE_ANALYSIS_EVALUATOR,
   customUnavailableNote,
   evaluatorLabel,
   defaultJudgeModel,
@@ -424,7 +424,7 @@ function EvaluatorEditor({ id }: { id: string | null }) {
   // seed the edit form once the evaluator arrives
   if (editing && draft === null && detail.data) setDraft(draftFrom(detail.data));
 
-  const bases = (catalog.data?.evaluators ?? []).filter((e) => e.source !== "custom");
+  const bases = (catalog.data?.evaluators ?? []).filter((e) => e.source !== "custom" && e.id !== FAILURE_ANALYSIS_EVALUATOR);
 
   if (editing && (detail.loading || draft === null)) {
     return detail.error ? <Alert tone="error">{detail.error}</Alert> : <Spin />;

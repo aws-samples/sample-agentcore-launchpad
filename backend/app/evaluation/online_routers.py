@@ -11,9 +11,10 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.core.project_scope import current_project
+from app.evaluation import agentcore_eval as ac
 from app.evaluation import online
 from app.evaluation.online_evaluators import ONLINE_EVAL_MAX, refuse_hidden_evaluators
-from app.evaluation.service import several_projects
+from app.evaluation.service import reject_preview_submission, several_projects
 from app.models.ledger import Agent
 from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.services import agent_access
@@ -58,11 +59,11 @@ class FilterSpec(BaseModel):
 class OnlineConfigCreate(BaseModel):
     agent_id: str
     mode: Literal["scores", "insights"] = "scores"
-    # scores mode: 1..10 evaluators; insights mode: 1..3 insight ids (+ frequencies)
+    # Keep the legacy fields parseable so stale clients receive a migration error.
     evaluators: list[str] | None = Field(default=None, max_length=ONLINE_EVAL_MAX)
     insights: list[str] | None = Field(default=None, max_length=3)
     clustering_frequencies: list[str] = Field(default_factory=list, max_length=3)
-    # None → 10 (scores, console default) / 100 (insights, AWS default)
+    # None → 10 (console default)
     sampling_percentage: float | None = Field(default=None, ge=0.01, le=100.0)
     session_timeout_minutes: int = Field(default=15, ge=1, le=1440)
     filters: list[FilterSpec] = Field(default_factory=list, max_length=online.MAX_FILTERS)
@@ -72,17 +73,11 @@ class OnlineConfigCreate(BaseModel):
     confirm_cost: bool = False
 
     @model_validator(mode="after")
-    def _one_analysis_kind(self) -> OnlineConfigCreate:
-        if self.mode == "insights":
-            if self.evaluators:
-                raise ValueError("insights mode takes no evaluators")
-            if not self.insights:
-                raise ValueError("insights mode needs 1..3 insights")
-        else:
-            if self.insights or self.clustering_frequencies:
-                raise ValueError("scores mode takes no insights / clustering_frequencies")
-            if not self.evaluators:
-                raise ValueError("scores mode needs 1..10 evaluators")
+    def _require_evaluators(self) -> OnlineConfigCreate:
+        # Let the authenticated route answer retired payloads with a stable 410.
+        if self.mode == "scores" and not (self.evaluators or self.insights
+                                          or self.clustering_frequencies):
+            raise ValueError("scores mode needs 1..10 evaluators")
         return self
 
 
@@ -134,11 +129,13 @@ def create_config(
     viewer: Viewer = Depends(require_viewer),
 ) -> dict[str, Any]:
     agent = _agent_in(db, ws, req.agent_id, viewer)
+    reject_preview_submission(
+        req.mode == "insights" or bool(req.insights or req.clustering_frequencies)
+        or any(ac.is_preview_evaluator(e) for e in req.evaluators or [])
+    )
     refuse_hidden_evaluators(db, ws.id, viewer, req.evaluators, code_prefix="online_eval")
-    default_sampling = 100.0 if req.mode == "insights" else 10.0
-    sampling = default_sampling if req.sampling_percentage is None else req.sampling_percentage
-    if req.mode == "scores":
-        _assert_daily_cost(db, ws, agent, req, sampling, request)
+    sampling = 10.0 if req.sampling_percentage is None else req.sampling_percentage
+    _assert_daily_cost(db, ws, agent, req, sampling, request)
     return online.create_config(
         db, ws, agent,
         mode=req.mode,

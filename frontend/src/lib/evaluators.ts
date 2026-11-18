@@ -11,6 +11,16 @@ import {
 import { activeCatalogIds } from "./model-catalog";
 import { modelsForActiveRegion } from "./regions";
 
+export const FAILURE_ANALYSIS_EVALUATOR = "Builtin.FailureAnalysis";
+
+/** Raw evaluator readings: Failure Analysis reports the fraction with failures. */
+export function evaluatorScoreLabel(value: number | null | undefined, evaluatorId?: string | null): string {
+  if (value == null) return "—";
+  return evaluatorId === FAILURE_ANALYSIS_EVALUATOR
+    ? new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 }).format(value)
+    : value.toFixed(2);
+}
+
 // Localized display names for evaluators. Builtins translate through the
 // evalPage.evaluatorNames.<Name> locale block, third-party managed evaluators
 // (ThirdParty.<Provider>.<Metric>) through evalPage.thirdPartyNames.<Metric>
@@ -61,6 +71,7 @@ export function builtinsNotInCatalog(selected: string[], catalog: { id: string }
 // fallback for verdict artifacts stored before it did.
 const LOWER_IS_BETTER = new Set([
   "Builtin.Refusal",
+  FAILURE_ANALYSIS_EVALUATOR,
   "ThirdParty.DeepEval.Bias",
   "ThirdParty.DeepEval.Toxicity",
 ]);

@@ -18,8 +18,10 @@ import { ErrorCallout } from "../../../components/ErrorCallout";
 import { api, type V2Range } from "../../../lib/api";
 import { calibrationApi } from "../../../lib/api/calibration";
 import { hasInsightTrees } from "../../../lib/evaluation";
-import { evaluatorLabel } from "../../../lib/evaluators";
+import { evaluatorLabel, evaluatorScoreLabel, FAILURE_ANALYSIS_EVALUATOR } from "../../../lib/evaluators";
 import { downloadCsv, fmtTime } from "../../../v2/format";
+import { BatchFindingResults } from "../../../components/AgentFindings";
+import { FAILURE_ANALYSIS_ID } from "../../../lib/agent-findings";
 import { InsightClusters } from "../../../v2/InsightClusters";
 import { AddToDatasetModal } from "../../../v2/pages/data/AddToDataset";
 import { RunRecommendations } from "../../../v2/pages/tasks/RunRecommendations";
@@ -207,7 +209,7 @@ function ResultDialog({
             <dt>{t("v2.insights.colEvaluator")}</dt>
             <dd>{evaluatorLabel(t, row.evaluatorId)}</dd>
             <dt>{t("v2.insights.colRaw")}</dt>
-            <dd className="mono">{row.score == null ? "—" : row.score}</dd>
+            <dd className="mono">{row.evaluatorId === FAILURE_ANALYSIS_EVALUATOR ? evaluatorScoreLabel(row.score, row.evaluatorId) : (row.score ?? "—")}</dd>
             <dt>{t("v2.insights.colNormalized")}</dt>
             <dd>
               <ScoreChip value={row.normalized} />
@@ -444,7 +446,7 @@ function Results({
                   <td>
                     <ScoreChip value={r.normalized} />
                   </td>
-                  <td className="num">{r.score == null ? "—" : r.score}</td>
+                  <td className="num">{r.evaluatorId === FAILURE_ANALYSIS_EVALUATOR ? evaluatorScoreLabel(r.score, r.evaluatorId) : (r.score ?? "—")}</td>
                   <td>{r.label ? <Chip>{r.label}</Chip> : "—"}</td>
                   <td
                     style={{
@@ -821,6 +823,7 @@ export function TaskDetail({ id }: { id: string }) {
           </div>
         )}
 
+        {!insightsRun && data.evaluators.includes(FAILURE_ANALYSIS_ID) && <BatchFindingResults key={id} runId={id} status={data.status} />}
         <div className="v3-grid v3-split" style={{ alignItems: "start" }}>
           {insightsRun ? (
             <Panel title={t("v2.taskDetail.insightsTitle")}>

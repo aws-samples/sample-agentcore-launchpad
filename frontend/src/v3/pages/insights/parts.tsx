@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, feedbackApi, type V2Range } from "../../../lib/api";
-import { evaluatorLabel } from "../../../lib/evaluators";
+import { evaluatorLabel, evaluatorScoreLabel, FAILURE_ANALYSIS_EVALUATOR } from "../../../lib/evaluators";
 import { hasInsightTrees } from "../../../lib/evaluation";
 import { downloadCsv, fmtScore, fmtTime } from "../../../v2/format";
 import { AddToDatasetModal } from "../../../v2/pages/data/AddToDataset";
@@ -527,7 +527,7 @@ function ResultDialog({
           <dt>{t("v2.insights.colEvaluator")}</dt>
           <dd>{evaluatorLabel(t, row.evaluatorId)}</dd>
           <dt>{t("v2.insights.colRaw")}</dt>
-          <dd className="mono">{row.score == null ? "—" : row.score}</dd>
+          <dd className="mono">{row.evaluatorId === FAILURE_ANALYSIS_EVALUATOR ? evaluatorScoreLabel(row.score, row.evaluatorId) : (row.score ?? "—")}</dd>
           <dt>{t("v2.insights.colNormalized")}</dt>
           <dd>
             <Score value={row.normalized} />

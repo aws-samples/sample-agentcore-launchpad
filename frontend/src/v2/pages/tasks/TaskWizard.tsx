@@ -15,8 +15,7 @@ import { CUSTOM_MODEL_OPTION } from "../../../lib/models";
 import { CustomUnavailableNote } from "../../EvaluatorPicker";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
-import { INSIGHT_TYPES, insightLabel } from "../../online";
-import { SERVICE_NAME_RE, type TaskMode } from "../../tasks";
+import { SERVICE_NAME_RE } from "../../tasks";
 import {
   Alert,
   Button,
@@ -47,7 +46,6 @@ const LOOKBACKS = [1, 6, 24, 72, 168, 336];
 const SESSION_RANGE: V2Range = "7d";
 const MAX_EVALUATORS = 10;
 /** Insight clustering needs at least this many sessions. */
-const MIN_INSIGHT_SESSIONS = 3;
 
 interface Draft {
   name: string;
@@ -57,7 +55,6 @@ interface Draft {
   /** cloudwatch target: the span service.name + the batch's input log groups */
   serviceName: string;
   logGroups: string[];
-  mode: TaskMode;
   source: Source;
   lookbackHours: number;
   sessionIds: string[];
@@ -69,8 +66,6 @@ interface Draft {
   /** the model that plays the user of a simulated-persona dataset */
   actorModelId: string;
   evaluators: string[];
-  /** insight types, insights mode only */
-  insights: string[];
   /** pass^k: each dataset scenario runs this many times (1 = off) */
   repeats: number;
   confirmCost: boolean;
@@ -84,7 +79,6 @@ const emptyDraft = (): Draft => ({
   agentId: "",
   serviceName: "",
   logGroups: [],
-  mode: "evaluators",
   source: "window",
   lookbackHours: 24,
   sessionIds: [],
@@ -93,7 +87,6 @@ const emptyDraft = (): Draft => ({
   dataset: "",
   actorModelId: defaultActorModel(),
   evaluators: ["Builtin.Correctness", "Builtin.Helpfulness"],
-  insights: [...INSIGHT_TYPES],
   repeats: 1,
   confirmCost: false,
 });
@@ -107,7 +100,7 @@ async function seedDraft(from: string | null, handoff: Handoff, copySuffix: stri
   if (from?.startsWith("run:")) {
     const run = await api.getEvaluationRun(from.slice(4));
     const name = run.dataset_name ?? "";
-    const copied = run.mode === "insights" ? { mode: "insights" as const, insights: run.evaluators } : { evaluators: run.evaluators };
+    const copied = { evaluators: run.mode === "insights" ? (run.evaluators.includes("Builtin.Insight.FailureAnalysis") ? ["Builtin.FailureAnalysis"] : []) : run.evaluators };
     const target = run.log_source
       ? { target: "cloudwatch" as const, serviceName: run.log_source.service_name, logGroups: run.log_source.log_group_names }
       : { agentId: run.agent_id };
@@ -213,7 +206,7 @@ export function TaskWizard() {
   // pass^k replays dataset scenarios against an agent; it has no meaning for past sessions.
   // Computed before the early returns below, so the hook order never changes.
   const repeatable =
-    !!draft && draft.target === "agent" && draft.source === "dataset" && draft.mode === "evaluators" &&
+    !!draft && draft.target === "agent" && draft.source === "dataset" &&
     !!draft.dataset && !draft.dataset.startsWith(CLOUD_VALUE_PREFIX);
   const estimate = useLoad(
     () =>
@@ -224,7 +217,7 @@ export function TaskWizard() {
   );
   // eval-cost §1.1: a passive run is priced (and confirmed) too; this form only creates
   // one-off runs — the continuous (online) config is priced by `OnlineEditor`
-  const passiveBody = repeatable || !draft ? null : passiveEstimateBody({ ...draft, strategy: "history", sampling: 0 });
+  const passiveBody = repeatable || !draft ? null : passiveEstimateBody({ ...draft, strategy: "history", mode: "evaluators", sampling: 0 });
   const passiveKey = passiveBody ? JSON.stringify(passiveBody) : "none";
   const passiveEstimate = useLoad(
     () => (passiveBody ? evalCostApi.estimate(passiveBody) : Promise.resolve(null)),
@@ -257,10 +250,6 @@ export function TaskWizard() {
     if (draft.source === "sessions" && draft.sessionIds.length === 0) return t("v2.tasks.errSessions");
     if (draft.source === "dataset" && !draft.dataset) return t("v2.tasks.errDataset");
     if (draft.source === "logs" && draft.logSessionIds.length === 0) return t("v2.tasks.errLogs");
-    const picked = draft.source === "sessions" ? draft.sessionIds.length : draft.source === "logs" ? draft.logSessionIds.length : null;
-    if (draft.mode === "insights" && picked !== null && picked < MIN_INSIGHT_SESSIONS) {
-      return t("v2.tasks.errInsightSessions", { min: MIN_INSIGHT_SESSIONS });
-    }
     return null;
   };
 
@@ -271,13 +260,11 @@ export function TaskWizard() {
   };
 
   const submit = async () => {
-    const insights = draft.mode === "insights";
-    if (insights && draft.insights.length === 0) return setError(t("v2.tasks.errInsights"));
-    if (!insights && draft.evaluators.length === 0) return setError(t("v2.tasks.errEvaluators"));
-    if (!insights && draft.evaluators.length > MAX_EVALUATORS) return setError(t("v2.tasks.errTooMany", { max: MAX_EVALUATORS }));
+    if (draft.evaluators.length === 0) return setError(t("v2.tasks.errEvaluators"));
+    if (draft.evaluators.length > MAX_EVALUATORS) return setError(t("v2.tasks.errTooMany", { max: MAX_EVALUATORS }));
     const priced = passiveBody ? passiveEstimate.data : null;
-    if (!insights && priced?.over_limit) return setError(t("v3.evalCost.overLimitHint", { max: usd(priced.max_usd) }));
-    if (!insights && priced?.confirm_required && !draft.confirmCost) return setError(t("v3.evalCost.confirmFirst"));
+    if (priced?.over_limit) return setError(t("v3.evalCost.overLimitHint", { max: usd(priced.max_usd) }));
+    if (priced?.confirm_required && !draft.confirmCost) return setError(t("v3.evalCost.confirmFirst"));
     setSubmitting(true);
     setError(null);
     try {
@@ -297,11 +284,11 @@ export function TaskWizard() {
           : { agent_id: draft.agentId }),
         name: draft.name.trim(),
         description: draft.description || undefined,
-        ...(insights ? { mode: "insights" as const, evaluators: [], insights: draft.insights } : { evaluators: draft.evaluators }),
+        evaluators: draft.evaluators,
         ...scope,
         ...(repeatable ? { repeats: draft.repeats } : {}),
         // a replay and a passive run (session_ids / lookback_hours) alike
-        ...(!insights && (repeatable || isPassiveSource(draft.source)) ? { confirm_cost: draft.confirmCost } : {}),
+        ...((repeatable || isPassiveSource(draft.source)) ? { confirm_cost: draft.confirmCost } : {}),
         ...storageFlag(confirm),
       }));
       toast("success", t("v2.tasks.createdRun"));
@@ -355,15 +342,6 @@ export function TaskWizard() {
       source: target === "cloudwatch" && (draft.source === "sessions" || draft.source === "dataset") ? "window" : draft.source,
       logSessionIds: [],
     });
-  const toggleInsight = (id: string) =>
-    set({ insights: INSIGHT_TYPES.filter((x) => (x === id ? !draft.insights.includes(id) : draft.insights.includes(x))) });
-  // too few sessions to cluster — the batch would come back with no trees
-  const fewSessions =
-    draft.mode === "insights" &&
-    ((draft.source === "window" && !sessions.loading && windowSessions.length < MIN_INSIGHT_SESSIONS) ||
-      (draft.source === "dataset" && !!selectedDataset && selectedDataset.item_count < MIN_INSIGHT_SESSIONS) ||
-      (cloudwatch && draft.source === "window" && !!cwWindow.data && cwWindow.data.streams.length < MIN_INSIGHT_SESSIONS));
-
   return (
     <>
       <FlowHeader
@@ -371,7 +349,7 @@ export function TaskWizard() {
         onBack={() => setParams(backTarget(location.state))}
         steps={
           <Steps
-            steps={[t("v2.tasks.stepData"), draft.mode === "insights" ? t("v2.tasks.stepInsights") : t("v2.tasks.stepEvaluators")]}
+            steps={[t("v2.tasks.stepData"), t("v2.tasks.stepEvaluators")]}
             current={step}
             onSelect={setStep}
           />
@@ -435,24 +413,6 @@ export function TaskWizard() {
               )}
               <Field label={t("v2.tasks.description")} full>
                 <textarea className="v2-textarea" rows={2} value={draft.description} maxLength={1000} placeholder={t("v2.tasks.descPlaceholder")} onChange={(e) => set({ description: e.target.value })} />
-              </Field>
-              <Field label={t("v2.tasks.mode")} full>
-                <div className="v2-options" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-                  <OptionCard
-                    title={t("v2.tasks.modeEvaluators")}
-                    desc={t("v2.tasks.modeEvaluatorsDesc")}
-                    on={draft.mode === "evaluators"}
-                    onClick={() => set({ mode: "evaluators" })}
-                    testId="v2-task-mode-evaluators"
-                  />
-                  <OptionCard
-                    title={t("v2.tasks.modeInsights")}
-                    desc={t("v2.tasks.modeInsightsDesc")}
-                    on={draft.mode === "insights"}
-                    onClick={() => set({ mode: "insights" })}
-                    testId="v2-task-mode-insights"
-                  />
-                </div>
               </Field>
             </div>
           </Card>
@@ -682,27 +642,6 @@ export function TaskWizard() {
         </>
       )}
 
-      {step === 1 && draft.mode === "insights" && (
-        <Card title={t("v2.tasks.pickInsights")} sub={t("v2.tasks.pickedCount", { count: draft.insights.length, max: INSIGHT_TYPES.length })}>
-          <div className="v2-form">
-            <Field label={t("evalPage.newRun.insightTypes")}>
-              <div className="v2-checks">
-                {INSIGHT_TYPES.map((id) => (
-                  <label key={id} className="v2-check">
-                    <input type="checkbox" checked={draft.insights.includes(id)} onChange={() => toggleInsight(id)} data-testid={`v2-task-insight-${id}`} />
-                    {insightLabel(t, id)}
-                  </label>
-                ))}
-              </div>
-            </Field>
-          </div>
-          <div className="v2-stack" style={{ marginTop: 12 }}>
-            <Alert>{draft.source === "dataset" ? t("evalPage.newRun.insightsHint") : t("evalPage.newRun.insightsWindowHint")}</Alert>
-            {fewSessions && <Alert tone="warn">{t("v2.tasks.insightsFewSessions", { min: MIN_INSIGHT_SESSIONS })}</Alert>}
-          </div>
-        </Card>
-      )}
-
       {step === 1 && repeatable && (
         <Card title={t("v2.tasks.passK")} sub={t("v2.tasks.passKSub")} testId="v2-task-passk">
           <div className="v2-form cols-2">
@@ -779,7 +718,7 @@ export function TaskWizard() {
         </Card>
       )}
 
-      {step === 1 && draft.mode === "evaluators" && (
+      {step === 1 && (
         <Card title={t("v2.tasks.pickEvaluators")} sub={t("v2.tasks.pickedCount", { count: draft.evaluators.length, max: MAX_EVALUATORS })}>
           <CustomUnavailableNote marker={evaluators.data?.custom_unavailable} />
           {pickNote && <Alert tone={criteriaPick?.version === null ? "warn" : "info"}>{pickNote}</Alert>}

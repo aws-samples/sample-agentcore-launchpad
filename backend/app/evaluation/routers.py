@@ -13,7 +13,7 @@ from typing import Annotated, Any, Literal
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field, ValidationError, field_validator
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -28,6 +28,7 @@ from app.core.errors import (
 from app.core.project_scope import current_project, project_context
 from app.evaluation import agentcore_eval as ac
 from app.evaluation import recommendations, run_cost, scorecard, service
+from app.evaluation.findings import batch_findings
 from app.evaluation.models import EvalDataset, EvalRecommendation, EvalRun
 from app.evaluation.online_evaluators import require_visible_evaluators
 from app.evaluation.queue import run_queue
@@ -1206,6 +1207,9 @@ def _lambda_timeout(req: "JudgeCreate | JudgeUpdate") -> int:
 def _resolve_base_level(client: Any, base_evaluator_id: str) -> str:
     """Level for a derived evaluator — CreateEvaluator requires one even for
     derived configs, so it is taken from the base evaluator."""
+    if base_evaluator_id.rsplit("/", 1)[-1] == ac.FAILURE_ANALYSIS:
+        raise AppError("evaluator.base_not_supported", "Failure Analysis cannot be derived",
+                       status_code=422)
     level = ac.ALL_BUILTIN_EVALUATORS.get(base_evaluator_id)
     if level:
         return level
@@ -1584,6 +1588,7 @@ def list_runs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     mode: str | None = Query(None, pattern="^(evaluators|insights)$"),
+    failure_analysis: bool = Query(False),
     agent_id: str | None = Query(None, min_length=1, max_length=32),
     dataset_id: str | None = Query(None, min_length=1, max_length=16),
     ws: WorkspaceScope = Depends(require_workspace),
@@ -1605,6 +1610,13 @@ def list_runs(
     )
     if mode:
         query = query.filter(EvalRun.mode == mode)
+    if failure_analysis:
+        # Apply the family filter before count/limit: unrelated recent scores
+        # must not hide a prior analysis of the same sessions.
+        ids = func.json_each(EvalRun.evaluators).table_valued("value")
+        query = query.filter(select(1).select_from(ids).where(
+            ids.c.value.in_((ac.FAILURE_ANALYSIS, "Builtin.Insight.FailureAnalysis"))
+        ).exists())
     if agent_id:
         query = query.filter(EvalRun.agent_id == agent_id)
     if dataset_id:
@@ -1773,6 +1785,19 @@ def get_run_results(
     return service.run_results(run, workspace=ws.context)
 
 
+@router.get("/runs/{run_id}/findings")
+def get_run_findings(
+    run_id: str,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    run = _run_in(db, ws, run_id, viewer=viewer)
+    if run.agent_id and agent_access.agent_in(db, ws.id, run.agent_id, viewer=viewer) is None:
+        raise NotFoundError("run.not_found", "run not found")
+    return batch_findings(run, workspace=ws.context)
+
+
 @router.post("/runs", status_code=201)
 def create_run(
     req: RunCreate,
@@ -1798,6 +1823,10 @@ def _start_run(
     ``actor_fallback`` is the actor model a persona dataset gets when the request
     names none (the re-run's platform default); ``POST /runs`` passes none and
     requires the caller's."""
+    service.reject_preview_submission(
+        req.mode == "insights" or bool(req.insights)
+        or any(ac.is_preview_evaluator(e) for e in req.evaluators)
+    )
     if bool(req.agent_id) == bool(req.log_source):
         raise AppError(
             "run.target_required",
@@ -1844,15 +1873,6 @@ def _start_run(
             "dataset_version is a published version number — omit it for the draft",
             status_code=422,
         )
-    if req.insights:
-        invalid = [i for i in req.insights if i not in ac.INSIGHT_TYPES]
-        if invalid:
-            raise AppError(
-                "run.invalid_insight",
-                f"unknown insight type(s): {', '.join(invalid)}",
-                status_code=422,
-            )
-
     items: list[dict[str, Any]] = []
     dataset_name = None
     time_range = None
@@ -1882,21 +1902,20 @@ def _start_run(
             status_code=422,
         )
 
-    applied_ids = req.evaluators if req.mode == "evaluators" else (req.insights or [])
+    applied_ids = req.evaluators
     if len(set(applied_ids)) > ac.MAX_BATCH_EVALUATORS:
         raise AppError(
             "run.too_many_evaluators",
             f"a batch evaluation applies at most {ac.MAX_BATCH_EVALUATORS} "
-            f"{'evaluators' if req.mode == 'evaluators' else 'insights'}; {len(set(applied_ids))} "
+            f"evaluators; {len(set(applied_ids))} "
             "were selected — drop the ones that overlap or start a second run for the rest",
             {"max": ac.MAX_BATCH_EVALUATORS, "selected": len(set(applied_ids))},
             status_code=422,
         )
-    if req.mode == "evaluators":
-        _assert_target_references(
-            db, ws, req.evaluators, items, dataset_scope,
-            agent_spec=agent.spec if agent else None, viewer=viewer,
-        )
+    _assert_target_references(
+        db, ws, req.evaluators, items, dataset_scope,
+        agent_spec=agent.spec if agent else None, viewer=viewer,
+    )
     log_source = None
     if req.log_source:
         groups = list(dict.fromkeys(req.log_source.log_group_names))
@@ -1911,11 +1930,7 @@ def _start_run(
             "endTime": now,
         }
 
-    # The run row's evaluators column records what was applied: evaluator ids
-    # for scored runs, the selected insight types for insights runs.
     applied = req.evaluators
-    if req.mode == "insights":
-        applied = req.insights or list(ac.INSIGHT_TYPES)
 
     if req.repeats > 1 and not (agent is not None and dataset_scope):
         raise AppError(
@@ -1926,14 +1941,14 @@ def _start_run(
         )
     dlc_lineage = _golden_lineage(db, ws, req.dataset_id) if req.dataset_id else {}
     cost_estimate = None
-    if agent is not None and dataset_scope and req.mode == "evaluators":
+    if agent is not None and dataset_scope:
         from app.dlc import cost as cost_svc
 
         cost_estimate = cost_svc.estimate(
             db, agent=agent, workspace=ws.row, workspace_ctx=ws.context, items=items,
             evaluators=applied, repeats=req.repeats,
         )
-    elif req.mode == "evaluators" and (req.session_ids or req.lookback_hours):
+    elif req.session_ids or req.lookback_hours:
         # eval-cost §1.1: a passive run (picked sessions or a look-back window) is
         # priced and held to the same limits — nothing is invoked, the judges are
         cost_estimate = _passive_estimate(db, ws, agent, req, applied)
@@ -2110,7 +2125,8 @@ def _rerun_request(source: EvalRun, name: str | None) -> RunCreate:
     the same dataset (a cloud run's pinned version stays pinned; the draft stays the
     draft) or the same window length, and the same evaluators. Chosen sessions and
     log streams would only re-score the same sessions (judge noise), and insights
-    runs have no scores to trend → 422 ``run.rerun_unsupported``."""
+    reports have been retired."""
+    service.reject_preview_submission(source.mode == "insights")
     scope = scorecard.scope_of(source)
     hours = scorecard.window_hours(source) if scope == scorecard.SCOPE_WINDOW else None
     if source.mode != "evaluators" or (

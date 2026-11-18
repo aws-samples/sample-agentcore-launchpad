@@ -204,7 +204,7 @@ export function OnlineList() {
                     <td className="num" style={{ color: "var(--v3-text-3)" }}>{ago(row.updated_at ?? row.created_at)}</td>
                     <td style={{ width: 1, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
-                        {isEditable(row) && (
+                        {row.mode !== "insights" && isEditable(row) && (
                           <Link className="v3-btn sm ghost" aria-disabled={locked || !mayRun}
                             to={locked || !mayRun ? "#" : onlineHref({ view: "edit", id: row.config_id })}
                             onClick={(e) => (locked || !mayRun) && e.preventDefault()}>
@@ -217,7 +217,7 @@ export function OnlineList() {
                             <Pause size={13} />
                           </Btn>
                         )}
-                        {canToggle(row) && row.execution_status === "DISABLED" && (
+                        {canToggle(row) && row.mode !== "insights" && row.execution_status === "DISABLED" && (
                           <Btn size="sm" kind="ghost" busy={action.busy} disabled={isTransient(row) || !mayRun}
                             disabledReason={!mayRun ? permReason(t, "eval.run") : t("story.reason.settling")}
                             title={t("v2.tasks.resume")} aria-label={t("v2.tasks.resume")} onClick={() => action.ask({ row, action: "resume" })}>

@@ -1,8 +1,4 @@
-"""Online evaluation insights mode: config lifecycle, report attribution, on-demand
-reports. Pins the AWS shapes proven live 2026-09-02 (research/report-attribution.md):
-`insights` XOR `evaluators` on a config, config-sourced batches echo neither, the
-source ARN is only on Get, and Start with onlineEvaluationConfigSource carries no
-evaluators/insights."""
+"""Modern online evaluator requests and read-only preview report attribution."""
 
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
@@ -45,41 +41,6 @@ def insights_detail(config_id, name, *, freqs=("DAILY",), insights=INS, **kw):
 # ── AC1: create ─────────────────────────────────────────────────────────────
 
 
-def test_create_insights_mode_sends_insights_and_no_evaluators(client, monkeypatch):
-    db = SessionLocal()
-    agent = make_agent(db)
-    control, _ = stub_environment(monkeypatch)
-    res = client.post("/api/eval/online", json={
-        "agent_id": agent.id, "mode": "insights",
-        "insights": INS[:2], "clustering_frequencies": ["DAILY", "WEEKLY"],
-    })
-    assert res.status_code == 201, res.text
-    body = res.json()
-    kw = control.create_online_evaluation_config.call_args.kwargs
-    assert "evaluators" not in kw
-    assert kw["insights"] == [{"insightId": i} for i in INS[:2]]
-    assert kw["clusteringConfig"] == {"frequencies": ["DAILY", "WEEKLY"]}
-    assert kw["rule"]["samplingConfig"]["samplingPercentage"] == 100.0  # AWS default
-    assert body["mode"] == "insights" and body["evaluators"] == []
-    assert body["insights"] == INS[:2] and body["clustering_frequencies"] == ["DAILY", "WEEKLY"]
-    db.close()
-
-
-def test_create_insights_without_clustering_omits_the_key(client, monkeypatch):
-    db = SessionLocal()
-    agent = make_agent(db)
-    control, _ = stub_environment(monkeypatch)
-    res = client.post("/api/eval/online", json={
-        "agent_id": agent.id, "mode": "insights", "insights": INS, "sampling_percentage": 25,
-    })
-    assert res.status_code == 201, res.text
-    kw = control.create_online_evaluation_config.call_args.kwargs
-    assert "clusteringConfig" not in kw
-    assert kw["rule"]["samplingConfig"]["samplingPercentage"] == 25.0
-    assert res.json()["clustering_frequencies"] == []
-    db.close()
-
-
 def test_create_scores_mode_is_unchanged_and_defaults_to_10(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db)
@@ -95,21 +56,62 @@ def test_create_scores_mode_is_unchanged_and_defaults_to_10(client, monkeypatch)
     db.close()
 
 
+def test_failure_analysis_can_mix_with_scores_on_online_config(client, monkeypatch):
+    db = SessionLocal()
+    agent = make_agent(db)
+    control, _ = stub_environment(monkeypatch)
+    ids = ["Builtin.FailureAnalysis", "Builtin.Helpfulness"]
+    control.list_evaluators.return_value = {
+        "evaluators": [{"evaluatorId": evaluator} for evaluator in ids],
+    }
+    res = client.post("/api/eval/online", json={
+        "agent_id": agent.id, "evaluators": ids, "sampling_percentage": 25,
+    })
+    assert res.status_code == 201, res.text
+    kw = control.create_online_evaluation_config.call_args.kwargs
+    assert kw["evaluators"] == [{"evaluatorId": eid} for eid in ids]
+    assert "insights" not in kw and "clusteringConfig" not in kw
+    assert kw["rule"]["samplingConfig"]["samplingPercentage"] == 25.0
+    assert res.json()["mode"] == "scores"
+    db.close()
+
+
+def test_existing_enabled_failure_analysis_blocks_duplicate_even_without_ledger(
+    client, monkeypatch,
+):
+    with SessionLocal() as db:
+        agent = make_agent(db)
+        config_id = "outside-1"
+        control, _ = stub_environment(monkeypatch, {
+            config_id: aws_detail(
+                config_id, "outside_launchpad", evaluators=("Builtin.FailureAnalysis",),
+            ),
+        })
+        control.list_evaluators.return_value = {
+            "evaluators": [{"evaluatorId": "Builtin.FailureAnalysis"}],
+        }
+        res = client.post("/api/eval/online", json={
+            "agent_id": agent.id, "evaluators": ["Builtin.FailureAnalysis"],
+        })
+        assert res.status_code == 409, res.text
+        assert res.json()["code"] == "online_eval.failure_analysis_already_enabled"
+        control.create_online_evaluation_config.assert_not_called()
+
+
 @pytest.mark.parametrize("body", [
     {"mode": "insights", "insights": INS, "evaluators": ["Builtin.Helpfulness"]},
     {"mode": "insights"},
     {"mode": "scores", "evaluators": ["Builtin.Helpfulness"], "insights": INS},
-    {"mode": "insights", "insights": INS + ["Builtin.Insight.Extra"]},
+    {"mode": "insights", "insights": ["Builtin.Insight.Extra"]},
     {"mode": "insights", "insights": INS, "clustering_frequencies": ["HOURLY"]},
-    {"mode": "insights", "insights": INS,
-     "clustering_frequencies": ["DAILY", "WEEKLY", "MONTHLY", "DAILY"]},
 ])
 def test_create_rejects_mixed_or_invalid_kinds(client, monkeypatch, body):
     db = SessionLocal()
     agent = make_agent(db)
     control, _ = stub_environment(monkeypatch)
     res = client.post("/api/eval/online", json={"agent_id": agent.id, **body})
-    assert res.status_code == 422, res.text
+    assert res.status_code == 410, res.text
+    assert res.json()["code"] == "insights.preview_retired"
     control.create_online_evaluation_config.assert_not_called()
     db.close()
 
@@ -142,29 +144,16 @@ def test_rows_report_mode(client, monkeypatch):
 # ── AC2: patch ──────────────────────────────────────────────────────────────
 
 
-def test_patch_insights_mode_sends_complete_top_level_lists(client, monkeypatch):
+def test_patch_insights_mode_is_read_only(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db)
-    control, details = stub_environment(monkeypatch, {
+    control, _ = stub_environment(monkeypatch, {
         "oe_i-1": insights_detail("oe_i-1", "oe_eval_agent_iiiiii")})
     ledger_row(db, agent, "oe_i-1", name="oe_eval_agent_iiiiii")
-
-    res = client.patch("/api/eval/online/oe_i-1", json={"insights": INS[:1]})
-    assert res.status_code == 200, res.text
-    kw = control.update_online_evaluation_config.call_args.kwargs
-    assert kw["insights"] == [{"insightId": INS[0]}]
-    assert "clusteringConfig" not in kw and "rule" not in kw and "evaluators" not in kw
-
-    res = client.patch("/api/eval/online/oe_i-1", json={"clustering_frequencies": []})
-    assert res.status_code == 200, res.text
-    kw = control.update_online_evaluation_config.call_args.kwargs
-    assert kw["clusteringConfig"] == {"frequencies": []}  # clears clustering
-    assert "insights" not in kw
-
-    # the wrong kind for the mode → 422, no AWS call
-    control.update_online_evaluation_config.reset_mock()
-    res = client.patch("/api/eval/online/oe_i-1", json={"evaluators": ["Builtin.Helpfulness"]})
-    assert res.status_code == 422 and res.json()["code"] == "online_eval.mode_conflict"
+    for patch in ({"insights": INS[:1]}, {"clustering_frequencies": []},
+                  {"description": "Attempt to edit history"}):
+        res = client.patch("/api/eval/online/oe_i-1", json=patch)
+        assert res.status_code == 410 and res.json()["code"] == "insights.preview_retired"
     control.update_online_evaluation_config.assert_not_called()
     db.close()
 
@@ -175,9 +164,9 @@ def test_patch_scores_mode_rejects_insights(client, monkeypatch):
     control, _ = stub_environment(monkeypatch, {"oe_a-1": aws_detail("oe_a-1", "oe_x")})
     ledger_row(db, agent, "oe_a-1", name="oe_x")
     res = client.patch("/api/eval/online/oe_a-1", json={"insights": INS})
-    assert res.status_code == 422 and res.json()["code"] == "online_eval.mode_conflict"
+    assert res.status_code == 410 and res.json()["code"] == "insights.preview_retired"
     res = client.patch("/api/eval/online/oe_a-1", json={"clustering_frequencies": ["DAILY"]})
-    assert res.status_code == 422
+    assert res.status_code == 410
     control.update_online_evaluation_config.assert_not_called()
     db.close()
 
@@ -291,48 +280,22 @@ def test_report_detail_parses_trees_and_rejects_foreign_batches(client, monkeypa
 # ── AC4: run report now ─────────────────────────────────────────────────────
 
 
-def test_start_report_submits_an_online_sourced_insights_run(client, monkeypatch):
+def test_start_report_is_retired(client, monkeypatch):
     db = SessionLocal()
     agent = make_agent(db)
-    control, details = stub_environment(monkeypatch, {
+    stub_environment(monkeypatch, {
         "oe_i-1": insights_detail("oe_i-1", "oe_eval_agent_iiiiii"),
-        "oe_a-1": aws_detail("oe_a-1", "oe_eval_agent_aaaaaa"),
-        "exp_1_oe1-9999999999": insights_detail("exp_1_oe1-9999999999", "exp_1_oe1"),
     })
     ledger_row(db, agent, "oe_i-1", name="oe_eval_agent_iiiiii")
-    ledger_row(db, agent, "oe_a-1")
-    seen = {}
-
-    def fake_submit(**kw):
-        seen.update(kw)
-        run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent.id,
-                      agent_name=agent.name, dataset_name=kw["dataset_name"], mode=kw["mode"],
-                      evaluators=kw["evaluators"], status="queued", queue_position=1)
-        db.add(run)
-        db.commit()
-        return run
-
-    monkeypatch.setattr(online.eval_service, "submit_run", fake_submit)
+    submit = MagicMock(side_effect=AssertionError("no new report expected"))
+    monkeypatch.setattr(svc, "submit_run", submit)
     res = client.post("/api/eval/online/oe_i-1/reports", json={"range": "6h"})
-    assert res.status_code == 202, res.text
-    assert res.json()["status"] == "queued" and res.json()["range"] == "6h"
-    assert seen["mode"] == "insights" and seen["insights"] == INS
-    assert seen["dataset_name"] == "online:oe_i-1" and seen["dataset_items"] == []
-    assert seen["online_config_arn"] == ARN_I
-    span = seen["time_range"]["endTime"] - seen["time_range"]["startTime"]
-    assert span.total_seconds() == 6 * 3600
-
-    # scores-mode config → 422; experiment-owned → 403; bad range → 422
-    assert client.post("/api/eval/online/oe_a-1/reports", json={}).status_code == 422
-    assert client.post("/api/eval/online/exp_1_oe1-9999999999/reports",
-                       json={}).status_code == 403
-    assert client.post("/api/eval/online/oe_i-1/reports", json={"range": "1y"}).status_code == 422
+    assert res.status_code == 410 and res.json()["code"] == "insights.preview_retired"
+    submit.assert_not_called()
     db.close()
 
 
-def test_execute_run_online_source_skips_invoke_and_inherits_analysis(monkeypatch):
-    """The Start call carries the config source and NO evaluators/insights (AWS rejects
-    them); no invocation, no telemetry wait; insights parsed on completion."""
+def test_queued_legacy_report_fails_before_any_aws_write(monkeypatch):
     db = SessionLocal()
     agent = make_agent(db)
     run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent.id, agent_name=agent.name,
@@ -360,15 +323,13 @@ def test_execute_run_online_source_skips_invoke_and_inherits_analysis(monkeypatc
         service_name=SERVICE, log_group=LOG_GROUP, items=[], evaluators=INS, mode="insights",
         wait_seconds=0, time_range=tr, insights=INS, online_config_arn=ARN_I,
     )
-    kw = data.start_batch_evaluation.call_args.kwargs
-    assert kw["dataSourceConfig"] == {"onlineEvaluationConfigSource": {
-        "onlineEvaluationConfigArn": ARN_I, "timeRange": tr}}
-    assert "evaluators" not in kw and "insights" not in kw and "cloudWatchLogs" not in str(kw)
-    assert kw["batchEvaluationName"] == f"run_{run_id[:8]}"
+    data.start_batch_evaluation.assert_not_called()
+    data.get_batch_evaluation.assert_not_called()
+    invoke.assert_not_called()
     db = SessionLocal()
     row = db.get(EvalRun, run_id)
-    assert row.status == "completed" and row.batch_eval_id == "run_ab-1234567890"
-    assert row.insights == {"userIntents": [{"clusterId": 1, "name": "HR lookups"}]}
+    assert row.status == "failed" and row.batch_eval_id is None
+    assert "insights.preview_retired" in row.error
     db.close()
 
 

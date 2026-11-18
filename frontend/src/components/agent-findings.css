@@ -1,0 +1,15 @@
+.agent-findings { color: inherit; font: inherit; min-width: 0; }
+.agent-findings.af-box { padding: 18px; background: var(--v3-ink-1,var(--panel,transparent)); border: 1px solid var(--v3-line,var(--border,#80808066)); border-radius: 8px; }
+.agent-findings h2, .agent-findings h3 { margin: 0 0 .8rem; font-size: 1.1rem; }
+.agent-findings .af-switch { display: flex; flex-wrap: wrap; gap: .5rem; }
+.agent-findings button, .agent-findings select { background: var(--v3-ink-1,var(--panel,Canvas)); color: inherit; font: inherit; padding: .35rem .7rem; border: 1px solid var(--v3-line,var(--border,#80808088)); border-radius: 5px; }
+.agent-findings button, .agent-findings summary { cursor: pointer; }
+.agent-findings [aria-pressed=true] { font-weight: 650; border-color: currentColor; }
+.agent-findings label { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem; }
+.agent-findings select { max-width: 100%; }
+.agent-findings .af-item, .agent-findings .af-cause, .agent-findings .af-box { margin-top: .75rem; }
+.agent-findings .af-item { border-top: 1px solid var(--v3-line,var(--border,#80808066)); padding-top: .65rem; overflow-wrap: anywhere; }
+.agent-findings .af-item small { margin-inline-start: .75em; }
+.agent-findings .af-body, .agent-findings .af-samples { margin: .65em 0; }
+.agent-findings .af-cause { padding-inline-start: .8em; border-inline-start: 2px solid var(--v3-line,var(--border,#80808066)); }
+.agent-findings p { margin: .6em 0; }

@@ -13,7 +13,7 @@ import {
   type V2Range,
 } from "../../../lib/api";
 import { hasInsightTrees } from "../../../lib/evaluation";
-import { evaluatorLabel } from "../../../lib/evaluators";
+import { evaluatorScoreLabel, evaluatorLabel } from "../../../lib/evaluators";
 import { creatorLabel, fmtTime, normalizedScore, RANGES, rangeLabel, scoreTone } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import { InsightClusters } from "../../InsightClusters";
@@ -129,7 +129,7 @@ function ScoresPanel({ row }: { row: OnlineEvalConfigRow }) {
                 e.mean == null ? (
                   <span className="v2-muted">—</span>
                 ) : (
-                  <span className={`v2-score ${scoreTone(normalizedScore(e.mean, e.evaluator_id))}`}>{e.mean.toFixed(2)}</span>
+                  <span className={`v2-score ${scoreTone(normalizedScore(e.mean, e.evaluator_id))}`}>{evaluatorScoreLabel(e.mean, e.evaluator_id)}</span>
                 ),
             },
             {
@@ -233,38 +233,19 @@ function ReportDrawer({ configId, report, onClose }: { configId: string; report:
 /** Insights mode: scheduled + on-demand reports, each opened in a drawer. */
 function ReportsPanel({ row }: { row: OnlineEvalConfigRow }) {
   const { t } = useTranslation();
-  const toast = useV2Toast();
-  const { can } = useAuth();
   const [tick, setTick] = useState(0);
   const reports = useLoad(() => api.onlineEvalReports(row.config_id), `online-reports:${row.config_id}:${tick}`);
-  const [range, setRange] = useState<V2Range>("24h");
-  const [busy, setBusy] = useState(false);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [showUnattributed, setShowUnattributed] = useState(false);
   const list = useMemo(() => reports.data?.reports ?? [], [reports.data]);
   const unattributed = useMemo(() => reports.data?.unattributed ?? [], [reports.data]);
   const anyActive = list.some(reportActive);
-  const consoleRunning = list.some((r) => r.origin === "console" && reportActive(r));
-  const canRun = isEditable(row) && can("eval.run");
 
   useEffect(() => {
     if (!anyActive) return;
     const timer = window.setInterval(() => setTick((n) => n + 1), POLL_MS);
     return () => window.clearInterval(timer);
   }, [anyActive]);
-
-  const run = async () => {
-    setBusy(true);
-    try {
-      await api.onlineEvalRunReport(row.config_id, range);
-      toast("success", t("v2.online.reportStarted"));
-      setTick((n) => n + 1);
-    } catch (err) {
-      toast("error", errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const shown = useMemo(() => (showUnattributed ? [...list, ...unattributed] : list), [showUnattributed, list, unattributed]);
   const paged = usePaged(shown, 10);
@@ -278,25 +259,6 @@ function ReportsPanel({ row }: { row: OnlineEvalConfigRow }) {
     >
       <div className="v2-toolbar">
         <Button onClick={() => setTick((n) => n + 1)}>{t("v2.common.refresh")}</Button>
-        {isEditable(row) && (
-          <>
-            <FilterSelect
-              label={t("v2.common.timeRange")}
-              value={range}
-              onChange={(v) => setRange(v as V2Range)}
-              options={RANGES.map((r) => ({ value: r, label: rangeLabel(t, r) }))}
-            />
-            <Button
-              kind="primary"
-              disabled={busy || consoleRunning || isTransient(row) || !canRun}
-              title={consoleRunning ? t("v2.online.reportPending") : undefined}
-              onClick={() => void run()}
-              testId="v2-online-run-report"
-            >
-              {t("v2.online.runReport")}
-            </Button>
-          </>
-        )}
         {unattributed.length > 0 && (
           <div className="end">
             <label className="v2-check">
@@ -439,7 +401,7 @@ export function OnlineDetail({ id }: { id: string }) {
                 {t("v2.tasks.pause")}
               </Button>
             )}
-            {canToggle(row) && row.execution_status === "DISABLED" && (
+            {canToggle(row) && row.mode !== "insights" && row.execution_status === "DISABLED" && (
               <Button disabled={busy || transient || !mayRun} onClick={() => setConfirm("resume")}>
                 {t("v2.tasks.resume")}
               </Button>
@@ -459,7 +421,7 @@ export function OnlineDetail({ id }: { id: string }) {
               </Button>
             )}
             {/* the editor hands this page's history state back to it on save / Back */}
-            {isEditable(row) && (
+            {row.mode !== "insights" && isEditable(row) && (
               <Button
                 kind="primary"
                 disabled={busy || transient || !mayRun}
@@ -472,6 +434,7 @@ export function OnlineDetail({ id }: { id: string }) {
           </>
         }
       />
+      {mode === "insights" && <Alert>{t("v2.online.legacyReadonly")}</Alert>}
       {row.failure_reason && <Alert tone="error">{row.failure_reason}</Alert>}
       {row.duplicate_enabled && <Alert tone="warn">{t("v2.online.duplicateWarn")}</Alert>}
       {note && (

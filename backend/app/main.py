@@ -21,6 +21,7 @@ from app.core.db import init_db
 from app.core.errors import register_error_handlers
 from app.core.route_policy import bind_request_project, enforce_route_policy
 from app.deployer.pipeline import resume_pending_jobs
+from app.evaluation.insight_routers import router as agent_insights_router
 from app.evaluation.online_routers import router as online_eval_router
 from app.evaluation.pipeline_routers import router as eval_pipelines_router
 from app.evaluation.routers import router as evaluation_router
@@ -267,6 +268,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(observability_router)
     app.include_router(evaluation_router)
     app.include_router(online_eval_router)
+    app.include_router(agent_insights_router)
     app.include_router(eval_pipelines_router)  # V2 数据处理: sessions → datasets
     app.include_router(skill_lab_router)
     app.include_router(coding_router)  # coding agent: runtime, repos, turns, files

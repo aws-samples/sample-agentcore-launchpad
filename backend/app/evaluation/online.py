@@ -77,9 +77,7 @@ FILTER_OPERATORS = (
 )
 MAX_FILTERS = 5
 RECENT_LIMIT = 50
-# Insights mode: a config carries `insights` (+ optional clusteringConfig) INSTEAD of
-# `evaluators` — AWS forbids both. Reports are batch evaluations sourced from the
-# config (AWS-scheduled on the clustering cadence, or on demand from the console).
+# Historical configs retain their insight types and schedule on read.
 INSIGHT_IDS = tuple(ac.INSIGHT_TYPES)
 FREQUENCIES = ("DAILY", "WEEKLY", "MONTHLY")
 Mode = str  # "scores" | "insights"
@@ -574,6 +572,29 @@ def get_config(
 # ─── write side ─────────────────────────────────────────────────────────────
 
 
+def _refuse_duplicate_failure_analysis(control: Any, service_name: str) -> None:
+    """Check the AWS source directly, including configs invisible to this viewer."""
+    for summary in ac.list_online_eval_configs(control):
+        if summary.get("executionStatus") == "DISABLED":
+            continue
+        config = ac.get_online_eval_config(
+            control, config_id=summary["onlineEvaluationConfigId"],
+        )
+        if config.get("executionStatus") == "DISABLED":
+            continue
+        source = (config.get("dataSourceConfig") or {}).get("cloudWatchLogs") or {}
+        if service_name in (source.get("serviceNames") or ()) and any(
+            evaluator.get("evaluatorId") == ac.FAILURE_ANALYSIS
+            for evaluator in config.get("evaluators") or ()
+        ):
+            raise AppError(
+                "online_eval.failure_analysis_already_enabled",
+                "Failure Analysis is already enabled for this endpoint. Use an existing "
+                "evaluation or choose another evaluator.",
+                status_code=409,
+            )
+
+
 def create_config(
     db: Session,
     ws: WorkspaceScope,
@@ -592,19 +613,13 @@ def create_config(
     logs: Any = None,
     creator: Creator | None = None,
 ) -> dict[str, Any]:
+    eval_service.reject_preview_submission(
+        mode == "insights" or bool(insights or clustering_frequencies)
+        or any(ac.is_preview_evaluator(e) for e in evaluators or [])
+    )
     control = control or control_client(ws.context)
     service_name, log_group = resolve_telemetry(agent, ws.context, logs)
-    chosen: list[str] = []
-    chosen_insights: list[str] = []
-    freqs: list[str] = []
-    if mode == "insights":
-        if evaluators:
-            raise _mode_conflict("insights mode takes no evaluators")
-        chosen_insights, freqs = validate_insights(insights, clustering_frequencies)
-    else:
-        if insights or clustering_frequencies:
-            raise _mode_conflict("scores mode takes no insights / clustering_frequencies")
-        chosen = normalize_online_evaluators(evaluators, control, code_prefix="online_eval")
+    chosen = normalize_online_evaluators(evaluators, control, code_prefix="online_eval")
     rule = build_rule(sampling_percentage, session_timeout_minutes, validate_filters(filters))
     role_arn = ws.context.resources.get("execution_role_arn")
     if not role_arn:
@@ -613,6 +628,8 @@ def create_config(
             "this workspace has no execution role yet — run bootstrap first",
             status_code=400,
         )
+    if enable_on_create and ac.FAILURE_ANALYSIS in chosen:
+        _refuse_duplicate_failure_analysis(control, service_name)
     text = (description or f"Launchpad online evaluation · {agent.name}")[:200]
 
     created: dict[str, Any] | None = None
@@ -623,7 +640,6 @@ def create_config(
                 control, name=name, description=text, log_group=log_group,
                 service_name=service_name, evaluators=chosen, rule=rule,
                 role_arn=role_arn, enable_on_create=enable_on_create,
-                insights=chosen_insights, clustering_frequencies=freqs,
             )
             break
         except Exception as exc:
@@ -668,8 +684,7 @@ def create_config(
             "cloudWatchLogs": {"logGroupNames": [log_group], "serviceNames": [service_name]}
         },
         "evaluators": [{"evaluatorId": e} for e in chosen],
-        "insights": [{"insightId": i} for i in chosen_insights],
-        "clusteringConfig": {"frequencies": freqs} if freqs else None,
+        "insights": [],
         "evaluationExecutionRoleArn": role_arn,
     }
     return _normalize(aws, owner="agent", row=row, detailed=True)
@@ -696,33 +711,19 @@ def patch_config(
         fields["description"] = text or (
             f"Launchpad online evaluation · {current['agent_name'] or current['name']}"
         )[:200]
-    # Mode is immutable: each mode accepts only its own analysis fields.
-    if current["mode"] == "insights":
-        if patch.get("evaluators") is not None:
-            raise _mode_conflict("this config runs insights — evaluators cannot be set")
-        if patch.get("insights") is not None or patch.get("clustering_frequencies") is not None:
-            ids, freqs = validate_insights(
-                current["insights"] if patch.get("insights") is None else patch["insights"],
-                current["clustering_frequencies"]
-                if patch.get("clustering_frequencies") is None
-                else patch["clustering_frequencies"],
-            )
-            if patch.get("insights") is not None:
-                fields["insights"] = [{"insightId": i} for i in ids]  # top-level replace
-            if patch.get("clustering_frequencies") is not None:
-                # complete list; [] clears clustering (AWS then reports null)
-                fields["clusteringConfig"] = {"frequencies": freqs}
-    else:
-        if patch.get("insights") is not None or patch.get("clustering_frequencies") is not None:
-            raise _mode_conflict("this config runs evaluators — insights cannot be set")
-        if patch.get("evaluators") is not None:
-            refuse_hidden_evaluators(
-                db, ws.id, viewer, patch["evaluators"], code_prefix="online_eval"
-            )
-            chosen = normalize_online_evaluators(
-                patch["evaluators"], control, code_prefix="online_eval"
-            )
-            fields["evaluators"] = [{"evaluatorId": e} for e in chosen]
+    eval_service.reject_preview_submission(
+        current["mode"] == "insights" or patch.get("insights") is not None
+        or patch.get("clustering_frequencies") is not None
+        or any(ac.is_preview_evaluator(e) for e in patch.get("evaluators") or [])
+    )
+    if patch.get("evaluators") is not None:
+        refuse_hidden_evaluators(
+            db, ws.id, viewer, patch["evaluators"], code_prefix="online_eval"
+        )
+        chosen = normalize_online_evaluators(
+            patch["evaluators"], control, code_prefix="online_eval"
+        )
+        fields["evaluators"] = [{"evaluatorId": e} for e in chosen]
     rule_keys = {"sampling_percentage", "session_timeout_minutes", "filters"}
     if any(patch.get(k) is not None for k in rule_keys):
         sampling = patch.get("sampling_percentage")
@@ -746,6 +747,7 @@ def set_execution_status(
     control = control or control_client(ws.context)
     current = get_config(db, ws, config_id, control, viewer=viewer)
     _require_owner(current, ("agent", "external"), "resume" if enabled else "pause")
+    eval_service.reject_preview_submission(enabled and current["mode"] == "insights")
     ac.update_online_eval_config(
         control, config_id=config_id, executionStatus="ENABLED" if enabled else "DISABLED"
     )
@@ -1204,30 +1206,12 @@ def start_report(
     db: Session, ws: WorkspaceScope, config_id: str, range_key: str, *, control: Any = None,
     creator: Creator | None = None, viewer: Viewer = Viewer.ALL,
 ) -> dict[str, Any]:
-    """RUN REPORT NOW: an on-demand insights report over the sessions this config
-    sampled in the window, through the bounded run queue (shared 5-active quota)."""
-    if range_key not in REPORT_RANGES:
-        raise AppError("online_eval.bad_range", f"range must be one of {sorted(REPORT_RANGES)}",
-                       status_code=422)
+    """The historical report endpoints remain readable."""
     config = get_config(db, ws, config_id, control, viewer=viewer)
     _require_owner(config, ("agent",), "run a report for")
-    if config["mode"] != "insights":
-        raise _mode_conflict("reports exist only for insights-mode configs")
-    agent = db.get(Agent, config["agent_id"]) if config["agent_id"] else None
-    if agent is None or agent.workspace_id != ws.id:
-        raise NotFoundError("online_eval.not_found", f"agent of {config_id} is gone")
-    now = datetime.now(UTC)
-    time_range = {"startTime": now - timedelta(hours=REPORT_RANGES[range_key]), "endTime": now}
-    run = eval_service.submit_run(
-        agent=agent, workspace=ws.context, dataset_items=[], dataset_id=None,
-        dataset_name=f"online:{config_id}", evaluators=list(config["insights"]),
-        mode="insights", insights=list(config["insights"]), time_range=time_range,
-        online_config_arn=config["arn"], creator=creator,
-    )
-    return {
-        "run_id": run.id, "status": run.status, "queue_position": run.queue_position,
-        "range": range_key, "config_id": config_id,
-    }
+    raise eval_service.preview_retired()
+
+
 # ─── cross-surface reads (Observability session detail + Overview tile) ──────
 #
 # Both read EVERY config's results at once through a prefix source, so neither

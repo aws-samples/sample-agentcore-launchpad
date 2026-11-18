@@ -1,6 +1,7 @@
 /** Typed client for the Launchpad backend. */
 
 import i18n from "../i18n";
+import type { AgentFinding, AgentFindingsPage, BatchFindings, InsightStore } from "./agent-findings";
 import type { KBSourceBody, KnowledgeBaseDetail } from "../pages/KnowledgeBases";
 import type {
   EvaluationRunInfo,
@@ -6032,6 +6033,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ mode: "evaluators", wait_seconds: 180, ...input }),
     }),
+  batchFindings: (id: string) => request<BatchFindings>(`/api/eval/runs/${encodeURIComponent(id)}/findings`),
+  insightStore: () => request<InsightStore>("/api/eval/insight-store"),
+  agentFindings: (id: string, cursor?: string | null) =>
+    request<AgentFindingsPage>(`/api/eval/agents/${encodeURIComponent(id)}/findings${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`),
+  agentFinding: (agentId: string, id: string) =>
+    request<AgentFinding>(`/api/eval/agents/${encodeURIComponent(agentId)}/findings/${encodeURIComponent(id)}`),
   /** `GET /api/eval/runs/{id}` — one run's ledger row (status, scores, error). */
   getEvaluationRun: (runId: string) =>
     request<EvaluationRunInfo>(`/api/eval/runs/${encodeURIComponent(runId)}`),

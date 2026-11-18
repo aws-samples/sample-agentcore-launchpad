@@ -393,7 +393,7 @@ def test_a_member_eval_run_records_the_member(app, ada, monkeypatch):
     agent = _agent()
     stub_environment(monkeypatch)
     res = client.post("/api/eval/runs", json={
-        "agent_id": agent.id, "session_ids": ["sess-" + "a" * 30], "mode": "insights",
+        "agent_id": agent.id, "session_ids": ["sess-" + "a" * 30],
         **FORGED,
     })
     assert res.status_code in (200, 201), res.text
@@ -402,7 +402,7 @@ def test_a_member_eval_run_records_the_member(app, ada, monkeypatch):
     assert _creator(client.get(f"/api/eval/runs/{run['id']}").json()) == (user_id, "ada")
 
 
-def test_an_online_config_records_its_creator_and_report_runs_theirs(ada, monkeypatch):
+def test_an_online_config_records_its_creator(ada, monkeypatch):
     from app.evaluation import online
     from tests.evaluation.test_online_configs import stub_environment
 
@@ -440,32 +440,6 @@ def test_online_configs_without_a_row_list_no_creator(client, monkeypatch):
         "exp_1_oe1-9999999999", "exp_1_oe1")})
     configs = client.get("/api/eval/online").json()["configs"]
     assert configs and all(_creator(c) == (None, None) for c in configs)
-
-
-def test_start_report_stamps_the_run(client, monkeypatch):
-    """`start_report` hands its creator to `submit_run`, which stamps the row."""
-    from app.evaluation import online
-    from app.evaluation import service as eval_service
-
-    seen: dict = {}
-
-    def fake_submit(**kw):
-        seen.update(kw)
-        return MagicMock(id="r1", status="queued", queue_position=0)
-
-    agent = _agent()
-    monkeypatch.setattr(online, "get_config", lambda *a, **k: {
-        "owner": "agent", "mode": "insights", "agent_id": agent.id,
-        "insights": ["Builtin.X"], "arn": "arn:oe",
-    })
-    monkeypatch.setattr(eval_service, "submit_run", fake_submit)
-    db = SessionLocal()
-    try:
-        ws = MagicMock(id=DEFAULT_WORKSPACE_ID)
-        online.start_report(db, ws, "oe_x", "6h", creator=Creator("u1", "ada"))
-    finally:
-        db.close()
-    assert seen["creator"] == Creator("u1", "ada")
 
 
 # ─── evaluators + knowledge bases (AWS-only) ──────────────────────────────────
