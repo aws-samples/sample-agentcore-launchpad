@@ -3,7 +3,7 @@
 
 Flow (all through the launchpad backend API — the platform chain, not raw
 boto3): custom-evaluator CRUD (create → get → update → get) → time-window
-evaluators run scored by the custom judge → insights run with a type subset →
+evaluators run scored by the custom judge → Failure Analysis snapshot from the same batch →
 scenario dataset with ground truth (edit → sync to an AWS Dataset resource) →
 ground-truth dataset run (Trajectory + Correctness) → cleanup.
 
@@ -138,11 +138,11 @@ def main() -> int:
     time.sleep(120)  # nosemgrep: arbitrary-sleep
 
     print(f"── [2] window run: lookback {LOOKBACK_HOURS}h · "
-          f"[Builtin.Helpfulness, {judge_id}] …", flush=True)
+          f"[Builtin.Helpfulness, Builtin.FailureAnalysis, {judge_id}] …", flush=True)
     run = client.post("/api/eval/runs", json={
         "agent_id": agent["id"], "mode": "evaluators",
         "lookback_hours": LOOKBACK_HOURS,
-        "evaluators": ["Builtin.Helpfulness", judge_id],
+        "evaluators": ["Builtin.Helpfulness", "Builtin.FailureAnalysis", judge_id],
     })
     run.raise_for_status()
     window_run = wait_run(client, run.json()["id"])
@@ -151,30 +151,16 @@ def main() -> int:
     print(f"  dataset column: {window_run['dataset_name']}", flush=True)
     print(f"  scores: {json.dumps(window_run['scores'])}", flush=True)
     scored = {s["evaluatorId"]: s["score"] for s in window_run["scores"]}
-    assert "Builtin.Helpfulness" in scored, scored
+    assert "Builtin.Helpfulness" in scored and "Builtin.FailureAnalysis" in scored, scored
     assert judge_id in scored and scored[judge_id] is not None, scored
     print(f"  custom judge scored: {judge_id} = {scored[judge_id]}", flush=True)
 
-    # ── 3. insights run with a 2-type subset ─────────────────────────────────
-    print("── [3] insights run: lookback 24h · [UserIntent, ExecutionSummary] …",
-          flush=True)
-    run = client.post("/api/eval/runs", json={
-        "agent_id": agent["id"], "mode": "insights",
-        "lookback_hours": LOOKBACK_HOURS,
-        "insights": ["Builtin.Insight.UserIntent", "Builtin.Insight.ExecutionSummary"],
-    })
-    run.raise_for_status()
-    insights_run = wait_run(client, run.json()["id"])
-    assert insights_run["status"] == "completed", insights_run.get("error")
-    trees = insights_run["insights"]
-    print(f"  batch: {insights_run['batch_eval_id']}", flush=True)
-    print(f"  trees: {sorted(trees.keys())} · "
-          f"sizes: {({k: len(v) for k, v in trees.items()})}", flush=True)
-    assert "failures" not in trees, trees.keys()
-    assert set(trees.keys()) <= {"userIntents", "executionSummaries"}, trees.keys()
-    assert any(trees.values()), "expected at least one non-empty insight tree"
-    excerpt = json.dumps(trees, ensure_ascii=False)[:400]
-    print(f"  excerpt: {excerpt}", flush=True)
+    # ── 3. read findings from the same scored batch ───────────────────────────
+    response = client.get(f"/api/eval/runs/{window_run['id']}/findings")
+    response.raise_for_status()
+    snapshot = response.json()
+    assert snapshot["state"] == "ready", (snapshot["state"], snapshot["diagnostics"])
+    print(f"  [3] failure patterns: {len(snapshot['findings'])}", flush=True)
 
     # ── 4. ground-truth dataset: create → edit → sync to AWS ────────────────
     ds_name = f"e2e_gt_math_{suffix}"
