@@ -1251,7 +1251,7 @@ export function Evaluation() {
           style={{ "--i": 2 } as CSSProperties}
         >
           {selectedRun?.mode === "evaluators" && selectedRun.evaluators.includes(FAILURE_ANALYSIS_ID) ? (
-            <BatchFindingResults key={selectedRun.id} runId={selectedRun.id} status={selectedRun.status} />
+            <BatchFindingResults key={selectedRun.id} runId={selectedRun.id} status={selectedRun.status} bare />
           ) : selectedRun && hasInsightTrees(selectedRun.insights) ? (
             <div style={{ maxHeight: 460, overflowY: "auto" }}>
               <InsightClusters insights={selectedRun.insights} />

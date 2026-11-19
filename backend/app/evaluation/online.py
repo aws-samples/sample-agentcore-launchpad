@@ -623,7 +623,9 @@ def create_config(
     )
     control = control or control_client(ws.context)
     service_name, log_group = resolve_telemetry(agent, ws.context, logs)
-    chosen = normalize_online_evaluators(evaluators, control, code_prefix="online_eval")
+    chosen = normalize_online_evaluators(
+        evaluators, control, code_prefix="online_eval", allow_failure_analysis=True,
+    )
     rule = build_rule(sampling_percentage, session_timeout_minutes, validate_filters(filters))
     role_arn = ws.context.resources.get("execution_role_arn")
     if not role_arn:
@@ -725,7 +727,8 @@ def patch_config(
             db, ws.id, viewer, patch["evaluators"], code_prefix="online_eval"
         )
         chosen = normalize_online_evaluators(
-            patch["evaluators"], control, code_prefix="online_eval"
+            patch["evaluators"], control, code_prefix="online_eval",
+            allow_failure_analysis=True,
         )
         if (current["execution_status"] == "ENABLED" and ac.FAILURE_ANALYSIS in chosen
                 and ac.FAILURE_ANALYSIS not in current["evaluators"]):

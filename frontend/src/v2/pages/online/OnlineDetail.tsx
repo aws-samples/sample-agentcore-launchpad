@@ -13,7 +13,8 @@ import {
   type V2Range,
 } from "../../../lib/api";
 import { hasInsightTrees } from "../../../lib/evaluation";
-import { evaluatorScoreLabel, evaluatorLabel } from "../../../lib/evaluators";
+import { evaluatorScoreLabel, evaluatorLabel, FAILURE_ANALYSIS_EVALUATOR } from "../../../lib/evaluators";
+import { ConfigPatterns } from "../../../components/AgentFindings";
 import { creatorLabel, fmtTime, normalizedScore, RANGES, rangeLabel, scoreTone } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import { InsightClusters } from "../../InsightClusters";
@@ -503,6 +504,7 @@ export function OnlineDetail({ id }: { id: string }) {
           <Alert>{t(mode === "insights" ? "v2.online.reportsHint" : "v2.online.firstResultsHint", { count: row.session_timeout_minutes ?? 15 })}</Alert>
         </div>
       </Card>
+      {mode !== "insights" && row.agent_id && row.evaluators.includes(FAILURE_ANALYSIS_EVALUATOR) && <ConfigPatterns agentId={row.agent_id} />}
       {mode === "insights" ? <ReportsPanel row={row} /> : <ScoresPanel row={row} />}
       <Confirm
         open={confirm !== null}

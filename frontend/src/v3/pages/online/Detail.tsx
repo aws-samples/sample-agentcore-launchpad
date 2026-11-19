@@ -9,7 +9,8 @@ import { useAuth } from "../../../auth/auth-context";
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { api, type OnlineEvalConfigRow, type OnlineEvalReportRow, type V2Range } from "../../../lib/api";
 import { hasInsightTrees } from "../../../lib/evaluation";
-import { evaluatorScoreLabel, evaluatorLabel } from "../../../lib/evaluators";
+import { evaluatorScoreLabel, evaluatorLabel, FAILURE_ANALYSIS_EVALUATOR } from "../../../lib/evaluators";
+import { ConfigPatterns } from "../../../components/AgentFindings";
 import { normalizedScore, RANGES, rangeLabel } from "../../../v2/format";
 import { InsightClusters } from "../../../v2/InsightClusters";
 import {
@@ -422,6 +423,7 @@ export function OnlineDetail({ id }: { id: string }) {
         </div>
       </Panel>
 
+      {mode !== "insights" && row.agent_id && row.evaluators.includes(FAILURE_ANALYSIS_EVALUATOR) && <ConfigPatterns agentId={row.agent_id} />}
       {mode === "insights" ? <ReportsPanel row={row} /> : <ScoresPanel row={row} />}
       {action.dialog}
     </div>

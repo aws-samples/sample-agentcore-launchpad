@@ -6,7 +6,7 @@ import { useSearchParams } from "react-router-dom";
 import { DiffPanes } from "../../../components/DiffPanes";
 import { api, errorMessage, type RecommendProviderInfo } from "../../../lib/api";
 import { evaluationRunPresentation, type EvaluationRunInfo } from "../../../lib/evaluation";
-import { evaluatorLabel, evaluatorPolarity } from "../../../lib/evaluators";
+import { evaluatorLabel, evaluatorPolarity, FAILURE_ANALYSIS_EVALUATOR } from "../../../lib/evaluators";
 import { useModelCatalog, withCatalogModels } from "../../../lib/model-catalog";
 import {
   type ExperimentInfo,
@@ -72,7 +72,7 @@ export function ExperimentDetail({ id, hasRunning }: { id: string; hasRunning: b
   );
   const recProviders = providers.data?.providers ?? [];
   // online evaluation scores live traces: ground-truth matchers can never apply
-  const onlineEvaluatorRows = useMemo(() => (evaluatorsLoad.data?.evaluators ?? []).filter((e) => !e.requires_ground_truth), [evaluatorsLoad.data]);
+  const onlineEvaluatorRows = useMemo(() => (evaluatorsLoad.data?.evaluators ?? []).filter((e) => !e.requires_ground_truth && e.id !== FAILURE_ANALYSIS_EVALUATOR), [evaluatorsLoad.data]);
   const datasets = useMemo(() => (datasetsLoad.data?.datasets ?? []).filter((d) => d.kind !== "simulated"), [datasetsLoad.data]);
   const sourceRuns = useMemo(() => sourceRunsLoad.data ?? [], [sourceRunsLoad.data]);
 
