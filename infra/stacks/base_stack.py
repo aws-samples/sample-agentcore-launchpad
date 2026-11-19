@@ -384,47 +384,56 @@ class LaunchpadBaseStack(Stack):
         )
 
         # ---- samples: office-facts REST API (→ MCP via OpenAPI target) ----
-        facts_lambda = lambda_.Function(
-            self,
-            "OfficeFacts",
-            function_name=name("launchpad-office-facts"),
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            architecture=lambda_.Architecture.ARM_64,
-            handler="handler.lambda_handler",
-            code=lambda_.Code.from_asset(str(SAMPLES_DIR / "rest_api")),
-            timeout=Duration.seconds(10),
-            description="Launchpad sample: office-facts REST backend",
-            log_group=lambda_log_group(self, "OfficeFactsLogs"),
+        # `office_facts_api=false` (EC2 template SampleRestApi=false) skips the sample API:
+        # an API-key-only API Gateway counts as world-accessible in some accounts. The
+        # backend reads its two outputs defensively (gateway_bootstrap), so the demo
+        # Gateway then simply has no office-facts target.
+        office_facts_enabled = (
+            str(self.node.try_get_context("office_facts_api") or "true").lower() != "false"
         )
-        facts_api = apigw.LambdaRestApi(
-            self,
-            "OfficeFactsApi",
-            rest_api_name=name("launchpad-office-facts"),
-            handler=facts_lambda,
-            proxy=False,
-            deploy_options=apigw.StageOptions(stage_name="prod"),
-            # N11 r3 (live): the L2 default endpoint type is EDGE, which the
-            # aws-cn partition rejects ("Endpoint Configuration type EDGE is
-            # not supported in this region: cn-northwest-1") and rolls the
-            # whole launchpad-base stack back. REGIONAL is what China offers.
-            endpoint_configuration=apigw.EndpointConfiguration(
-                types=[apigw.EndpointType.REGIONAL]
-            ),
-        )
-        facts = facts_api.root.add_resource("facts")
-        facts.add_method("GET", api_key_required=True)
-        topic = facts.add_resource("{topic}")
-        topic.add_method("GET", api_key_required=True)
-        api_key = facts_api.add_api_key(
-            "OfficeFactsKey", api_key_name=name("launchpad-office-facts")
-        )
-        plan = facts_api.add_usage_plan(
-            "OfficeFactsPlan",
-            name=name("launchpad-office-facts"),
-            throttle=apigw.ThrottleSettings(rate_limit=10, burst_limit=20),
-        )
-        plan.add_api_key(api_key)
-        plan.add_api_stage(stage=facts_api.deployment_stage)
+        facts_api = api_key = None
+        if office_facts_enabled:
+            facts_lambda = lambda_.Function(
+                self,
+                "OfficeFacts",
+                function_name=name("launchpad-office-facts"),
+                runtime=lambda_.Runtime.PYTHON_3_12,
+                architecture=lambda_.Architecture.ARM_64,
+                handler="handler.lambda_handler",
+                code=lambda_.Code.from_asset(str(SAMPLES_DIR / "rest_api")),
+                timeout=Duration.seconds(10),
+                description="Launchpad sample: office-facts REST backend",
+                log_group=lambda_log_group(self, "OfficeFactsLogs"),
+            )
+            facts_api = apigw.LambdaRestApi(
+                self,
+                "OfficeFactsApi",
+                rest_api_name=name("launchpad-office-facts"),
+                handler=facts_lambda,
+                proxy=False,
+                deploy_options=apigw.StageOptions(stage_name="prod"),
+                # N11 r3 (live): the L2 default endpoint type is EDGE, which the
+                # aws-cn partition rejects ("Endpoint Configuration type EDGE is
+                # not supported in this region: cn-northwest-1") and rolls the
+                # whole launchpad-base stack back. REGIONAL is what China offers.
+                endpoint_configuration=apigw.EndpointConfiguration(
+                    types=[apigw.EndpointType.REGIONAL]
+                ),
+            )
+            facts = facts_api.root.add_resource("facts")
+            facts.add_method("GET", api_key_required=True)
+            topic = facts.add_resource("{topic}")
+            topic.add_method("GET", api_key_required=True)
+            api_key = facts_api.add_api_key(
+                "OfficeFactsKey", api_key_name=name("launchpad-office-facts")
+            )
+            plan = facts_api.add_usage_plan(
+                "OfficeFactsPlan",
+                name=name("launchpad-office-facts"),
+                throttle=apigw.ThrottleSettings(rate_limit=10, burst_limit=20),
+            )
+            plan.add_api_key(api_key)
+            plan.add_api_stage(stage=facts_api.deployment_stage)
 
         # ---- gateway service role (assumed by AgentCore Gateway) ----
         gateway_role = iam.Role(
@@ -438,13 +447,14 @@ class LaunchpadBaseStack(Stack):
             description="Assumed by AgentCore Gateway to reach targets + identity vault",
         )
         hr_lambda.grant_invoke(gateway_role)
-        gateway_role.add_to_policy(
-            iam.PolicyStatement(
-                sid="InvokeRestTargets",
-                actions=["execute-api:Invoke"],
-                resources=[facts_api.arn_for_execute_api()],
+        if facts_api is not None:
+            gateway_role.add_to_policy(
+                iam.PolicyStatement(
+                    sid="InvokeRestTargets",
+                    actions=["execute-api:Invoke"],
+                    resources=[facts_api.arn_for_execute_api()],
+                )
             )
-        )
         gateway_role.add_to_policy(
             iam.PolicyStatement(
                 sid="IdentityVault",
@@ -480,8 +490,9 @@ class LaunchpadBaseStack(Stack):
 
         # ---- outputs consumed by backend bootstrap ----
         CfnOutput(self, "HrLambdaArn", value=hr_lambda.function_arn)
-        CfnOutput(self, "OfficeFactsApiUrl", value=facts_api.url)
-        CfnOutput(self, "OfficeFactsApiKeyId", value=api_key.key_id)
+        if facts_api is not None and api_key is not None:
+            CfnOutput(self, "OfficeFactsApiUrl", value=facts_api.url)
+            CfnOutput(self, "OfficeFactsApiKeyId", value=api_key.key_id)
         CfnOutput(self, "GatewayRoleArn", value=gateway_role.role_arn)
         CfnOutput(self, "ArtifactsBucketName", value=artifacts.bucket_name)
         CfnOutput(self, "EcrRepoName", value=repo.repository_name)

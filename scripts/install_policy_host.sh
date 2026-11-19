@@ -41,7 +41,15 @@ if [[ -n "$DIRECT_IP" ]]; then
   sed -i '/^LAUNCHPAD_CONSOLE_ENTRY=/d' /etc/launchpad/env
   printf 'LAUNCHPAD_CONSOLE_ENTRY=public_nlb\n' >> /etc/launchpad/env
 fi
-if [[ -n "$PUBLIC_ORIGIN" ]]; then
+if [[ "$PUBLIC_ORIGIN" =~ ^https://[a-z0-9]+\.cloudfront\.net$ ]]; then
+  # ConsoleEntry=cloudfront: TLS ends at the distribution (CloudFront's own certificate)
+  # and nginx serves plain HTTP to the VPC origin, so there is no host certificate to
+  # reconcile. The marker tells host-update and the verifier which entry owns the origin.
+  [[ -z "$DIRECT_IP" ]] || { echo "A CloudFront entry has no direct console address" >&2; exit 2; }
+  sed -i '/^LAUNCHPAD_CONSOLE_ENTRY=/d' /etc/launchpad/env
+  printf 'LAUNCHPAD_CONSOLE_ENTRY=cloudfront\n' >> /etc/launchpad/env
+  sed -i "s|^LAUNCHPAD_PUBLIC_BASE_URL=.*|LAUNCHPAD_PUBLIC_BASE_URL=$PUBLIC_ORIGIN|" /etc/launchpad/env
+elif [[ -n "$PUBLIC_ORIGIN" ]]; then
   [[ "$PUBLIC_ORIGIN" =~ ^(https|http)://([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):[0-9]+$ ]] || {
     echo "Expected the CloudFormation IPv4 console URL" >&2; exit 2;
   }

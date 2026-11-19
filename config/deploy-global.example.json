@@ -1,0 +1,30 @@
+{
+  "account_id": "YOUR_12_DIGIT_ACCOUNT_ID",
+  "region": "us-east-1",
+  "profile": "default",
+  "stack_name": "launchpad-cn-ec2-g1",
+  "environment": "g1",
+  "console_entry": "cloudfront",
+  "release_bucket": "YOUR_PRIVATE_RELEASE_BUCKET",
+  "engine_artifact": "/YOUR_ABSOLUTE_CHECKOUT/policy-engine/dist/launchpad-policy-engine-0.1.0-aarch64.tar.gz",
+  "parameters": {
+    "GitRepoUrl": "git@github.com:<your-fork>/launchpad-cn.git",
+    "GitBranch": "YOUR_IMMUTABLE_RELEASE_TAG",
+    "GitDeployKeyParameter": "YOUR_GIT_DEPLOY_KEY_PARAMETER",
+    "AllowedCidr": "YOUR_PUBLIC_IP/32",
+    "GlobalBedrockApiKeyParameter": "YOUR_MODEL_KEY_PARAMETER",
+    "ConsolePasswordParameter": "YOUR_ADMIN_PASSWORD_PARAMETER",
+    "AuthPasswordPolicy": "relaxed",
+    "AuthPasswordMinLength": 8,
+    "InstanceType": "m7g.xlarge",
+    "MemoryDomainMode": "dedicated",
+    "ConsolePort": "8080",
+    "TlsMode": "none",
+    "AllocateElasticIp": "false",
+    "SampleRestApi": "false",
+    "PipIndexUrl": "https://pypi.org/simple",
+    "CodeBuildPipIndexUrl": "https://pypi.org/simple",
+    "CodeBuildPipFallbackIndexUrl": "https://pypi.org/simple",
+    "NpmRegistry": "https://registry.npmjs.org"
+  }
+}

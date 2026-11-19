@@ -33,7 +33,7 @@ USER_DATA_MARGIN = 512
 EXPECTED_STUB_TOKENS = {
     "AWS::Region", "AWS::StackName", "UseTlsCookieFlag",
     "PipIndexUrl", "PipExtraIndexUrl", "CodeBuildPipIndexUrl", "CodeBuildPipFallbackIndexUrl",
-    "NpmRegistry", "ConsolePort", "EnvName", "MemoryDomainMode",
+    "NpmRegistry", "ConsolePort", "SampleRestApi", "EnvName", "MemoryDomainMode",
     "AuthPasswordPolicy", "AuthPasswordMinLength",
     "GlobalBedrockApiKeyParameter", "SiliconFlowApiKeyParameter", "ConsolePasswordParameter",
     "GitDeployKeyParameter",
@@ -201,21 +201,55 @@ def test_ssm_parameter_names_must_be_flat_no_leading_slash():
         assert pattern.match("launchpad-siliconflow-api-key"), name
 
 
-def test_no_cloudfront_resource():
+def test_no_cloudfront_resource_and_the_global_entry_is_ingress_only():
+    """Spec C6 (China): no CloudFront resource in this shared template — the VPC-origin type
+    does not exist in aws-cn and CloudFormation rejects an unknown type even under a false
+    condition. ConsoleEntry=cloudfront (Global) only swaps the console ingress to the
+    CloudFront prefix list; launchpad-console-cloudfront.yaml holds the distribution."""
     template = _load()
     types = {r["Type"] for r in template["Resources"].values()}
     assert not any(t.startswith("AWS::CloudFront::") for t in types)
+    params = template["Parameters"]
+    assert params["ConsoleEntry"]["Default"] == "direct"
+    assert params["ConsoleEntry"]["AllowedValues"] == ["direct", "cloudfront"]
+    assert params["CloudFrontPrefixListId"]["Default"] == ""
+    assert template["Conditions"]["UseCloudFront"] == {
+        "Fn::Equals": [{"Ref": "ConsoleEntry"}, "cloudfront"]
+    }
+    rules = template["Rules"]
+    cf_rule = rules["CloudFrontEntryNeedsPlainOriginAndPrefixList"]
+    assert cf_rule["RuleCondition"] == {"Fn::Equals": [{"Ref": "ConsoleEntry"}, "cloudfront"]}
+    asserted = json.dumps(cf_rule["Assertions"])
+    assert '"TlsMode"' in asserted and '"CloudFrontPrefixListId"' in asserted
+    assert "DirectEntryHasNoPrefixList" in rules
 
 
 def test_security_group_ingress_only_from_allowed_cidr():
+    """Direct entry: ConsolePort from AllowedCidr only. CloudFront entry: ConsolePort from the
+    CloudFront origin-facing managed prefix list only — never a CIDR, never 0.0.0.0/0."""
     template = _load()
     sg = template["Resources"]["ConsoleSecurityGroup"]
     ingress = sg["Properties"]["SecurityGroupIngress"]
-    assert len(ingress) >= 1
-    for rule in ingress:
-        assert rule["CidrIp"] == {"Ref": "AllowedCidr"}
+    assert len(ingress) == 1
+    condition, cloudfront_rule, direct_rule = ingress[0]["Fn::If"]
+    assert condition == "UseCloudFront"
+    assert direct_rule["CidrIp"] == {"Ref": "AllowedCidr"}
+    assert cloudfront_rule["SourcePrefixListId"] == {"Ref": "CloudFrontPrefixListId"}
+    assert "CidrIp" not in cloudfront_rule
+    for rule in (direct_rule, cloudfront_rule):
         assert rule["FromPort"] == {"Ref": "ConsolePort"}
         assert rule["ToPort"] == {"Ref": "ConsolePort"}
+
+
+def test_sample_rest_api_switch_reaches_cdk_context():
+    """SampleRestApi=false must reach `cdk deploy` as office_facts_api=false; the default
+    keeps the sample API (and the env file line byte-identical to before)."""
+    template = _load()
+    assert template["Parameters"]["SampleRestApi"]["Default"] == "true"
+    text = _script_text()
+    assert ': "${LAUNCHPAD_BOOT_SAMPLE_REST_API:=true}"' in text
+    assert ('[ "$LAUNCHPAD_BOOT_SAMPLE_REST_API" = "false" ] && '
+            'SAMPLE_API_CONTEXT=",office_facts_api=false"') in text
 
 
 POLICY_NETWORK = (
@@ -597,9 +631,9 @@ def test_env_file_sets_launchpad_cdk_context_without_a_master_arn():
     # variable (scripts/bootstrap.py splits on commas).
     text = _script_text()
     assert ("printf 'LAUNCHPAD_CDK_CONTEXT=env_name=%s,codebuild_pip_index_url=%s,"
-            "codebuild_pip_fallback_index_url=%s\\n' \"$LAUNCHPAD_BOOT_ENV_NAME\" "
+            "codebuild_pip_fallback_index_url=%s%s\\n' \"$LAUNCHPAD_BOOT_ENV_NAME\" "
             "\"$LAUNCHPAD_BOOT_CODEBUILD_PIP_INDEX_URL\" "
-            "\"$LAUNCHPAD_BOOT_CODEBUILD_PIP_FALLBACK_INDEX_URL\"") in text
+            "\"$LAUNCHPAD_BOOT_CODEBUILD_PIP_FALLBACK_INDEX_URL\" \"$SAMPLE_API_CONTEXT\"") in text
     both = _both_texts() + TEMPLATE_PATH.read_text(encoding="utf-8")
     assert "memory_master_arn" not in both.replace("`memory_master_arn=", "")  # only the comment
 

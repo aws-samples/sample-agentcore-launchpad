@@ -29,6 +29,10 @@ LEARNERS = [f"lab{i:02}" for i in range(1, 11)]
 # between ``--cards-only`` runs must not change the run identity either.
 MUTABLE_KEYS = ("staff_accounts", "staff_publish_targets", "model_id", "employee_agent_prebuilt")
 USERNAME = r"[a-z][a-z0-9_-]{0,31}"
+# The lab's validated regions and their partitions: the China distribution and the Global
+# CloudFront-entry distribution (scripts/deploy_cn.py, docs/cn/distribution.md).
+# region-boundary: allow us-east-1 is the Global-partition distribution target (CloudFront entry)
+LAB_REGIONS = {"cn-northwest-1": "aws-cn", "us-east-1": "aws"}
 S3_PREFIX_URI = r"s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9](/[A-Za-z0-9_./-]*)?"
 
 
@@ -39,8 +43,8 @@ def read_config(path: Path) -> dict:
             raise ValueError(f"Invalid {key}")
     if not re.fullmatch(r"\d{12}", cfg["account_id"]):
         raise ValueError("Specify the destination account_id")
-    if cfg["region"] != "cn-northwest-1":
-        raise ValueError("This lab targets cn-northwest-1")
+    if cfg["region"] not in LAB_REGIONS:
+        raise ValueError("This lab targets " + " or ".join(LAB_REGIONS))
     if not re.fullmatch(r"i-[a-f0-9]{8,17}", cfg["tools_host"]):
         raise ValueError("tools_host must be an existing SSM-managed instance")
     if not 1024 <= int(cfg["tools_port"]) <= 65535:
@@ -86,6 +90,7 @@ SCENARIO = CONFIG["scenario"]
 NAME = "launchpad-" + SCENARIO
 PREFIX = "/launchpad/" + SCENARIO + "/"
 AWS = boto3.Session(profile_name=CONFIG.get("profile"), region_name=CONFIG["region"])
+PARTITION = LAB_REGIONS[CONFIG["region"]]
 SSM = AWS.client("ssm")
 STAFF = CONFIG["staff_accounts"]
 STAFF_PUBLISH_TARGETS = CONFIG["staff_publish_targets"]
@@ -132,8 +137,8 @@ def publish_targets(shared_target: str) -> list[str]:
 
 
 def publish_grant_resources(targets) -> list[str]:
-    """The S3 object ARNs of ``publish_targets`` (``arn:aws-cn:s3:::<bucket>/<prefix>*``)."""
-    return ["arn:aws-cn:s3:::" + t[len("s3://"):] + "*" for t in targets]
+    """The S3 object ARNs of ``publish_targets`` (``arn:<partition>:s3:::<bucket>/<prefix>*``)."""
+    return [f"arn:{PARTITION}:s3:::" + t[len("s3://"):] + "*" for t in targets]
 
 
 PUBLISH_POLICY_NAME = "PublishOnlyWorkshopKnowledge"

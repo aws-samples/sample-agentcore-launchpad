@@ -1,5 +1,10 @@
 """Create a named CN environment and finish its policy-engine installation.
 
+Validated regions: cn-northwest-1 (partition aws-cn; console_entry direct | public_nlb) and
+us-east-1 (partition aws; console_entry cloudfront — the console's only public entry is a
+CloudFront VPC origin created in the host stack, for accounts that forbid world-accessible
+origins).
+
 Run with the backend uv environment. Configuration contains SSM parameter NAMES,
 never passwords. plan is read-only; apply creates only a new tagged stack or
 resumes a stack recorded in this run's state file. It never updates another stack.
@@ -29,6 +34,17 @@ sys.path.insert(0, str(REPO))
 
 from scripts.deploy_cn_capacity import network_capacity, require_network_capacity  # noqa: E402
 
+# region -> partition this release is validated for, and each partition's DNS suffix.
+# region-boundary: allow us-east-1 is the Global-partition distribution target (CloudFront entry)
+VALIDATED_REGIONS = {"cn-northwest-1": "aws-cn", "us-east-1": "aws"}
+DNS_SUFFIX = {"aws-cn": "amazonaws.com.cn", "aws": "amazonaws.com"}
+ENTRIES = {"aws-cn": ("direct", "public_nlb"), "aws": ("cloudfront",)}
+CLOUDFRONT_PREFIX_LIST = "com.amazonaws.global.cloudfront.origin-facing"
+
+
+def partition(cfg: dict) -> str:
+    return VALIDATED_REGIONS[cfg["region"]]
+
 
 def read_config(path: Path) -> dict:
     cfg = json.loads(path.read_text())
@@ -37,15 +53,24 @@ def read_config(path: Path) -> dict:
             raise ValueError(f"Missing {key}")
     if not re.fullmatch(r"\d{12}", cfg["account_id"]):
         raise ValueError("account_id must be the destination account's 12 digits")
-    if cfg["region"] != "cn-northwest-1":
-        raise ValueError("This release is validated for cn-northwest-1 only")
+    if cfg["region"] not in VALIDATED_REGIONS:
+        raise ValueError(
+            "This release is validated for " + ", ".join(VALIDATED_REGIONS) + " only"
+        )
     if not re.fullmatch(r"[a-z0-9]{1,3}", cfg["environment"]):
         raise ValueError("Use an environment suffix of 1-3 lowercase letters/digits")
     if cfg["environment"] in ("kb",):
         raise ValueError("Reserved environment name")
-    if cfg.get("console_entry", "direct") not in ("direct", "public_nlb"):
-        raise ValueError("console_entry must be direct or public_nlb")
+    allowed_entries = ENTRIES[VALIDATED_REGIONS[cfg["region"]]]
+    if cfg.get("console_entry", "direct") not in allowed_entries:
+        raise ValueError(
+            f"console_entry must be one of {', '.join(allowed_entries)} in {cfg['region']}"
+        )
+    cloudfront = cfg.get("console_entry") == "cloudfront"
     params = cfg["parameters"]
+    for key in ("ConsoleEntry", "CloudFrontPrefixListId"):
+        if key in params:
+            raise ValueError(f"{key} is derived from console_entry; do not set it")
     if params.get("AuthPasswordPolicy", "strict") not in ("strict", "relaxed"):
         raise ValueError("AuthPasswordPolicy must be strict or relaxed")
     minimum = str(params.get("AuthPasswordMinLength", 12))
@@ -58,7 +83,15 @@ def read_config(path: Path) -> dict:
     network = ipaddress.ip_network(params["AllowedCidr"], strict=False)
     if network.version != 4 or network.prefixlen == 0:
         raise ValueError("AllowedCidr must be a specific IPv4 CIDR")
-    if params.get("TlsMode", "selfsigned") != "selfsigned":
+    if cloudfront:
+        # TLS ends at CloudFront; the VPC-origin hop is plain HTTP on ConsolePort.
+        if params.get("TlsMode") != "none":
+            raise ValueError("console_entry=cloudfront requires TlsMode=none")
+        if params.get("AllocateElasticIp") != "false":
+            raise ValueError("console_entry=cloudfront requires AllocateElasticIp=false")
+        if params.get("SampleRestApi") != "false":
+            raise ValueError("console_entry=cloudfront requires SampleRestApi=false")
+    elif params.get("TlsMode", "selfsigned") != "selfsigned":
         raise ValueError("The distribution deployment requires HTTPS")
     port = str(params.get("ConsolePort", "8443"))
     if not port.isdigit() or not 1024 <= int(port) <= 65535:
@@ -83,9 +116,27 @@ def read_config(path: Path) -> dict:
     return cfg
 
 
+def entry_parameters(cfg: dict) -> dict:
+    """Template parameters derived from console_entry (absent for China entries, so a
+    China stack's parameter set is exactly what it was before the CloudFront entry)."""
+    if cfg.get("console_entry") != "cloudfront":
+        return {}
+    return {"ConsoleEntry": "cloudfront", "CloudFrontPrefixListId": cfg["cloudfront_prefix_list"]}
+
+
+def cloudfront_prefix_list(ec2) -> str:
+    rows = ec2.describe_managed_prefix_lists(
+        Filters=[{"Name": "prefix-list-name", "Values": [CLOUDFRONT_PREFIX_LIST]}]
+    )["PrefixLists"]
+    if len(rows) != 1:
+        raise RuntimeError(f"Expected exactly one {CLOUDFRONT_PREFIX_LIST} prefix list")
+    return rows[0]["PrefixListId"]
+
+
 def parameters(cfg: dict) -> list[dict]:
     values = {
         **cfg["parameters"],
+        **entry_parameters(cfg),
         "EnvName": cfg["environment"],
         "PolicyInterceptorNetwork": "true",
         "PolicyPrincipalSigningKey": "true",
@@ -156,6 +207,10 @@ def nlb_stack_name(cfg: dict) -> str:
     return f"launchpad-cn-console-nlb-{cfg['environment']}"
 
 
+def cloudfront_stack_name(cfg: dict) -> str:
+    return f"launchpad-console-cloudfront-{cfg['environment']}"
+
+
 def owned_host(cfn, cfg: dict, state: dict):
     """Only recover a lost create response with this run's persisted identity."""
     stack = stack_or_none(cfn, cfg["stack_name"])
@@ -181,10 +236,11 @@ def validate_host_resume(cfg: dict, stack: dict) -> None:
     current = {p["ParameterKey"]: p["ParameterValue"] for p in stack.get("Parameters", [])}
     legacy_defaults = {
         "MemoryDomainMode": "shared", "AuthPasswordPolicy": "strict", "AuthPasswordMinLength": "12",
+        "ConsoleEntry": "direct", "CloudFrontPrefixListId": "",
     }
     expected = {
         **legacy_defaults, "ConsolePort": "8443", "TlsMode": "selfsigned",
-        **cfg["parameters"], "EnvName": cfg["environment"],
+        **cfg["parameters"], **entry_parameters(cfg), "EnvName": cfg["environment"],
         "PolicyInterceptorNetwork": "true", "PolicyPrincipalSigningKey": "true",
     }
     for key in ("ConsolePort", "AuthPasswordMinLength"):
@@ -194,6 +250,7 @@ def validate_host_resume(cfg: dict, stack: dict) -> None:
         "ConsolePasswordParameter", "GlobalBedrockApiKeyParameter",
         "AuthPasswordPolicy", "AuthPasswordMinLength",
         "PolicyInterceptorNetwork", "PolicyPrincipalSigningKey",
+        "ConsoleEntry", "CloudFrontPrefixListId",
     }
     mismatches = [
         key for key in sorted(protected)
@@ -250,10 +307,93 @@ def owned_nlb(cfn, cfg: dict, state: dict):
     return stack
 
 
-def ensure_console_entry(cfn, cfg: dict, outputs: dict, state: dict, path: Path) -> dict:
+def owned_cloudfront(cfn, cfg: dict, state: dict):
+    """Read-only preflight; recover a lost create response using a persisted run token."""
+    stack = stack_or_none(cfn, cloudfront_stack_name(cfg))
+    if stack:
+        tags = {tag["Key"]: tag["Value"] for tag in stack.get("Tags", [])}
+        owned = stack["StackId"] == state.get("cloudfront_stack_id")
+        recovering = (
+            not state.get("cloudfront_stack_id")
+            and state.get("cloudfront_create_token")
+            and tags.get("launchpad:deployment") == state["cloudfront_create_token"]
+            and tags.get("launchpad:host-stack") == state.get("stack_id")
+        )
+        if not (owned or recovering):
+            raise RuntimeError(
+                "CloudFront stack already exists and is not owned by this state file"
+            )
+    elif state.get("cloudfront_stack_id"):
+        raise RuntimeError(
+            "Recorded CloudFront stack is missing; inspect before creating a replacement"
+        )
+    return stack
+
+
+def ensure_cloudfront_entry(cfn, ec2, cfg: dict, outputs: dict, state: dict, path: Path) -> dict:
+    """Create the CloudFront entry stack (VPC origin + distribution) for the recorded host.
+
+    A separate stack because the VPC-origin resource type does not exist in the China
+    partition and the host template is shared. Teardown deletes it before the host stack.
+    """
+    stack = owned_cloudfront(cfn, cfg, state)
+    [reservation] = ec2.describe_instances(InstanceIds=[outputs["InstanceId"]])["Reservations"]
+    [instance] = reservation["Instances"]
+    values = {
+        "InstanceId": outputs["InstanceId"],
+        "InstancePrivateDnsName": instance["PrivateDnsName"],
+        "ConsolePort": str(int(cfg["parameters"]["ConsolePort"])),
+        "EnvName": cfg["environment"],
+    }
+    if stack:
+        state["cloudfront_stack_id"] = stack["StackId"]
+        save(path, state)
+        stack = wait_stack(cfn, stack["StackId"])
+        current = {p["ParameterKey"]: p["ParameterValue"] for p in stack["Parameters"]}
+        changed = [key for key, value in values.items() if current.get(key) != value]
+        if changed:
+            raise RuntimeError(
+                "Owned CloudFront entry differs from the current host: " + ", ".join(changed)
+                + "; reconcile explicitly (a replaced instance needs a new VPC origin)"
+            )
+    else:
+        state.setdefault("cloudfront_create_token", str(uuid.uuid4()))
+        save(path, state)
+        response = cfn.create_stack(
+            StackName=cloudfront_stack_name(cfg),
+            TemplateBody=(REPO / "infra/ec2/launchpad-console-cloudfront.yaml").read_text(),
+            Parameters=[{"ParameterKey": k, "ParameterValue": v} for k, v in values.items()],
+            ClientRequestToken=state["cloudfront_create_token"],
+            Tags=[
+                {"Key": "launchpad:deployment", "Value": state["cloudfront_create_token"]},
+                {"Key": "launchpad:host-stack", "Value": state["stack_id"]},
+                {"Key": "launchpad:release", "Value": state["commit"]},
+            ],
+            OnFailure="DO_NOTHING",
+        )
+        state["cloudfront_stack_id"] = response["StackId"]
+        save(path, state)
+        stack = wait_stack(cfn, state["cloudfront_stack_id"])
+    entry = {o["OutputKey"]: o["OutputValue"] for o in stack["Outputs"]}
+    if entry["InstanceId"] != outputs["InstanceId"]:
+        raise RuntimeError("CloudFront entry fronts a different instance than the recorded host")
+    state["cloudfront_outputs"] = entry
+    save(path, state)
+    return {
+        **outputs,
+        "ConsoleUrl": entry["ConsoleUrl"],
+        "CloudFrontDistributionId": entry["DistributionId"],
+    }
+
+
+def ensure_console_entry(
+    cfn, cfg: dict, outputs: dict, state: dict, path: Path, *, ec2=None,
+) -> dict:
     """Provision the existing NLB template and return the advertised console origin."""
     if cfg.get("console_entry", "direct") == "direct":
         return outputs
+    if cfg["console_entry"] == "cloudfront":
+        return ensure_cloudfront_entry(cfn, ec2, cfg, outputs, state, path)
     stack = owned_nlb(cfn, cfg, state)
     if stack:
         state["nlb_stack_id"] = stack["StackId"]
@@ -381,6 +521,35 @@ def verify_console_entry(elb, cfg: dict, outputs: dict, state: dict, *, timeout=
                     last = str(exc)
             time.sleep(15)
     raise TimeoutError(f"NLB is not ready; resume apply after diagnosis: {last}")
+
+
+def verify_cloudfront_entry(cloudfront, outputs: dict, *, timeout=1800) -> dict:
+    """The distribution must be Deployed and serve the console over CloudFront's trusted
+    certificate: health 200 and an unauthenticated API call refused with 401."""
+    deadline = time.monotonic() + timeout
+    last = "waiting for distribution"
+    with httpx.Client(verify=True, timeout=30, trust_env=False) as client:
+        while time.monotonic() < deadline:
+            status = cloudfront.get_distribution(
+                Id=outputs["CloudFrontDistributionId"]
+            )["Distribution"]["Status"]
+            last = f"distribution {status}"
+            if status == "Deployed":
+                try:
+                    health = client.get(outputs["ConsoleUrl"] + "/api/health")
+                    protected = client.get(outputs["ConsoleUrl"] + "/api/agents")
+                    if health.status_code == 200 and health.json().get("status") == "ok":
+                        if protected.status_code != 401:
+                            raise RuntimeError("CloudFront console auth check did not return 401")
+                        return {
+                            "distribution": outputs["CloudFrontDistributionId"],
+                            "health": "ok", "unauthenticated_status": 401, "tls": "trusted",
+                        }
+                    last = f"health returned {health.status_code}"
+                except (httpx.TransportError, ValueError) as exc:
+                    last = str(exc)
+            time.sleep(20)
+    raise TimeoutError(f"CloudFront entry is not ready; resume apply after diagnosis: {last}")
 
 
 def wait_ssm(ssm, instance: str, cid: str) -> dict:
@@ -533,7 +702,7 @@ def policy_settings(cfg: dict, outputs: dict) -> dict:
         "policy_gateway_interceptor": True,
         "policy_principal_kms_key_id": outputs["PolicyPrincipalKeyArn"],
         "policy_hub_role_arn": (
-            f"arn:aws-cn:iam::{cfg['account_id']}:role/{outputs['OpsRoleName']}"
+            f"arn:{partition(cfg)}:iam::{cfg['account_id']}:role/{outputs['OpsRoleName']}"
         ),
         "policy_engine_endpoints": [f"{outputs['PrivateIp']}:{p}" for p in (7443, 7444)],
     }
@@ -564,6 +733,8 @@ def main() -> None:
     if actual != cfg["account_id"]:
         raise RuntimeError("AWS credential account does not match account_id")
     cfn, s3, ssm = (session.client(n) for n in ("cloudformation", "s3", "ssm"))
+    if cfg.get("console_entry") == "cloudfront":
+        cfg["cloudfront_prefix_list"] = cloudfront_prefix_list(session.client("ec2"))
     state = json.loads(args.state.read_text()) if args.state.exists() else {}
     signature = hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest()
     if state and state.get("config_sha256") != signature:
@@ -605,6 +776,8 @@ def main() -> None:
                     f"Environment resource stack {name} already exists; use a new name"
                 )
     nlb = owned_nlb(cfn, cfg, state) if cfg.get("console_entry") == "public_nlb" else None
+    if cfg.get("console_entry") == "cloudfront":
+        owned_cloudfront(cfn, cfg, state)
     capacity = network_capacity(session, cfn, cfg, stack, nlb)
     print(json.dumps({"network_capacity": capacity}, indent=2), flush=True)
     require_network_capacity(capacity)
@@ -637,9 +810,13 @@ def main() -> None:
                 "console_entry": cfg.get("console_entry", "direct"),
                 "nlb_stack": nlb_stack_name(cfg) if cfg.get("console_entry") == "public_nlb"
                 else None,
-                "console_access": "all IPv4 sources through NLB"
-                if cfg.get("console_entry") == "public_nlb"
-                else cfg["parameters"]["AllowedCidr"],
+                "cloudfront_stack": cloudfront_stack_name(cfg)
+                if cfg.get("console_entry") == "cloudfront" else None,
+                "console_access": {
+                    "public_nlb": "all IPv4 sources through NLB",
+                    "cloudfront": "CloudFront only (origin SG = "
+                    f"{cfg.get('cloudfront_prefix_list')}, no direct ingress)",
+                }.get(cfg.get("console_entry"), cfg["parameters"]["AllowedCidr"]),
             },
             indent=2,
         ),
@@ -662,12 +839,17 @@ def main() -> None:
         ExtraArgs={"ServerSideEncryption": "AES256"},
     )
     # Regional S3 URL; CloudFormation uses the caller's access to the private object.
-    url = f"https://{cfg['release_bucket']}.s3.{cfg['region']}.amazonaws.com.cn/{template_key}"
+    url = (
+        f"https://{cfg['release_bucket']}.s3.{cfg['region']}."
+        f"{DNS_SUFFIX[partition(cfg)]}/{template_key}"
+    )
     host_id = ensure_host_stack(cfn, cfg, state, args.state, url)
     stack = wait_stack(cfn, host_id)
     validate_host_resume(cfg, stack)
     outputs = {o["OutputKey"]: o["OutputValue"] for o in stack["Outputs"]}
-    outputs = ensure_console_entry(cfn, cfg, outputs, state, args.state)
+    outputs = ensure_console_entry(
+        cfn, cfg, outputs, state, args.state, ec2=session.client("ec2"),
+    )
     outputs.update(selected_domain_outputs(cfn, cfg))
     base = cfn.describe_stacks(StackName=f"launchpad-base-{cfg['environment']}")["Stacks"][0]
     bucket = next(
@@ -691,6 +873,8 @@ def main() -> None:
         state["console_check"] = verify_console_entry(
             session.client("elbv2"), cfg, outputs, state,
         )
+    if cfg.get("console_entry") == "cloudfront":
+        state["console_check"] = verify_cloudfront_entry(session.client("cloudfront"), outputs)
     state["status"] = "platform_ready"
     save(args.state, state)
     print(f"Platform ready: {outputs['ConsoleUrl']}; lab initialization is a separate step")

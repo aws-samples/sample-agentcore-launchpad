@@ -96,9 +96,11 @@ def verify_settings(settings, expected: dict) -> dict:
     for key in SETTING_KEYS:
         if key in expected and getattr(settings, key) != expected[key]:
             raise VerificationError(f"Running backend setting {key} differs from deployment")
-    if expected.get("console_entry") == "public_nlb":
-        if os.environ.get("LAUNCHPAD_CONSOLE_ENTRY") != "public_nlb":
-            raise VerificationError("Running backend is missing its public_nlb entry marker")
+    if expected.get("console_entry") in ("public_nlb", "cloudfront"):
+        if os.environ.get("LAUNCHPAD_CONSOLE_ENTRY") != expected["console_entry"]:
+            raise VerificationError(
+                f"Running backend is missing its {expected['console_entry']} entry marker"
+            )
     return {
         **{key: getattr(settings, key) for key in SETTING_KEYS},
         "console_http_lab": getattr(settings, "console_http_lab", False),
@@ -196,8 +198,14 @@ def verify_host(expected: dict) -> None:
         raise VerificationError("Running backend acceptance failed")
     if service_pid() != main_pid or backend_process(main_pid) != pid:
         raise VerificationError("Backend restarted during verification; retry acceptance")
+    # A CloudFront entry presents CloudFront's certificate; the host serves plain HTTP. The
+    # installer's own run passes only the policy settings (no console_entry), so the host's
+    # entry marker written by install_policy_host.sh counts as well.
+    host_tls = "cloudfront" not in (
+        expected.get("console_entry"), os.environ.get("LAUNCHPAD_CONSOLE_ENTRY")
+    )
     for origin in (expected.get("public_base_url"), expected.get("direct_console_url")):
-        if origin and urlsplit(origin).scheme == "https":
+        if host_tls and origin and urlsplit(origin).scheme == "https":
             address = urlsplit(origin).hostname
             result_tls = subprocess.run(
                 ["openssl", "verify", "-CAfile", "/etc/nginx/launchpad-tls/cert.pem",

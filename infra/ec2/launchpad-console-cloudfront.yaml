@@ -1,0 +1,90 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  AgentCore Launchpad console CloudFront entry (Global partition): a CloudFront VPC origin
+  for ONE console host created by launchpad-cn-ec2.yaml with ConsoleEntry=cloudfront, and
+  the distribution in front of it - the console's only public entry. Viewers get
+  CloudFront's trusted certificate on 443; CloudFront reaches the host over plain HTTP on
+  ConsolePort through a service-managed ENI in the host's VPC, and the host's security
+  group admits ConsolePort from the CloudFront origin-facing prefix list only, so nothing
+  is world-accessible. scripts/deploy_cn.py creates this stack after the host stack; it
+  must be deleted BEFORE the host stack (a distribution must never outlive its origin).
+
+Parameters:
+  InstanceId:
+    Type: AWS::EC2::Instance::Id
+    Description: The console host (launchpad-cn-ec2.yaml Instance) - the VPC origin.
+  InstancePrivateDnsName:
+    Type: String
+    AllowedPattern: "^ip-[0-9-]+\\.[a-z0-9.-]+$"
+    Description: >
+      The host's private DNS name (ip-10-44-0-12.ec2.internal) - the origin domain a
+      CloudFront VPC origin for an EC2 instance requires.
+  ConsolePort:
+    Type: Number
+    MinValue: 1024
+    MaxValue: 65535
+    Description: The host's plain-HTTP nginx port (launchpad-cn-ec2.yaml ConsolePort).
+  EnvName:
+    Type: String
+    Default: ""
+    AllowedPattern: "^[a-z0-9]{0,3}$"
+    Description: The host's EnvName - names the VPC origin launchpad-console[-<EnvName>].
+
+Conditions:
+  HasEnvName: !Not [!Equals [!Ref EnvName, ""]]
+
+Resources:
+  ConsoleVpcOrigin:
+    Type: AWS::CloudFront::VpcOrigin
+    Properties:
+      VpcOriginEndpointConfig:
+        Name: !Sub
+          - "launchpad-console${EnvSuffix}"
+          - EnvSuffix: !If [HasEnvName, !Sub "-${EnvName}", ""]
+        Arn: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${InstanceId}"
+        HTTPPort: !Ref ConsolePort
+        HTTPSPort: 443
+        OriginProtocolPolicy: http-only
+
+  ConsoleDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub
+          - "Launchpad console${EnvLabel} - sole public entry (VPC origin ${InstanceId})"
+          - EnvLabel: !If [HasEnvName, !Sub " ${EnvName}", ""]
+        HttpVersion: http2
+        PriceClass: PriceClass_All
+        Origins:
+          - Id: console
+            DomainName: !Ref InstancePrivateDnsName
+            VpcOriginConfig:
+              VpcOriginId: !GetAtt ConsoleVpcOrigin.Id
+              # Chat turns stream SSE; a slow first token must not be cut at 30 s.
+              OriginReadTimeout: 120
+              OriginKeepaliveTimeout: 60
+        DefaultCacheBehavior:
+          TargetOriginId: console
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          # Compression would buffer text/event-stream; the console is dynamic.
+          Compress: false
+          # Managed-CachingDisabled + Managed-AllViewer (cookies, query string, Host).
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+
+Outputs:
+  ConsoleUrl:
+    Description: The console's public URL (CloudFront's trusted certificate, port 443).
+    Value: !Sub "https://${ConsoleDistribution.DomainName}"
+  DistributionId:
+    Description: Delete this stack (and so this distribution) before the host stack.
+    Value: !Ref ConsoleDistribution
+  DomainName:
+    Value: !GetAtt ConsoleDistribution.DomainName
+  VpcOriginId:
+    Value: !GetAtt ConsoleVpcOrigin.Id
+  InstanceId:
+    Value: !Ref InstanceId

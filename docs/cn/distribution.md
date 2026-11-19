@@ -226,3 +226,29 @@ resource maps; then re-publish Agents that embed KB/Memory endpoints so their ru
 environment and IAM policy target the new domain. Verify both real retrieval and memory
 read/write before resuming. Keep the source indices until acceptance and rollback review.
 Never run `bootstrap-host.sh` again on a populated host to perform this migration.
+
+## Global-partition environments behind CloudFront
+
+`scripts/deploy_cn.py` also deploys this release to **us-east-1** (partition `aws`) for
+accounts whose security monitoring forbids any world-accessible origin (such an account
+flags an NLB open to `0.0.0.0/0` and an API-key-only API Gateway). Start from
+`config/deploy-global.example.json`; the only accepted entry there is
+`"console_entry": "cloudfront"`, and `read_config` refuses it anywhere else.
+
+- **Host stack** (`launchpad-cn-ec2.yaml`, `ConsoleEntry=cloudfront`, derived by the script):
+  the console security group admits `ConsolePort` from the managed prefix list
+  `com.amazonaws.global.cloudfront.origin-facing` only (the script resolves its regional id);
+  the instance keeps its auto-assigned public IPv4 for egress only. `TlsMode=none`,
+  `AllocateElasticIp=false` and `SampleRestApi=false` are required (the last passes
+  `office_facts_api=false` to CDK, so launchpad-base never creates the office-facts API).
+- **Entry stack** `launchpad-console-cloudfront-<env>` (`launchpad-console-cloudfront.yaml`):
+  a CloudFront VPC origin for the instance and the distribution in front of it
+  (redirect-to-https, CachingDisabled + AllViewer, no compression so SSE is not buffered,
+  120 s origin read timeout). It is a separate stack because the VPC-origin resource type does
+  not exist in aws-cn and CloudFormation rejects an unknown type even under a false condition.
+- **Acceptance**: the distribution must be `Deployed`, and over CloudFront's trusted
+  certificate `/api/health` must return 200 and `/api/agents` 401. The host carries
+  `LAUNCHPAD_CONSOLE_ENTRY=cloudfront`; `host-update.sh` keeps the CloudFront origin because
+  its host is not an IPv4 literal.
+- **Cleanup order**: delete `launchpad-console-cloudfront-<env>` first (a distribution must
+  never outlive its origin), then follow the environment cleanup below, then the host stack.

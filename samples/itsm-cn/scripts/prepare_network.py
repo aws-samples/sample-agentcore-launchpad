@@ -4,7 +4,7 @@ import fcntl
 import ipaddress
 import json
 
-from lab import AWS, CONFIG, NAME, ROOT, SCENARIO, evidence, load, save
+from lab import AWS, CONFIG, NAME, PARTITION, ROOT, SCENARIO, evidence, load, save
 
 m = load()
 ec2 = AWS.client("ec2")
@@ -56,7 +56,7 @@ if not m.get("lambda_s3_endpoint"):
                 "Effect": "Allow",
                 "Principal": "*",
                 "Action": "s3:PutObject",
-                "Resource": f"arn:aws-cn:s3:::{ds['bucket']}/{ds['prefix'].rstrip('/')}/*",
+                "Resource": f"arn:{PARTITION}:s3:::{ds['bucket']}/{ds['prefix'].rstrip('/')}/*",
             }
         ],
     }

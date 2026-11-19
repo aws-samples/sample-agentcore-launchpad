@@ -12,6 +12,7 @@ from lab import (
     CONFIG,
     CONFIG_DIGEST,
     NAME,
+    PARTITION,
     ROOT,
     SCENARIO,
     SSM,
@@ -166,7 +167,7 @@ def role(name, service):
 lambda_role = role(NAME + "-lambda", "lambda.amazonaws.com")
 iam.attach_role_policy(
     RoleName=NAME + "-lambda",
-    PolicyArn="arn:aws-cn:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+    PolicyArn=f"arn:{PARTITION}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
 )
 # N17-obs525: the role policy AND the S3 endpoint policy (when prepare_network.py created it)
 # must both name every publish target; refresh_service.py repeats this on each roll.
@@ -176,7 +177,7 @@ if grant["endpoint_changed"]:
 if m.get("service"):
     m["service"] = dict(m["service"], publish_targets=targets)
 gateway_role = role(NAME + "-gateway", "bedrock-agentcore.amazonaws.com")
-lambda_arn = f"arn:aws-cn:lambda:{REGION}:{ACCOUNT}:function:{NAME}"
+lambda_arn = f"arn:{PARTITION}:lambda:{REGION}:{ACCOUNT}:function:{NAME}"
 iam.put_role_policy(
     RoleName=NAME + "-gateway",
     PolicyName="InvokeWorkshopTools",

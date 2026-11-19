@@ -1,3 +1,5 @@
+import json
+
 import aws_cdk as cdk
 import pytest
 from aws_cdk.assertions import Match, Template
@@ -427,3 +429,23 @@ def test_eval_token_readers_follow_the_env_suffix():
     readers = json.dumps(_eval_tokens_deny(Template.from_stack(stack))["Condition"])
     assert ":role/launchpad-agent-launchpad-eval-worker-t1-????????-t1" in readers
     assert ":role/launchpad-cn-ops-us-west-2-t1" in readers
+
+
+def test_office_facts_sample_api_is_default_and_switchable():
+    """`office_facts_api=false` (EC2 SampleRestApi=false) drops the API-key-only sample API,
+    its outputs and the gateway role's execute-api grant; the default keeps all three."""
+    def synth(context):
+        app = cdk.App(context=context)
+        stack = LaunchpadBaseStack(
+            app, "launchpad-base", env=cdk.Environment(account="111111111111", region="us-east-1")
+        )
+        return Template.from_stack(stack).to_json()
+
+    default, without = synth({}), synth({"office_facts_api": "false"})
+    types = lambda t: {r["Type"] for r in t["Resources"].values()}  # noqa: E731
+    assert "AWS::ApiGateway::RestApi" in types(default)
+    assert {"OfficeFactsApiUrl", "OfficeFactsApiKeyId"} <= set(default["Outputs"])
+    assert not any(t.startswith("AWS::ApiGateway::") for t in types(without))
+    assert not {"OfficeFactsApiUrl", "OfficeFactsApiKeyId"} & set(without["Outputs"])
+    assert "execute-api:Invoke" not in json.dumps(without["Resources"])
+    assert "HrLambdaArn" in without["Outputs"]  # the rest of the demo layer stays

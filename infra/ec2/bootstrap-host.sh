@@ -52,6 +52,7 @@ BOOTSTRAP_ENV=/etc/launchpad/bootstrap.env
 : "${LAUNCHPAD_BOOT_AUTH_PASSWORD_MIN_LENGTH:=12}"
 : "${LAUNCHPAD_BOOT_TLS:?}"                                 # <- UseTlsCookieFlag: true|false
 : "${LAUNCHPAD_BOOT_CONSOLE_PORT:?}"                        # <- ConsolePort
+: "${LAUNCHPAD_BOOT_SAMPLE_REST_API:=true}"                 # <- SampleRestApi (older template compatibility)
 : "${LAUNCHPAD_BOOT_PIP_INDEX_URL:?}"                       # <- PipIndexUrl (the host mirror)
 : "${LAUNCHPAD_BOOT_PIP_EXTRA_INDEX_URL?}"                  # <- PipExtraIndexUrl (may be empty)
 : "${LAUNCHPAD_BOOT_CODEBUILD_PIP_INDEX_URL:?}"             # <- CodeBuildPipIndexUrl
@@ -180,7 +181,11 @@ umask 077
   # CodeBuildPipIndexUrl / CodeBuildPipFallbackIndexUrl — one parameter pair
   # governs the hub project, the spoke projects and the Skill Lab worker
   # buildspec (the LAUNCHPAD_CODEBUILD_* lines).
-  printf 'LAUNCHPAD_CDK_CONTEXT=env_name=%s,codebuild_pip_index_url=%s,codebuild_pip_fallback_index_url=%s\n' "$LAUNCHPAD_BOOT_ENV_NAME" "$LAUNCHPAD_BOOT_CODEBUILD_PIP_INDEX_URL" "$LAUNCHPAD_BOOT_CODEBUILD_PIP_FALLBACK_INDEX_URL"
+  # SampleRestApi=false appends office_facts_api=false: launchpad-base then never creates
+  # the API-key-only office-facts sample API (accounts that forbid world-accessible APIs).
+  SAMPLE_API_CONTEXT=""
+  [ "$LAUNCHPAD_BOOT_SAMPLE_REST_API" = "false" ] && SAMPLE_API_CONTEXT=",office_facts_api=false"
+  printf 'LAUNCHPAD_CDK_CONTEXT=env_name=%s,codebuild_pip_index_url=%s,codebuild_pip_fallback_index_url=%s%s\n' "$LAUNCHPAD_BOOT_ENV_NAME" "$LAUNCHPAD_BOOT_CODEBUILD_PIP_INDEX_URL" "$LAUNCHPAD_BOOT_CODEBUILD_PIP_FALLBACK_INDEX_URL" "$SAMPLE_API_CONTEXT"
   printf 'LAUNCHPAD_ENV_NAME=%s\n' "$LAUNCHPAD_BOOT_ENV_NAME"
   printf 'LAUNCHPAD_MEMORY_DOMAIN_MODE=%s\n' "$LAUNCHPAD_BOOT_MEMORY_DOMAIN_MODE"
   printf 'LAUNCHPAD_AUTH_PASSWORD_POLICY=%s\n' "$LAUNCHPAD_BOOT_AUTH_PASSWORD_POLICY"
