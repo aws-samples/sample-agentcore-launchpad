@@ -1,6 +1,7 @@
 import "./insights.css";
 
 import { RefreshCw, Search } from "lucide-react";
+import { FindingsBrowser } from "../../components/AgentFindings";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -144,7 +145,7 @@ export function V3Insights() {
 
       <SummaryStats summary={summary} />
       <EvaluatorBars summary={summary} />
-      <ClustersPanel tasks={insightScope} loading={loading} needle={q} />
+      <FindingsBrowser runs={data?.batchRuns ?? []} busy={loading} history={<ClustersPanel tasks={insightScope} loading={loading} needle={q} />} />
       <FeedbackPanel range={range} />
       <ResultsPanel rows={rows} loading={loading} error={error} range={range} exportName={`insights-${range}`} />
     </div>

@@ -1,8 +1,10 @@
 // Data for the V3 evaluation overview — the same reads, caps and merges as V2's
 // Insights page (v2/pages/Insights.tsx, v2/InsightsPanel.tsx), kept here so the V3
 // page renders them its own way.
+import { FAILURE_ANALYSIS_ID } from "../../../lib/agent-findings";
 import { api, type V2Range } from "../../../lib/api";
 import type { InsightCluster } from "../../../lib/evaluation";
+import { parseTimestamp } from "../../../lib/timestamps";
 import { RANGE_HOURS } from "../../../v2/format";
 import { type ResultRow, rowsFromOnline, rowsFromRun } from "../../../v2/results";
 import { loadTasks, type V2Task } from "../../../v2/tasks";
@@ -29,6 +31,7 @@ export interface InsightData {
   tasks: V2Task[];
   /** completed insights runs in range — their clusters feed the insights panel */
   insightTasks: V2Task[];
+  batchRuns: V2Task[];
   skippedRuns: number;
   failedReads: number;
 }
@@ -62,7 +65,9 @@ export async function loadInsights(range: V2Range): Promise<InsightData> {
     }
   });
   const rows = [...runRows.flat(), ...onlineRows.flat()].sort((a, b) => String(b.time ?? "").localeCompare(String(a.time ?? "")));
-  return { rows, tasks: [...runs, ...online], insightTasks, skippedRuns: Math.max(0, runs.length - MAX_RUNS), failedReads };
+  const batchRuns = tasks.filter((task) => task.kind === "run" && task.mode === "evaluators"
+    && task.evaluators.includes(FAILURE_ANALYSIS_ID) && (parseTimestamp(task.createdAt)?.getTime() ?? 0) >= since);
+  return { rows, tasks: [...runs, ...online], insightTasks, batchRuns, skippedRuns: Math.max(0, runs.length - MAX_RUNS), failedReads };
 }
 
 export const SCORE_BANDS = {

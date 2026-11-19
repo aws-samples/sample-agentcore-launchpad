@@ -30,6 +30,7 @@ from app.core.errors import AppError
 from app.core.project_scope import current_project, project_context
 from app.deployer.pipeline import create_deployment, execute_deploy_job
 from app.evaluation import agentcore_eval as ac
+from app.evaluation.findings import batch_findings
 from app.evaluation.models import EvalRun
 from app.evaluation.online_evaluators import (  # noqa: F401 — re-exported
     ONLINE_EVAL_DEFAULT,
@@ -831,10 +832,12 @@ def _third_party_prompt_recommendation(
     try:
         run = db.get(EvalRun, source.get("run_id") or "")
         agent_row = db.get(Agent, agent.get("id") or "")
-        extra_feedback = (
-            rec_evidence.insight_feedback(run.insights)
-            if run is not None and run.mode == "insights" else []
-        )
+        extra_feedback = []
+        if run is not None and run.mode == "insights":
+            extra_feedback = rec_evidence.insight_feedback(run.insights)
+        elif run is not None:
+            snapshot = batch_findings(run, workspace=workspace)
+            extra_feedback = rec_evidence.failure_analysis_feedback(snapshot["findings"])
         progress("collecting evidence from the selected evaluation run…")
         started_at = run.created_at if run is not None else None
         if want_tools:

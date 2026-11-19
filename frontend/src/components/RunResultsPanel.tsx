@@ -8,7 +8,7 @@ import type {
   EvaluationRunResultRow,
   EvaluationRunResults,
 } from "../lib/evaluation";
-import { evaluatorLabel, evaluatorPolarity, scoreColor } from "../lib/evaluators";
+import { evaluatorScoreLabel, evaluatorLabel, evaluatorPolarity, scoreColor } from "../lib/evaluators";
 import { Chip } from "./Chip";
 import { Panel } from "./Panel";
 
@@ -208,7 +208,7 @@ export function RunResultsPanel({ run }: { run: EvaluationRunInfo | null }) {
                                 r.score != null ? scoreColor(r.score, r.evaluator_id) : undefined,
                             }}
                           >
-                            {r.score != null ? r.score.toFixed(2) : "—"}
+                            {evaluatorScoreLabel(r.score, r.evaluator_id)}
                           </td>
                           <td className="mono dim">{r.label ?? "—"}</td>
                           <td

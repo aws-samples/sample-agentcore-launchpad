@@ -325,6 +325,24 @@ def insight_feedback(insights: dict[str, Any] | None) -> list[str]:
     return lines
 
 
+def failure_analysis_feedback(patterns: list[dict[str, Any]]) -> list[str]:
+    """Keep each suggestion tied to the selected batch instead of merging by name."""
+    lines: list[str] = []
+    for pattern in patterns:
+        label = str(pattern.get("name") or "")
+        for cause in pattern.get("rootCauses") or []:
+            explanation = str(cause.get("explanation") or cause.get("name") or "")
+            fix = str(cause.get("suggestedFix") or "")
+            text = f"{label}: {explanation}".strip(": ")
+            if fix:
+                text += f" → {fix}"
+            if text:
+                lines.append(text[:400])
+            if len(lines) >= MAX_INSIGHT_LINES:
+                return lines
+    return lines
+
+
 # ─── entry point ─────────────────────────────────────────────────────────────
 def collect_evidence(
     *,

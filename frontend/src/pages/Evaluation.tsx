@@ -6,7 +6,11 @@ import { useSearchParams } from "react-router-dom";
 import {
   Btn, Chip, ConfirmDialog, EVAL_PAGE_SIZE, LoadError, Pager, Panel, useToast, ViewHead,
 } from "../components";
+import { useAuth } from "../auth/auth-context";
+import { evalCostApi, usd, type EvalCostEstimate } from "../lib/api/evalCost";
 import { EvaluationNav } from "../components/EvaluationNav";
+import { BatchFindingResults } from "../components/AgentFindings";
+import { FAILURE_ANALYSIS_ID } from "../lib/agent-findings";
 import { InsightClusters } from "../components/InsightClusters";
 import { RunResultsPanel } from "../components/RunResultsPanel";
 import type { AgentInfo } from "../lib/api";
@@ -24,7 +28,7 @@ import {
   isActiveRun,
   hasInsightTrees,
 } from "../lib/evaluation";
-import { evaluatorLabel } from "../lib/evaluators";
+import { evaluatorScoreLabel, evaluatorLabel } from "../lib/evaluators";
 import { useModelCatalog } from "../lib/model-catalog";
 import { adoptModelDefault, useModelDefaultsArrival } from "../lib/model-defaults";
 import { CUSTOM_MODEL_OPTION } from "../lib/models";
@@ -59,18 +63,6 @@ interface EvaluatorInfo {
   evaluator_type?: string | null;
   provider?: string | null;
 }
-
-const INSIGHT_TYPES = [
-  "Builtin.Insight.FailureAnalysis",
-  "Builtin.Insight.UserIntent",
-  "Builtin.Insight.ExecutionSummary",
-];
-
-const INSIGHT_LABEL_KEYS: Record<string, string> = {
-  "Builtin.Insight.FailureAnalysis": "failureAnalysis",
-  "Builtin.Insight.UserIntent": "userIntent",
-  "Builtin.Insight.ExecutionSummary": "executionSummary",
-};
 
 const WINDOW_PRESETS = [1, 6, 24, 72, 168];
 
@@ -150,7 +142,6 @@ export function Evaluation() {
   const modelDefaults = useModelDefaultsArrival((d) => {
     setActorModelId((cur) => adoptModelDefault(cur, seededActor.current, d.actor_model_id, actorTouched.current));
   });
-  const [mode, setMode] = useState<"evaluators" | "insights">("evaluators");
   const [scope, setScope] = useState<"dataset" | "window">("dataset");
   const [lookbackHours, setLookbackHours] = useState(24);
   const [chosenEvaluators, setChosenEvaluators] = useState<string[]>(() => {
@@ -160,10 +151,10 @@ export function Evaluation() {
   const availableChosenEvaluators = chosenEvaluators.filter(
     (id) => !TEMPORARILY_UNAVAILABLE_EVALUATORS.has(id),
   );
-  const [chosenInsights, setChosenInsights] = useState<string[]>(INSIGHT_TYPES);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [insightsBusy, setInsightsBusy] = useState(false);
-  const [confirmInsights, setConfirmInsights] = useState(false);
+  const { can } = useAuth();
+  const [confirmInsights, setConfirmInsights] = useState<{ run: RunInfo; estimate: EvalCostEstimate } | null>(null);
   // run awaiting the operator's STOP confirmation (row or detail button)
   const [confirmStop, setConfirmStop] = useState<RunInfo | null>(null);
   const [stopBusy, setStopBusy] = useState<string | null>(null);
@@ -176,7 +167,7 @@ export function Evaluation() {
       const offset = (runPage - 1) * runSize;
       const [runsRes, insightsRes, queueRes] = await Promise.all([
         fetch(`/api/eval/runs?limit=${runSize}&offset=${offset}`),
-        fetch("/api/eval/runs?mode=insights&limit=200"),
+        fetch("/api/eval/runs?failure_analysis=true&limit=200"),
         fetch("/api/eval/queue"),
       ]);
       if (runsRes.ok) {
@@ -314,7 +305,6 @@ export function Evaluation() {
     setSubmitError(null);
     const base = {
       agent_id: agentId,
-      mode,
       // window runs are passive (no invoke) — nothing to wait for
       wait_seconds: scope === "window" ? 0 : 180,
       ...(scope === "window"
@@ -327,10 +317,7 @@ export function Evaluation() {
           : { dataset_id: datasetId }),
       ...(simulatedSelected ? { actor_model_id: actorModelId } : {}),
     };
-    const payload =
-      mode === "insights"
-        ? { ...base, insights: chosenInsights }
-        : { ...base, evaluators: availableChosenEvaluators };
+    const payload = { ...base, evaluators: availableChosenEvaluators };
     const res = await fetch("/api/eval/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -371,6 +358,25 @@ export function Evaluation() {
 
   // Contextual re-run from the dashboard: insights over the sessions a
   // completed run already produced (no re-invoke, so wait_seconds 0).
+  const prepareInsights = async (run: RunInfo) => {
+    setInsightsBusy(true);
+    try {
+      const estimate = await evalCostApi.estimate({
+        scope: "passive", agent_id: run.agent_id || undefined, sessions: run.session_ids.length,
+        evaluators: ["Builtin.FailureAnalysis"],
+      });
+      if (estimate.over_limit) {
+        toast(t("v3.evalCost.overLimitHint", { max: usd(estimate.max_usd) }));
+        return;
+      }
+      setConfirmInsights({ run, estimate });
+    } catch (error) {
+      toast(t("common.actionFailed", { msg: errorMessage(error) }));
+    } finally {
+      setInsightsBusy(false);
+    }
+  };
+
   const startInsightsOnRun = async (run: RunInfo) => {
     setInsightsBusy(true);
     try {
@@ -378,10 +384,11 @@ export function Evaluation() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          agent_id: run.agent_id,
-          mode: "insights",
+          ...(run.log_source ? { log_source: run.log_source, session_source: "logs" } : { agent_id: run.agent_id }),
+          evaluators: ["Builtin.FailureAnalysis"],
           session_ids: run.session_ids,
           wait_seconds: 0,
+          confirm_cost: true,
         }),
       });
       if (!res.ok) {
@@ -459,10 +466,14 @@ export function Evaluation() {
 
   // An insights run over this exact session set that hasn't settled yet —
   // re-clicking would only enqueue a duplicate behind the account lock.
+  const sameSource = (a: RunInfo, b: RunInfo) => a.agent_id === b.agent_id &&
+    a.log_source?.service_name === b.log_source?.service_name &&
+    JSON.stringify([...(a.log_source?.log_group_names ?? [])].sort()) === JSON.stringify([...(b.log_source?.log_group_names ?? [])].sort());
+
   const insightsPending = (run: RunInfo): boolean => {
     const key = [...(run.session_ids ?? [])].sort().join(",");
     return insightsRuns.some(
-      (r) => isActiveRun(r) && [...(r.session_ids ?? [])].sort().join(",") === key,
+      (r) => sameSource(r, run) && isActiveRun(r) && [...(r.session_ids ?? [])].sort().join(",") === key,
     );
   };
 
@@ -472,7 +483,7 @@ export function Evaluation() {
     const key = [...(run.session_ids ?? [])].sort().join(",");
     return insightsRuns.some(
       (r) =>
-        r.status === "completed" &&
+        sameSource(r, run) && r.status === "completed" &&
         [...(r.session_ids ?? [])].sort().join(",") === key,
     );
   };
@@ -555,27 +566,6 @@ export function Evaluation() {
             sub={t("evalPage.newRun.sub")}
             style={{ "--i": 0 } as CSSProperties}
           >
-            <div className="field">
-              <label>{t("evalPage.newRun.mode")}</label>
-              <div className="selchips">
-                <button
-                  type="button"
-                  className={`selchip${mode === "evaluators" ? " on" : ""}`}
-                  style={{ cursor: "pointer" }}
-                  onClick={() => setMode("evaluators")}
-                >
-                  {t("evalPage.newRun.modeEvaluators")}
-                </button>
-                <button
-                  type="button"
-                  className={`selchip${mode === "insights" ? " on" : ""}`}
-                  style={{ cursor: "pointer" }}
-                  onClick={() => setMode("insights")}
-                >
-                  {t("evalPage.newRun.modeInsights")}
-                </button>
-              </div>
-            </div>
             <div className="field">
               <label>{t("evalPage.newRun.agent")}</label>
               <select
@@ -759,7 +749,6 @@ export function Evaluation() {
                 </div>
               </div>
             )}
-            {mode === "evaluators" ? (
               <div className="field">
                 <div
                   style={{
@@ -884,40 +873,6 @@ export function Evaluation() {
                   )}
                 </div>
               </div>
-            ) : (
-              <>
-                <div className="field">
-                  <label>{t("evalPage.newRun.insightTypes")}</label>
-                  <div className="selchips">
-                    {INSIGHT_TYPES.map((id) => (
-                      <button
-                        key={id}
-                        type="button"
-                        className={`selchip${chosenInsights.includes(id) ? " on" : ""}`}
-                        style={{ cursor: "pointer" }}
-                        onClick={() =>
-                          setChosenInsights((prev) =>
-                            prev.includes(id)
-                              ? prev.filter((x) => x !== id)
-                              : [...prev, id],
-                          )
-                        }
-                      >
-                        {t(`evalPage.newRun.insightType.${INSIGHT_LABEL_KEYS[id]}`)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="note" style={{ marginBottom: 10 }}>
-                  <span className="i">[i]</span>
-                  <span>
-                    {scope === "window"
-                      ? t("evalPage.newRun.insightsWindowHint")
-                      : t("evalPage.newRun.insightsHint")}
-                  </span>
-                </div>
-              </>
-            )}
             {submitError && (
               <div className="note" style={{ borderColor: "var(--crit)", marginBottom: 10 }}>
                 <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
@@ -931,8 +886,7 @@ export function Evaluation() {
                 disabled={
                   !agentId ||
                   (scope === "dataset" && !datasetId) ||
-                  (mode === "evaluators" && availableChosenEvaluators.length === 0) ||
-                  (mode === "insights" && chosenInsights.length === 0)
+                  availableChosenEvaluators.length === 0
                 }
                 onClick={() => void startRun()}
               >
@@ -1175,7 +1129,7 @@ export function Evaluation() {
                   <div className="track">
                     <div className="fill" style={{ width: `${score.score * 100}%` }} />
                   </div>
-                  <span className="hv">{score.score.toFixed(2)}</span>
+                  <span className="hv">{evaluatorScoreLabel(score.score, score.evaluatorId)}</span>
                 </div>
               ))}
               {selectedRun.status === "stopped" && (
@@ -1273,22 +1227,22 @@ export function Evaluation() {
           title={t("evalPage.insights.title")}
           sub={t("evalPage.insights.sub")}
           end={
-            selectedRun && (
+            selectedRun && can("eval.run") && evaluators.some((item) => item.id === "Builtin.FailureAnalysis") && (
               <Btn
                 disabled={
-                  (selectedRun.session_ids?.length ?? 0) < 3 ||
+                  (selectedRun.session_ids?.length ?? 0) < 1 ||
                   insightsBusy ||
                   insightsPending(selectedRun)
                 }
                 title={
-                  (selectedRun.session_ids?.length ?? 0) < 3
+                  (selectedRun.session_ids?.length ?? 0) < 1
                     ? t("evalPage.insights.needSessions")
                     : insightsPending(selectedRun)
                       ? t("evalPage.insights.pendingDup")
                       : undefined
                 }
                 data-testid="insights-on-sessions-btn"
-                onClick={() => setConfirmInsights(true)}
+                onClick={() => void prepareInsights(selectedRun)}
               >
                 ↻ {t("evalPage.insights.runOnSessions")}
               </Btn>
@@ -1296,7 +1250,9 @@ export function Evaluation() {
           }
           style={{ "--i": 2 } as CSSProperties}
         >
-          {selectedRun && hasInsightTrees(selectedRun.insights) ? (
+          {selectedRun?.mode === "evaluators" && selectedRun.evaluators.includes(FAILURE_ANALYSIS_ID) ? (
+            <BatchFindingResults key={selectedRun.id} runId={selectedRun.id} status={selectedRun.status} bare />
+          ) : selectedRun && hasInsightTrees(selectedRun.insights) ? (
             <div style={{ maxHeight: 460, overflowY: "auto" }}>
               <InsightClusters insights={selectedRun.insights} />
             </div>
@@ -1323,23 +1279,24 @@ export function Evaluation() {
       <RunResultsPanel run={selectedRun} />
 
       <ConfirmDialog
-        open={confirmInsights && !!selectedRun}
+        open={confirmInsights !== null}
         title={t("evalPage.insights.confirmRun.title")}
         body={t(
-          selectedRun && insightsAlreadyRan(selectedRun)
+          confirmInsights && insightsAlreadyRan(confirmInsights.run)
             ? "evalPage.insights.confirmRun.bodyRepeat"
             : "evalPage.insights.confirmRun.body",
           {
-            run: selectedRun ? `run-${selectedRun.id.slice(0, 6)}` : "",
-            count: selectedRun?.session_ids?.length ?? 0,
+            run: confirmInsights ? `run-${confirmInsights.run.id.slice(0, 6)}` : "",
+            count: confirmInsights?.run.session_ids.length ?? 0,
+            estimate: usd(confirmInsights?.estimate.total_usd ?? null),
           },
         )}
         confirmLabel={t("evalPage.insights.confirmRun.confirm")}
         onConfirm={() => {
-          setConfirmInsights(false);
-          if (selectedRun) void startInsightsOnRun(selectedRun);
+          setConfirmInsights(null);
+          if (confirmInsights) void startInsightsOnRun(confirmInsights.run);
         }}
-        onCancel={() => setConfirmInsights(false)}
+        onCancel={() => setConfirmInsights(null)}
       />
       <ConfirmDialog
         open={confirmStop !== null}

@@ -239,3 +239,21 @@ def test_runs_list_rejects_out_of_range_paging(client):
     assert client.get("/api/eval/runs?limit=500").status_code == 422
     assert client.get("/api/eval/runs?offset=-1").status_code == 422
     assert client.get("/api/eval/runs?mode=bogus").status_code == 422
+
+
+def test_duplicate_guard_includes_legacy_and_mixed_failure_analysis_before_paging(client):
+    with SessionLocal() as db:
+        for ids, mode in [
+            (["Builtin.Insight.FailureAnalysis"], "insights"),
+            (["Builtin.GoalSuccessRate", "Builtin.FailureAnalysis"], "evaluators"),
+            (["Builtin.Insight.UserIntent"], "insights"),
+            (["Builtin.Correctness"], "evaluators"),
+        ]:
+            db.add(EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id="a1", agent_name="a1",
+                           dataset_name="ds", evaluators=ids, status="completed", mode=mode))
+            db.commit()
+    response = client.get("/api/eval/runs?failure_analysis=true&limit=1")
+    assert response.status_code == 200
+    assert response.json()["total"] == 2
+    assert response.json()["runs"][0]["evaluators"] == ["Builtin.GoalSuccessRate",
+                                                       "Builtin.FailureAnalysis"]

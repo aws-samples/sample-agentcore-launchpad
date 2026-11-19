@@ -17,9 +17,6 @@ import {
   emptyFilter,
   type FilterDraft,
   type FilterKind,
-  FREQUENCIES,
-  INSIGHT_TYPES,
-  insightLabel,
   isEditable,
   isTransient,
   MAX_EVALUATORS,
@@ -30,14 +27,12 @@ import {
   OPERATORS,
   patchBody,
   validateDraft,
-  withMode,
 } from "../../../v2/online";
 import { V2ToastProvider } from "../../../v2/ui";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { evalCostApi, type EvalCostEstimate } from "../../../lib/api/evalCost";
 import { useLoad, useToast } from "../../hooks";
 import { permReason } from "../../reasons";
-import { Reasoned } from "../../reason";
 import { Btn, Notice, PageHead, Panel, Skeleton } from "../../ui";
 import { costRefusal, refusalText } from "../../../lib/eval-cost-refusal";
 import { EstimateCostCard } from "../tasks/CostCard";
@@ -46,10 +41,6 @@ import { onlineHref, onlineList } from "./actions";
 import { Select } from "../../select";
 
 /** canonical order, whatever the click order */
-function toggleOrdered<T extends string>(all: readonly T[], picked: T[], value: T): T[] {
-  return all.filter((x) => (x === value ? !picked.includes(x) : picked.includes(x)));
-}
-
 function FilterRows({ filters, onChange }: { filters: FilterDraft[]; onChange: (next: FilterDraft[]) => void }) {
   const { t } = useTranslation();
   const set = (i: number, patch: Partial<FilterDraft>) => onChange(filters.map((f, j) => (j === i ? { ...f, ...patch } : f)));
@@ -208,11 +199,11 @@ export function OnlineEditor({ id, seedFrom = null }: { id: string | null; seedF
       </button>
     </div>
   );
-  if (row && !isEditable(row)) {
+  if (row && (!isEditable(row) || modeOf(row) === "insights")) {
     return (
       <div className="v3-reveal v3-onl" style={{ display: "grid", gap: 16 }}>
         {head}
-        <Notice s="wait">{t("v2.online.notEditable")}</Notice>
+        <Notice s="wait">{t(modeOf(row) === "insights" ? "v2.online.legacyReadonly" : "v2.online.notEditable")}</Notice>
       </div>
     );
   }
@@ -256,22 +247,6 @@ export function OnlineEditor({ id, seedFrom = null }: { id: string | null; seedF
             <small className="v3-hint">{t("v2.online.descHint")}</small>
           </label>
         </div>
-        <div className="v3-field" style={{ marginTop: 16 }}>
-          <span>{t("v2.online.colMode")}</span>
-          <div className="v3-onl-modes" role="radiogroup" aria-label={t("v2.online.colMode")}>
-            {(["scores", "insights"] as OnlineEvalMode[]).map((m) => (
-              <Reasoned key={m} disabledReason={t("v2.online.modeFixed")}>
-                <button type="button" role="radio" aria-checked={mode === m} disabled={editing && mode !== m}
-                  className={mode === m ? "v3-onl-mode on" : "v3-onl-mode"}
-                  onClick={() => !editing && setDraft((prev) => withMode(prev, m))}>
-                  <b>{t(`v2.online.mode.${m}`)}</b>
-                  <small>{t(`v2.online.modeDesc.${m}`)}</small>
-                </button>
-              </Reasoned>
-            ))}
-          </div>
-          {editing && <small className="v3-hint">{t("v2.online.modeFixed")}</small>}
-        </div>
         {!editing && (
           <label className="v3-onl-check" style={{ marginTop: 14 }}>
             <input type="checkbox" checked={enable} onChange={(e) => setEnable(e.target.checked)} />
@@ -299,33 +274,7 @@ export function OnlineEditor({ id, seedFrom = null }: { id: string | null; seedF
             </div>
           </V2ToastProvider>
         </Panel>
-      ) : (
-        <Panel title={t("v2.online.insightsTitle")}>
-          <p style={{ margin: "0 0 12px", color: "var(--v3-text-3)", fontSize: 13 }}>{t("v2.online.insightsSub")}</p>
-          <div className="v3-grid c2" style={{ alignItems: "start" }}>
-            <div className="v3-field">
-              <span>{t("v2.online.insightTypes")}</span>
-              {INSIGHT_TYPES.map((it) => (
-                <label key={it} className="v3-onl-check">
-                  <input type="checkbox" checked={draft.insights.includes(it)}
-                    onChange={() => set({ insights: toggleOrdered(INSIGHT_TYPES, draft.insights as (typeof INSIGHT_TYPES)[number][], it) })} />
-                  {insightLabel(t, it)}
-                </label>
-              ))}
-            </div>
-            <div className="v3-field">
-              <span>{t("v2.online.frequencies")}</span>
-              {FREQUENCIES.map((f) => (
-                <label key={f} className="v3-onl-check">
-                  <input type="checkbox" checked={draft.frequencies.includes(f)} onChange={() => set({ frequencies: toggleOrdered(FREQUENCIES, draft.frequencies, f) })} />
-                  {t(`v2.online.freq.${f}`)}
-                </label>
-              ))}
-              <small className="v3-hint">{t("v2.online.frequenciesHint")}</small>
-            </div>
-          </div>
-        </Panel>
-      )}
+      ) : null}
 
       <Panel title={t("v2.online.samplingTitle")}>
         <div className="v3-grid c2" style={{ alignItems: "start" }}>

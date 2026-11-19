@@ -11,10 +11,9 @@ import { storageFlag, withStorageConfirm } from "../../../lib/storage-confirm";
 import { CLOUD_VALUE_PREFIX } from "../../../lib/evaluation";
 import { evaluatorLabel, type EvaluatorLevel } from "../../../lib/evaluators";
 import { type GoldenRunCriteria, goldenRunCriteria, isGoldenSplit } from "../../../lib/goldenRun";
-import { INSIGHT_TYPES, insightLabel } from "../../../v2/online";
 import { LogSourceFields } from "../../../v2/pages/tasks/LogSourceFields";
 import { LogStreamPicker } from "../../../v2/pages/tasks/LogStreamPicker";
-import { SERVICE_NAME_RE, type TaskMode } from "../../../v2/tasks";
+import { SERVICE_NAME_RE } from "../../../v2/tasks";
 import { ago } from "../../format";
 import { useLoad, useToast } from "../../hooks";
 import { Reasoned } from "../../reason";
@@ -37,7 +36,6 @@ const LOOKBACKS = [1, 6, 24, 72, 168, 336];
 const SESSION_RANGE: V2Range = "7d";
 const MAX_EVALUATORS = 10;
 /** Insight clustering needs at least this many sessions. */
-const MIN_INSIGHT_SESSIONS = 3;
 
 interface Draft {
   name: string;
@@ -46,7 +44,6 @@ interface Draft {
   agentId: string;
   serviceName: string;
   logGroups: string[];
-  mode: TaskMode;
   source: Source;
   lookbackHours: number;
   sessionIds: string[];
@@ -55,7 +52,6 @@ interface Draft {
   /** local dataset id, or `cloud:<datasetId>` */
   dataset: string;
   evaluators: string[];
-  insights: string[];
   /** pass^k: each dataset scenario runs this many times (1 = off) */
   repeats: number;
   confirmCost: boolean;
@@ -68,7 +64,6 @@ const EMPTY: Draft = {
   agentId: "",
   serviceName: "",
   logGroups: [],
-  mode: "evaluators",
   source: "window",
   lookbackHours: 24,
   sessionIds: [],
@@ -76,7 +71,6 @@ const EMPTY: Draft = {
   logHours: 168,
   dataset: "",
   evaluators: ["Builtin.Correctness", "Builtin.Helpfulness"],
-  insights: [...INSIGHT_TYPES],
   repeats: 1,
   confirmCost: false,
 };
@@ -93,7 +87,7 @@ async function seedDraft(from: string | null, handoff: Handoff, copySuffix: stri
   if (from?.startsWith("run:")) {
     const run = await api.getEvaluationRun(from.slice(4));
     const name = run.dataset_name ?? "";
-    const copied = run.mode === "insights" ? { mode: "insights" as const, insights: run.evaluators } : { evaluators: run.evaluators };
+    const copied = { evaluators: run.mode === "insights" ? (run.evaluators.includes("Builtin.Insight.FailureAnalysis") ? ["Builtin.FailureAnalysis"] : []) : run.evaluators };
     const target = run.log_source
       ? { target: "cloudwatch" as const, serviceName: run.log_source.service_name, logGroups: run.log_source.log_group_names }
       : { agentId: run.agent_id };
@@ -162,12 +156,12 @@ export function TaskWizard() {
   );
   // pass^k replays dataset scenarios against an agent; it has no meaning for past sessions
   const repeatable =
-    !!draft && draft.target === "agent" && draft.source === "dataset" && draft.mode === "evaluators" &&
+    !!draft && draft.target === "agent" && draft.source === "dataset" &&
     !!draft.dataset && !draft.dataset.startsWith(CLOUD_VALUE_PREFIX);
   // eval-cost §1.1: every entry is priced before submit — a dataset replay (with
   // pass^k) or past sessions / a look-back window
   const estimateBody = ((): EstimateBody | null => {
-    if (!draft || draft.mode !== "evaluators" || draft.evaluators.length === 0) return null;
+    if (!draft || draft.evaluators.length === 0) return null;
     if (draft.target === "agent" && !draft.agentId) return null;
     const base = { ...(draft.target === "agent" ? { agent_id: draft.agentId } : {}), evaluators: draft.evaluators };
     if (repeatable) return { ...base, scope: "replay", dataset_id: draft.dataset, repeats: draft.repeats };
@@ -207,10 +201,6 @@ export function TaskWizard() {
     if (draft.source === "sessions" && draft.sessionIds.length === 0) return t("v2.tasks.errSessions");
     if (draft.source === "dataset" && !draft.dataset) return t("v2.tasks.errDataset");
     if (draft.source === "logs" && draft.logSessionIds.length === 0) return t("v2.tasks.errLogs");
-    const picked = draft.source === "sessions" ? draft.sessionIds.length : draft.source === "logs" ? draft.logSessionIds.length : null;
-    if (draft.mode === "insights" && picked !== null && picked < MIN_INSIGHT_SESSIONS) {
-      return t("v2.tasks.errInsightSessions", { min: MIN_INSIGHT_SESSIONS });
-    }
     return null;
   };
   const next = () => {
@@ -220,13 +210,11 @@ export function TaskWizard() {
   };
 
   const submit = async () => {
-    const insights = draft.mode === "insights";
-    if (insights && draft.insights.length === 0) return setError(t("v2.tasks.errInsights"));
-    if (!insights && draft.evaluators.length === 0) return setError(t("v2.tasks.errEvaluators"));
-    if (!insights && draft.evaluators.length > MAX_EVALUATORS) return setError(t("v2.tasks.errTooMany", { max: MAX_EVALUATORS }));
+    if (draft.evaluators.length === 0) return setError(t("v2.tasks.errEvaluators"));
+    if (draft.evaluators.length > MAX_EVALUATORS) return setError(t("v2.tasks.errTooMany", { max: MAX_EVALUATORS }));
     const priced = refused ?? estimate.data;
-    if (!insights && priced?.over_limit) return setError(t("v3.evalCost.overLimitHint", { max: priced.max_usd ?? "—" }));
-    if (!insights && priced?.confirm_required && !draft.confirmCost) return setError(t("v3.evalCost.confirmFirst"));
+    if (priced?.over_limit) return setError(t("v3.evalCost.overLimitHint", { max: priced.max_usd ?? "—" }));
+    if (priced?.confirm_required && !draft.confirmCost) return setError(t("v3.evalCost.confirmFirst"));
     setSubmitting(true);
     setError(null);
     setRefused(null);
@@ -247,11 +235,11 @@ export function TaskWizard() {
           : { agent_id: draft.agentId }),
         name: draft.name.trim(),
         description: draft.description || undefined,
-        ...(insights ? { mode: "insights" as const, evaluators: [], insights: draft.insights } : { evaluators: draft.evaluators }),
+        evaluators: draft.evaluators,
         ...scope,
         ...(repeatable ? { repeats: draft.repeats } : {}),
         // eval-cost §1.1: a replay and a passive run (sessions / look-back) alike
-        ...(!insights && (repeatable || isPassiveScope(scope)) ? { confirm_cost: draft.confirmCost } : {}),
+        ...((repeatable || isPassiveScope(scope)) ? { confirm_cost: draft.confirmCost } : {}),
         ...storageFlag(confirm),
       }));
       toast("ok", t("v2.tasks.createdRun"));
@@ -309,15 +297,7 @@ export function TaskWizard() {
       logSessionIds: [],
     });
   const chooseSource = (source: Source) => set({ source });
-  const chooseMode = (mode: TaskMode) => set({ mode });
-  const toggleInsight = (id: string) =>
-    set({ insights: INSIGHT_TYPES.filter((x) => (x === id ? !draft.insights.includes(id) : draft.insights.includes(x))) });
-  const fewSessions =
-    draft.mode === "insights" &&
-    ((draft.source === "window" && !sessions.loading && windowSessions.length < MIN_INSIGHT_SESSIONS) ||
-      (draft.source === "dataset" && !!selectedDataset && selectedDataset.item_count < MIN_INSIGHT_SESSIONS) ||
-      (cloudwatch && draft.source === "window" && !!cwWindow.data && cwWindow.data.streams.length < MIN_INSIGHT_SESSIONS));
-  const stepLabels = [t("v2.tasks.stepData"), draft.mode === "insights" ? t("v2.tasks.stepInsights") : t("v2.tasks.stepEvaluators")];
+  const stepLabels = [t("v2.tasks.stepData"), t("v2.tasks.stepEvaluators")];
 
   return (
     <div className="v3-reveal v3-task" style={{ display: "grid", gap: 16 }}>
@@ -375,13 +355,6 @@ export function TaskWizard() {
                 <textarea className="v3-input" rows={2} value={draft.description} maxLength={1000} placeholder={t("v2.tasks.descPlaceholder")}
                   onChange={(e) => set({ description: e.target.value })} style={{ minHeight: 64 }} />
               </Field>
-              <div className="v3-field">
-                <span>{t("v2.tasks.mode")}</span>
-                <div className="v3-task-opts c2" role="radiogroup">
-                  <Option on={draft.mode === "evaluators"} title={t("v2.tasks.modeEvaluators")} desc={t("v2.tasks.modeEvaluatorsDesc")} onClick={() => chooseMode("evaluators")} />
-                  <Option on={draft.mode === "insights"} title={t("v2.tasks.modeInsights")} desc={t("v2.tasks.modeInsightsDesc")} onClick={() => chooseMode("insights")} />
-                </div>
-              </div>
             </div>
           </Panel>
 
@@ -557,25 +530,6 @@ export function TaskWizard() {
         </>
       )}
 
-      {step === 1 && draft.mode === "insights" && (
-        <Panel title={t("v2.tasks.pickInsights")} end={<span>{t("v2.tasks.pickedCount", { count: draft.insights.length, max: INSIGHT_TYPES.length })}</span>}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {INSIGHT_TYPES.map((id) => {
-              const on = draft.insights.includes(id);
-              return (
-                <button key={id} type="button" aria-pressed={on} className={`v3-btn sm${on ? "" : " ghost"}`} onClick={() => toggleInsight(id)}>
-                  {insightLabel(t, id)}
-                </button>
-              );
-            })}
-          </div>
-          <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
-            <Notice>{draft.source === "dataset" ? t("evalPage.newRun.insightsHint") : t("evalPage.newRun.insightsWindowHint")}</Notice>
-            {fewSessions && <Notice s="wait">{t("v2.tasks.insightsFewSessions", { min: MIN_INSIGHT_SESSIONS })}</Notice>}
-          </div>
-        </Panel>
-      )}
-
       {step === 1 && repeatable && (
         <Panel title={t("v2.tasks.passK")} end={<span>{t("v2.tasks.passKSub")}</span>}>
           <div className="v3-grid c2" style={{ alignItems: "start" }}>
@@ -598,7 +552,7 @@ export function TaskWizard() {
         />
       )}
 
-      {step === 1 && draft.mode === "evaluators" && (
+      {step === 1 && (
         <Panel title={t("v2.tasks.pickEvaluators")} flush end={<span>{t("v2.tasks.pickedCount", { count: draft.evaluators.length, max: MAX_EVALUATORS })}</span>}>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "0 20px 12px" }}>
             <Filters

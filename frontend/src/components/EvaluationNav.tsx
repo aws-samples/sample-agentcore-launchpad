@@ -1,4 +1,4 @@
-import { Activity, Database, FlaskConical, ListChecks, Radar } from "lucide-react";
+import { Activity, ChartNoAxesColumn, Database, FlaskConical, ListChecks, Radar } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
@@ -32,6 +32,10 @@ export function EvaluationNav() {
           </Link>
         );
       })}
+      <Link className="evaluation-nav-item" to="/v2/eval/insights">
+        <ChartNoAxesColumn size={14} />
+        <span>{t("agentFindings.title")}</span>
+      </Link>
     </nav>
   );
 }

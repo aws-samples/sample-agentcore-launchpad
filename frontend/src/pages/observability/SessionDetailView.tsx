@@ -13,7 +13,7 @@ import type {
   OnlineSessionScores,
 } from "../../lib/api";
 import { api, ApiError, getJson } from "../../lib/api";
-import { evaluatorLabel, scoreColor } from "../../lib/evaluators";
+import { FAILURE_ANALYSIS_EVALUATOR, evaluatorLabel, scoreColor } from "../../lib/evaluators";
 import { fmtCost, fmtDuration, fmtInt, shortId } from "./format";
 
 // Mirrors the backend SessionIdParam alphabet: external callers compose
@@ -211,7 +211,7 @@ function ScoreNowPanel({ sessionId, range }: { sessionId: string; range: string 
     let alive = true;
     getJson<{ evaluators: EvaluatorRow[] }>("/api/eval/evaluators")
       .then((d) => {
-        if (alive) setEvaluators(d.evaluators);
+        if (alive) setEvaluators(d.evaluators.filter((e) => e.id !== FAILURE_ANALYSIS_EVALUATOR));
       })
       .catch(() => {
         if (alive) setEvaluators([]);

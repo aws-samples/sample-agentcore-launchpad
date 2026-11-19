@@ -285,10 +285,25 @@ def test_resolve_source_carries_results_stream(monkeypatch):
     assert src["results_log_stream"] == "run-x"
 
 
-def test_third_party_path_writes_attributed_keys(monkeypatch):
-    rid = _mk_run(mode="insights", insights={"failures": [
-        {"category": "Tone", "subCategories": [{"subCategory": "curt", "rootCauses": [
-            {"rootCause": "one-word answers", "recommendation": "explain"}]}]}]})
+@pytest.mark.parametrize("mode", ["insights", "evaluators"])
+def test_third_party_path_writes_attributed_keys(monkeypatch, mode):
+    if mode == "insights":
+        rid = _mk_run(mode="insights", insights={"failures": [
+            {"category": "Tone", "subCategories": [{"subCategory": "curt", "rootCauses": [
+                {"rootCause": "one-word answers", "recommendation": "explain"}]}]}]})
+    else:
+        from app.evaluation import findings
+
+        rid = _mk_run(evaluators=["Builtin.FailureAnalysis"], batch_eval_id="new-batch")
+        monkeypatch.setattr(findings, "data_client", lambda _: object())
+
+        def read_batch(_client, *, batch_id):
+            assert batch_id == "new-batch"
+            return {"status": "COMPLETED", "insightResults": [
+                {"name": "Tone", "rootCauses": [
+                    {"explanation": "one-word answers", "suggestedFix": "explain"}]}]}
+
+        monkeypatch.setattr(findings.ac, "get_batch_evaluation", read_batch)
     logs = FakeLogs([[_record("s1", "Builtin.Helpfulness", 0.0, "too short"),
                       _record("s2", "Builtin.Helpfulness", 1.0, "great")]])
     converse = _converse([json.dumps({

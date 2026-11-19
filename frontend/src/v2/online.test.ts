@@ -79,7 +79,7 @@ describe("copyDraft (?view=new&from=online:<id>)", () => {
     expect(body.filters).toEqual(row().filters);
   });
 
-  it("copies an insights config's types and report frequencies", () => {
+  it("copies legacy failure analysis into a modern draft without recurring reports", () => {
     const { draft } = copyDraft(
       row({
         mode: "insights",
@@ -89,10 +89,12 @@ describe("copyDraft (?view=new&from=online:<id>)", () => {
       }),
       " 副本",
     );
-    expect(draft.mode).toBe("insights");
-    expect(draft.insights).toEqual(["Builtin.Insight.FailureAnalysis"]);
-    expect(draft.frequencies).toEqual(["WEEKLY"]);
+    expect(draft.mode).toBe("scores");
+    expect(draft.evaluators).toEqual(["Builtin.FailureAnalysis"]);
+    expect(draft.insights).toEqual([]);
+    expect(draft.frequencies).toEqual([]);
     expect(draft.description).toBe("Shop CS quality 副本");
+    expect(createBody("a1", draft, false)).not.toHaveProperty("clustering_frequencies");
   });
 
   it("names the copy after the config when it has no description, and caps the length", () => {
@@ -102,7 +104,7 @@ describe("copyDraft (?view=new&from=online:<id>)", () => {
     expect(long).toHaveLength(MAX_DESCRIPTION);
   });
 
-  it("keeps the copied sampling when the mode is switched", () => {
+  it("keeps the copied sampling marked as set", () => {
     expect(copyDraft(row(), " copy").draft.samplingTouched).toBe(true);
   });
 

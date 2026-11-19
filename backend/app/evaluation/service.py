@@ -58,6 +58,20 @@ from app.services.agentcore.client import control_client, data_client, stream_da
 from app.services.workspace import WorkspaceContext, context_for_workspace
 from app.templates import gateway_support
 
+PREVIEW_RETIRED_MESSAGE = (
+    "Preview Insights reports are read-only. Select Failure Analysis in a new evaluation."
+)
+
+
+def preview_retired() -> AppError:
+    return AppError("insights.preview_retired", PREVIEW_RETIRED_MESSAGE, status_code=410)
+
+
+def reject_preview_submission(retired: bool) -> None:
+    if retired:
+        raise preview_retired()
+
+
 # byoc: telemetry identity derivation is method-agnostic for runtimes; whether
 # the user's code emits gen_ai spans for the evaluator to read is theirs.
 EVAL_SUPPORTED_METHODS = {"zip_runtime", "studio", "container", "harness", "byoc"}
@@ -556,10 +570,7 @@ def execute_run(
 
     Scope is one of: dataset ``items`` (invoke fresh sessions), explicit
     ``existing_session_ids``, a passive ``time_range`` window over the
-    agent's past traffic — the window path skips invoke/wait entirely — or an
-    online evaluation config (``online_config_arn`` + ``time_range``): an
-    on-demand report over the sessions that config sampled, where the batch
-    inherits the config's insights/evaluators (passing them is rejected).
+    agent's past traffic — the window path skips invoke/wait entirely.
     ``log_groups`` are the batch's input log groups (default: ``aws/spans`` plus
     the agent's own ``log_group``).
 
@@ -571,26 +582,12 @@ def execute_run(
     attempt: dict[str, str] = {}
     try:
         _check_stop(run_id)
+        reject_preview_submission(
+            mode == "insights" or bool(online_config_arn or insights)
+            or any(ac.is_preview_evaluator(e) for e in evaluators)
+        )
         data = data_client(workspace)
         session_ids = list(existing_session_ids or [])
-        if online_config_arn:
-            _update(run_id, status="evaluating")
-            _check_stop(run_id)
-            response = _start_with_retry(
-                lambda: ac.start_online_report(
-                    data,
-                    name=f"run_{run_id[:8]}",
-                    config_arn=online_config_arn,
-                    time_range=time_range or {},
-                    description="Launchpad on-demand online report",
-                )
-            )
-            batch_id = response["batchEvaluationId"]
-            _update(run_id, batch_eval_id=batch_id)
-            _stop_batch_if_requested(run_id, data, batch_id)
-            result = _poll_batch(data, batch_id)
-            _finish_from_result(run_id, mode, result, workspace=workspace)
-            return
         if not session_ids and not time_range:
             # One session per scenario. Predefined scenarios replay their turns
             # sequentially in that session; simulated persona scenarios run the
@@ -781,31 +778,18 @@ def execute_run(
         # replay/wait ends the run here without ever calling StartBatchEvaluation.
         _check_stop(run_id)
         _update(run_id, status="evaluating", session_ids=session_ids)
-        if mode == "insights":
-            response = _start_with_retry(
-                lambda: ac.start_insights_evaluation(
-                    data,
-                    name=f"run_{run_id[:8]}",
-                    service_name=service_name,
-                    log_groups=input_groups,
-                    session_ids=session_ids or None,
-                    time_range=time_range,
-                    insights=insights,
-                )
+        response = _start_with_retry(
+            lambda: ac.start_batch_evaluation(
+                data,
+                name=f"run_{run_id[:8]}",
+                service_name=service_name,
+                log_groups=input_groups,
+                session_ids=session_ids or None,
+                time_range=time_range,
+                evaluators=evaluators,
+                session_metadata=session_metadata,
             )
-        else:
-            response = _start_with_retry(
-                lambda: ac.start_batch_evaluation(
-                    data,
-                    name=f"run_{run_id[:8]}",
-                    service_name=service_name,
-                    log_groups=input_groups,
-                    session_ids=session_ids or None,
-                    time_range=time_range,
-                    evaluators=evaluators,
-                    session_metadata=session_metadata,
-                )
-            )
+        )
         batch_id = response["batchEvaluationId"]
         _update(run_id, batch_eval_id=batch_id)
         _stop_batch_if_requested(run_id, data, batch_id)
@@ -1196,8 +1180,12 @@ def resume_interrupted_runs() -> list[str]:
                 resumed.append(run.id)
             else:
                 run.status = "failed"
-                run.error = ("interrupted by a backend restart before the batch "
-                             "evaluation started — submit the run again")
+                run.error = (
+                    "insights.preview_retired: " + PREVIEW_RETIRED_MESSAGE
+                    if run.mode == "insights"
+                    else "interrupted by a backend restart before the batch "
+                         "evaluation started — submit the run again"
+                )
                 failed.append(run.id)
         db.commit()
         for run_id in failed:  # what the replay had spent before the restart
@@ -1269,6 +1257,10 @@ def submit_run(
     = a platform job that decides itself) refuses a replay that would write into
     production shared-state storage of a gated workspace unless confirmed
     (storage-mounts §8.2, `storage_write_check`)."""
+    reject_preview_submission(
+        mode == "insights" or bool(online_config_arn or insights)
+        or any(ac.is_preview_evaluator(e) for e in evaluators)
+    )
     if agent is None:
         if not log_source or dataset_items:
             raise ValueError("an agent-less run needs a log_source and a passive scope")

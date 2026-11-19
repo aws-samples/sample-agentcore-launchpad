@@ -27,7 +27,7 @@ import type {
   JudgeModelFallback,
   ScalePoint,
 } from "../lib/api";
-import {
+import { FAILURE_ANALYSIS_EVALUATOR,
   customUnavailableNote,
   evaluatorLabel,
   defaultJudgeModel,
@@ -225,7 +225,7 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
   const codeForm = activeDef === "code";
   const judgeForm = activeDef === "judge";
   const baseOptions = rows.filter(
-    (r) => (r.source === "builtin" || r.source === "third_party") && !r.requires_ground_truth,
+    (r) => (r.source === "builtin" || r.source === "third_party") && !r.requires_ground_truth && r.id !== FAILURE_ANALYSIS_EVALUATOR,
   );
   const derivedLevel = editingId
     ? (detail?.level ?? null)

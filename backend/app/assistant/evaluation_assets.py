@@ -99,7 +99,7 @@ from app.core.db import SessionLocal
 from app.core.errors import AppError, NotFoundError
 from app.core.project_scope import current_project, project_context
 from app.evaluation import agentcore_eval as ac
-from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS
+from app.evaluation.agentcore_eval import ALL_BUILTIN_EVALUATORS, FAILURE_ANALYSIS
 from app.evaluation.models import EvalDataset
 from app.models.assistant import (
     AssistantConversation,
@@ -2334,6 +2334,11 @@ class _Runner:
                 "modelConfig": {"bedrockEvaluatorModelConfig": {"modelId": model_id}},
             }}}
         if isinstance(entry, plan_contract.DerivedEvaluator):
+            if entry.base_evaluator_id == FAILURE_ANALYSIS:
+                raise AppError(
+                    "evaluator.base_not_supported", "Failure Analysis cannot be derived",
+                    status_code=422,
+                )
             level = ALL_BUILTIN_EVALUATORS.get(entry.base_evaluator_id)
             if level is None:
                 level = str(self._client("bedrock-agentcore-control")

@@ -447,6 +447,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/eval/runs/compare-pair"): MEMBER,
     ("GET", "/api/eval/runs/{run_id}"): MEMBER,
     ("GET", "/api/eval/runs/{run_id}/results"): MEMBER,
+    ("GET", "/api/eval/runs/{run_id}/findings"): MEMBER,
     ("POST", "/api/eval/runs/{run_id}/stop"): PERM_EVAL_RUN,
     ("POST", "/api/eval/runs/{run_id}/recheck"): PERM_EVAL_RUN,
     # starts a new run of the same scope — the same grant as POST /runs
@@ -462,6 +463,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("DELETE", "/api/eval/runs/{run_id}"): PERM_EVAL_RUN,
     # online evaluation configs: create/resume start billed judge calls on live
     # traffic, the same cost class as starting a run; list/detail/results read AWS
+    ("GET", "/api/eval/insight-store"): MEMBER,
+    ("GET", "/api/eval/agents/{agent_id}/findings"): MEMBER,
+    ("GET", "/api/eval/agents/{agent_id}/findings/{insight_id}"): MEMBER,
     ("GET", "/api/eval/online"): MEMBER,
     ("POST", "/api/eval/online"): PERM_EVAL_RUN,
     ("GET", "/api/eval/online/{config_id}"): MEMBER,

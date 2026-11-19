@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { api, type V2Range } from "../lib/api";
-import { evaluatorLabel } from "../lib/evaluators";
+import { evaluatorLabel, evaluatorScoreLabel, FAILURE_ANALYSIS_EVALUATOR } from "../lib/evaluators";
 import { downloadCsv, fmtScore, fmtTime, scoreTone } from "./format";
 import { useLoad, usePaged } from "./hooks";
 import { AddToDatasetModal } from "./pages/data/AddToDataset";
@@ -148,7 +148,7 @@ function ResultDrawer({ row, range, onClose }: { row: ResultRow; range: V2Range;
           items={[
             { label: t("v2.insights.colOutcome"), value: <OutcomeTag outcome={row.outcome} /> },
             { label: t("v2.insights.colEvaluator"), value: evaluatorLabel(t, row.evaluatorId) },
-            { label: t("v2.insights.colRaw"), value: row.score == null ? "—" : row.score },
+            { label: t("v2.insights.colRaw"), value: row.evaluatorId === FAILURE_ANALYSIS_EVALUATOR ? evaluatorScoreLabel(row.score, row.evaluatorId) : (row.score ?? "—") },
             { label: t("v2.insights.colNormalized"), value: <Score value={row.normalized} /> },
             { label: t("v2.insights.colLabel"), value: row.label ?? "—" },
             { label: t("v2.insights.colTask"), value: row.taskName },
@@ -283,7 +283,7 @@ export function ResultsTable({
   const columns: Column<ResultRow>[] = [
     { key: "outcome", title: t("v2.insights.colOutcome"), sortable: true, render: (r) => <OutcomeTag outcome={r.outcome} /> },
     { key: "time", title: t("v2.insights.colTime"), className: "nowrap", sortable: true, render: (r) => fmtTime(r.time) },
-    { key: "raw", title: t("v2.insights.colRaw"), className: "num", sortable: true, render: (r) => (r.score == null ? "—" : r.score) },
+    { key: "raw", title: t("v2.insights.colRaw"), className: "num", sortable: true, render: (r) => (r.evaluatorId === FAILURE_ANALYSIS_EVALUATOR ? evaluatorScoreLabel(r.score, r.evaluatorId) : (r.score ?? "—")) },
     { key: "norm", title: t("v2.insights.colNormalized"), sortable: true, render: (r) => <Score value={r.normalized} /> },
     { key: "label", title: t("v2.insights.colLabel"), render: (r) => (r.label ? <Tag tone="outline">{r.label}</Tag> : "—") },
     { key: "explanation", title: t("v2.insights.explanation"), render: (r) => <span className="clip" title={r.error ?? r.explanation ?? ""}>{r.error ?? r.explanation ?? "—"}</span> },

@@ -2420,6 +2420,14 @@ def evaluate_session(
     # a managed code evaluator whose rules read reference inputs cannot score a live
     # session (no ground truth here) — refused before any span read or Evaluate call
     from app.assistant.evaluation_assets import managed_reference_gap
+    from app.evaluation.agentcore_eval import FAILURE_ANALYSIS
+
+    if any(evaluator.rsplit("/", 1)[-1] == FAILURE_ANALYSIS for evaluator in ids):
+        raise AppError(
+            "observability.evaluator_not_supported",
+            "Failure Analysis is supported in batch and online evaluations.",
+            status_code=422,
+        )
 
     _db = SessionLocal()
     try:

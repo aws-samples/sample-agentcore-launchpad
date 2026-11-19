@@ -1,3 +1,4 @@
+import { useAuth } from "../auth/auth-context";
 import type { CSSProperties, ReactNode } from "react";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -35,9 +36,9 @@ import type {
   OnlineEvalReports,
   OnlineEvalResults,
 } from "../lib/api";
-import { api, ApiError } from "../lib/api";
+import { api } from "../lib/api";
 import { ACTIVE_RUN_STATUSES, hasInsightTrees } from "../lib/evaluation";
-import { evaluatorLabel, evaluatorPolarity } from "../lib/evaluators";
+import { evaluatorScoreLabel, evaluatorLabel, evaluatorPolarity } from "../lib/evaluators";
 
 // ─── constants (mirror backend/app/evaluation/online*.py + online_routers.py) ──
 
@@ -315,6 +316,7 @@ function Sparkline({
 export function OnlineView({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const { can } = useAuth();
   const [rows, setRows] = useState<OnlineEvalConfigRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -338,8 +340,6 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
   const [reports, setReports] = useState<OnlineEvalReports | null>(null);
   const [reportsLoading, setReportsLoading] = useState(false);
   const [reportsError, setReportsError] = useState(false);
-  const [reportRange, setReportRange] = useState<RangeKey>("24h");
-  const [reportBusy, setReportBusy] = useState(false);
   const [expandedReport, setExpandedReport] = useState<string | null>(null);
   const [reportDetails, setReportDetails] = useState<
     Record<
@@ -608,7 +608,7 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
     };
   }, [selKey, expandedReport, expandedBatchId]);
 
-  const editable = !!detail && detail.owner === "agent";
+  const editable = !!detail && detail.owner === "agent" && modeOf(detail) !== "insights";
   const canToggle = !!detail && detail.owner !== "experiment";
 
   // ─── validation (mirrors the router's pydantic bounds) ──────────────────
@@ -696,17 +696,10 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
     }
     setBusy(true);
     try {
-      const kind: Partial<OnlineEvalConfigCreate> =
-        draft.mode === "insights"
-          ? {
-              insights: draft.insights,
-              clustering_frequencies: draft.frequencies,
-            }
-          : { evaluators: draft.evaluators };
       const payload: OnlineEvalConfigCreate = {
         agent_id: agentId,
-        mode: draft.mode,
-        ...kind,
+        mode: "scores",
+        evaluators: draft.evaluators,
         sampling_percentage: Number(draft.sampling),
         session_timeout_minutes: Number(draft.timeout),
         filters: draft.filters.map(encodeFilter),
@@ -802,27 +795,6 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
     toast(t("evalPage.online.deleted", { logGroup: row.results_log_group }));
     if (oeParam === row.config_id) selectOe(null);
     await load();
-  };
-
-  // On-demand insights report over the sessions this config sampled in the
-  // range. Queued like any run; the row shows up as `console · QUEUED` and the
-  // poll carries it to a terminal status.
-  const runReport = async () => {
-    if (!detail) return;
-    setReportBusy(true);
-    try {
-      await api.onlineEvalRunReport(detail.config_id, reportRange);
-      toast(t("evalPage.online.reports.started"), "good");
-      await loadReports(detail.config_id, () => false);
-    } catch (err) {
-      const msg =
-        err instanceof ApiError || err instanceof Error
-          ? err.message
-          : String(err);
-      toast(t("common.actionFailed", { msg }));
-    } finally {
-      setReportBusy(false);
-    }
   };
 
   // ─── shared renderers ──────────────────────────────────────────────────
@@ -938,112 +910,6 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
         })}
       </div>
     </div>
-  );
-
-  // Create only — the mode is immutable once the config exists. Switching
-  // flips the sampling default (10 % scores / 100 % insights) unless the
-  // operator already typed a value.
-  const switchMode = (mode: OnlineEvalMode) => {
-    if (mode === draft.mode) return;
-    setDraft({
-      ...draft,
-      mode,
-      sampling: draft.samplingTouched ? draft.sampling : SAMPLING_DEFAULT[mode],
-    });
-  };
-  const modeToggle = (
-    <div className="field">
-      <label>{t("evalPage.online.form.mode")}</label>
-      <div className="selchips">
-        {(["scores", "insights"] as const).map((mode) => (
-          <button
-            key={mode}
-            type="button"
-            className={`selchip${draft.mode === mode ? " on" : ""}`}
-            data-testid={`online-mode-${mode}`}
-            onClick={() => switchMode(mode)}
-          >
-            {t(`evalPage.online.mode.${mode}`)}
-          </button>
-        ))}
-      </div>
-      <div className="mono dim" style={{ fontSize: 9.5, marginTop: 6 }}>
-        {t(`evalPage.online.form.modeHint.${draft.mode}`)}
-      </div>
-    </div>
-  );
-
-  // Insights mode replaces the evaluator picker: 1..3 insight types + the
-  // report cadences AWS schedules (none → on-demand reports only).
-  const insightsPicker = (
-    <>
-      <div className="field">
-        <label>
-          {t("evalPage.online.form.insights", { max: INSIGHTS_MAX })}
-        </label>
-        <div className="note" style={{ marginBottom: 6 }}>
-          <span className="i">[i]</span>
-          <span>{t("evalPage.online.form.insightsHint")}</span>
-        </div>
-        <div className="selchips">
-          {INSIGHT_TYPES.map((id) => {
-            const on = draft.insights.includes(id);
-            return (
-              <button
-                key={id}
-                type="button"
-                className={`selchip${on ? " on" : ""}`}
-                data-testid={`online-insight-${id}`}
-                title={id}
-                onClick={() =>
-                  setDraft({
-                    ...draft,
-                    insights: on
-                      ? draft.insights.filter((x) => x !== id)
-                      : INSIGHT_TYPES.filter(
-                          (x) => x === id || draft.insights.includes(x),
-                        ),
-                  })
-                }
-              >
-                {insightLabel(t, id)}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      <div className="field">
-        <label>{t("evalPage.online.form.frequencies")}</label>
-        <div className="selchips">
-          {FREQUENCIES.map((f) => {
-            const on = draft.frequencies.includes(f);
-            return (
-              <button
-                key={f}
-                type="button"
-                className={`selchip${on ? " on" : ""}`}
-                data-testid={`online-freq-${f}`}
-                onClick={() =>
-                  setDraft({
-                    ...draft,
-                    frequencies: on
-                      ? draft.frequencies.filter((x) => x !== f)
-                      : FREQUENCIES.filter(
-                          (x) => x === f || draft.frequencies.includes(x),
-                        ),
-                  })
-                }
-              >
-                {t(`evalPage.online.freq.${f}`)}
-              </button>
-            );
-          })}
-        </div>
-        <div className="mono dim" style={{ fontSize: 9.5, marginTop: 6 }}>
-          {t("evalPage.online.form.frequenciesHint")}
-        </div>
-      </div>
-    </>
   );
 
   const ruleFields = (
@@ -1235,8 +1101,7 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
           {t("evalPage.online.form.agentHint")}
         </div>
       </div>
-      {modeToggle}
-      {draft.mode === "insights" ? insightsPicker : evaluatorPicker}
+      {evaluatorPicker}
       {ruleFields}
       <div className="field">
         <label className="gov-demo-switch" style={{ letterSpacing: 0 }}>
@@ -1453,9 +1318,12 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
         <span>
           {t(
             modeOf(detail) === "insights"
-              ? "evalPage.online.reportsHint"
+              ? "v2.online.legacyReadonly"
               : "evalPage.online.firstResultsHint",
             { count: detail.session_timeout_minutes ?? 15 },
+          )}
+          {modeOf(detail) === "insights" && detail.owner === "agent" && can("eval.run") && (
+            <> <Link to={`/v2/eval/tasks?view=new&from=${encodeURIComponent(`online:${detail.config_id}`)}`}>{t("v2.tasks.copy")}</Link></>
           )}
         </span>
       </div>
@@ -1475,7 +1343,7 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
                 : "evalPage.online.editTitle",
             )}
           </div>
-          {modeOf(detail) === "insights" ? insightsPicker : evaluatorPicker}
+          {evaluatorPicker}
           {ruleFields}
           {errorNote}
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -1585,7 +1453,7 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
                     data-testid={`online-tile-${ev.evaluator_id}`}
                     style={{ color: meanColor(ev.mean, ev.evaluator_id) }}
                   >
-                    {ev.mean != null ? ev.mean.toFixed(2) : "—"}
+                    {evaluatorScoreLabel(ev.mean, ev.evaluator_id)}
                   </span>
                 }
                 foot={
@@ -1714,7 +1582,7 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
                       {r.error
                         ? "✕"
                         : r.score != null
-                          ? r.score.toFixed(2)
+                          ? evaluatorScoreLabel(r.score, r.evaluator_id)
                           : "—"}
                     </td>
                     <td className="mono dim">{r.label ?? "—"}</td>
@@ -1741,11 +1609,6 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
   );
 
   // ─── reports (insights mode) ────────────────────────────────────────────
-
-  const consoleReportRunning = !!reports?.reports.some(
-    (r) => r.origin === "console" && reportActive(r),
-  );
-  const canRunReport = editable && detailMode === "insights";
 
   const reportRow = (r: OnlineEvalReportRow, unattributed = false) => {
     const key = reportKey(r);
@@ -1921,44 +1784,6 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
           {t("evalPage.online.reports.title")}
         </span>
         <span style={{ flex: 1 }} />
-        {canRunReport && (
-          <>
-            <div
-              className="range"
-              role="group"
-              aria-label={t("evalPage.online.reports.range")}
-            >
-              {RANGES.map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  data-testid={`online-report-range-${key}`}
-                  className={reportRange === key ? "on" : ""}
-                  onClick={() => setReportRange(key)}
-                >
-                  {key.toUpperCase()}
-                </button>
-              ))}
-            </div>
-            <Btn
-              primary
-              data-testid="online-report-run"
-              disabled={
-                reportBusy ||
-                consoleReportRunning ||
-                TRANSIENT.has(detail.status ?? "")
-              }
-              title={
-                consoleReportRunning
-                  ? t("evalPage.online.reports.pendingHint")
-                  : undefined
-              }
-              onClick={() => void runReport()}
-            >
-              ▸ {t("evalPage.online.reports.run")}
-            </Btn>
-          </>
-        )}
       </div>
       {reportsLoading && !reports && (
         <div className="empty">{t("common.loading")}</div>
@@ -2054,7 +1879,7 @@ export function OnlineView({ onBack }: { onBack: () => void }) {
           {t("evalPage.online.pause")}
         </Btn>
       )}
-      {canToggle && detail.execution_status === "DISABLED" && (
+      {canToggle && modeOf(detail) !== "insights" && detail.execution_status === "DISABLED" && (
         <Btn
           data-testid="online-resume"
           disabled={busy || TRANSIENT.has(detail.status ?? "")}

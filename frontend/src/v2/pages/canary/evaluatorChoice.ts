@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { api, type EvaluatorRow, type EvaluatorsUnavailable } from "../../../lib/api";
-import { evaluatorLabel } from "../../../lib/evaluators";
+import { evaluatorLabel, FAILURE_ANALYSIS_EVALUATOR } from "../../../lib/evaluators";
 import { ONLINE_EVAL_DEFAULT } from "../../../lib/experiments";
 import { useLoad } from "../../hooks";
 
@@ -54,7 +54,8 @@ export interface CanaryEvaluatorChoice {
 export function useCanaryEvaluators(): CanaryEvaluatorChoice {
   const { t } = useTranslation();
   const load = useLoad(() => api.v2Evaluators(), "evaluators");
-  const rows = useMemo(() => load.data?.evaluators ?? [], [load.data]);
+  // Failure Analysis writes agent-level findings; canaries compare arm means only.
+  const rows = useMemo(() => (load.data?.evaluators ?? []).filter((e) => e.id !== FAILURE_ANALYSIS_EVALUATOR), [load.data]);
   const [selected, setSelected] = useState<string[]>(() => [...ONLINE_EVAL_DEFAULT]);
   const [picked, setPicked] = useState<string | null>(null);
   const primary = picked && selected.includes(picked) ? picked : defaultPrimary(selected, rows);

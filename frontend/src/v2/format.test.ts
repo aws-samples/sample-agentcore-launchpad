@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { fmtTime } from "./format";
+import { evaluatorScoreLabel, FAILURE_ANALYSIS_EVALUATOR } from "../lib/evaluators";
+import { fmtTime, normalizedScore } from "./format";
 
 describe("fmtTime", () => {
   // render in UTC+8 whatever the host zone: in UTC a naive string reads the same
@@ -25,5 +26,14 @@ describe("fmtTime", () => {
   it("falls back for missing or unparsable values", () => {
     expect(fmtTime(null)).toBe("—");
     expect(fmtTime("not a date")).toBe("not a date");
+  });
+});
+
+describe("Failure Analysis score", () => {
+  it("shows the raw failure percentage while orienting quality scores higher-is-better", () => {
+    expect(evaluatorScoreLabel(0.2, FAILURE_ANALYSIS_EVALUATOR)).toBe("20%");
+    expect(normalizedScore(0.2, FAILURE_ANALYSIS_EVALUATOR)).toBe(0.8);
+    expect(evaluatorScoreLabel(0.2, "Builtin.GoalSuccessRate")).toBe("0.20");
+    expect(normalizedScore(0.2, "Builtin.GoalSuccessRate")).toBe(0.2);
   });
 });

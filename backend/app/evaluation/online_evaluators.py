@@ -44,6 +44,7 @@ def normalize_online_evaluators(
     *,
     code_prefix: str = "experiment",
     require_numeric: bool = False,
+    allow_failure_analysis: bool = False,
 ) -> list[str]:
     """Validate an operator-chosen evaluator set for online evaluation.
 
@@ -55,6 +56,7 @@ def normalize_online_evaluators(
     ``CreateOnlineEvaluationConfig`` after the caller's earlier steps ran. The
     default fallback makes no AWS call at all.
 
+    ``allow_failure_analysis`` is True only for an ordinary online config.
     ``require_numeric`` additionally refuses a custom LLM judge whose rating scale
     is categorical (``{code_prefix}.evaluator_categorical``): a caller that compares
     arm means (the canary verdict) needs a numeric score. It reuses the same
@@ -66,6 +68,16 @@ def normalize_online_evaluators(
         evaluator = str(raw).strip()
         if not evaluator or evaluator in chosen:
             continue
+        if evaluator == ac.FAILURE_ANALYSIS and not allow_failure_analysis:
+            # It writes agent-level findings and bills per session; only an ordinary
+            # online config (with its duplicate-source check) may enable it.
+            raise AppError(
+                code,
+                f"{evaluator} is supported in batch evaluations and online evaluation "
+                "configs, not in experiments or canaries",
+                {"evaluator": evaluator},
+                status_code=400,
+            )
         if evaluator in ac.TRAJECTORY_EVALUATORS:
             raise AppError(
                 code,

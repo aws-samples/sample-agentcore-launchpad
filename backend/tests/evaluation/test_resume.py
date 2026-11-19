@@ -14,13 +14,13 @@ from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.evaluation.models import EvalRun
 
 
-def make_run(**fields) -> str:
+def make_run(*, mode="insights", **fields) -> str:
     db = SessionLocal()
     try:
         run = EvalRun(
 
                 workspace_id=DEFAULT_WORKSPACE_ID,
-                agent_id="a1", agent_name="eval-target-v2", mode="insights",
+                agent_id="a1", agent_name="eval-target-v2", mode=mode,
             evaluators=[], session_ids=["s1", "s2"], **fields,
         )
         db.add(run)
@@ -67,14 +67,17 @@ def test_evaluating_run_with_batch_is_reconciled(monkeypatch):
 
 
 def test_pre_batch_runs_are_failed_honestly():
-    queued = make_run(status="queued")
-    waiting = make_run(status="waiting")
+    queued = make_run(status="queued", mode="evaluators")
+    waiting = make_run(status="waiting", mode="evaluators")
+    legacy = make_run(status="queued")
     resumed = svc.resume_interrupted_runs()
     assert resumed == []
     for run_id in (queued, waiting):
         run = get_run(run_id)
         assert run.status == "failed"
         assert "backend restart" in run.error
+    assert get_run(legacy).status == "failed"
+    assert "insights.preview_retired" in get_run(legacy).error
 
 
 def test_terminal_runs_untouched():

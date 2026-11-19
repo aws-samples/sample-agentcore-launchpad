@@ -1,4 +1,53 @@
 {
+  "agentFindings": {
+    "title": "Failure findings",
+    "batch": "Batch snapshot",
+    "online": "Ongoing patterns",
+    "history": "Historical reports",
+    "agent": "Agent endpoint",
+    "pickAgent": "Choose an agent",
+    "run": "Evaluation run",
+    "pickRun": "Choose a run",
+    "batchHint": "Inspect failures in the sessions selected for a single evaluation run.",
+    "liveHint": "Patterns accumulate across sampled sessions at this agent’s production endpoint. Counts span the pattern’s history.",
+    "noBatch": "No Failure Analysis runs in this time range.",
+    "noLive": "No active online patterns yet. Check that an online evaluation samples this endpoint with Failure Analysis. Sessions evaluated shortly after the regional Insight Store was enabled may not produce patterns, and patterns need enough related failures to form.",
+    "configTitle": "Ongoing failure patterns",
+    "configHint": "Failure Analysis scores each sampled session (results below). AgentCore separately groups related failures across this endpoint into patterns with root causes and suggested fixes.",
+    "noLiveConfig": "No patterns yet. Session scores show Failure Analysis is running, but AgentCore has not grouped the failures into a pattern. Grouping needs enough related failures and can lag behind the scores; sessions evaluated shortly after the regional Insight Store was enabled may not contribute.",
+    "noPage": "No online patterns on this page.",
+    "batchClean": "No failures found in the evaluated sessions.",
+    "affected": "Affected sessions: {{count}}",
+    "samples": "Sample sessions ({{count}})",
+    "lastSeen": "Last observed: {{time}}",
+    "cause": "Root cause",
+    "fix": "Suggested fix:",
+    "pattern": "Failure pattern",
+    "loading": "Loading…",
+    "retry": "Retry",
+    "refresh": "Check again",
+    "next": "Next page",
+    "previous": "Previous page",
+    "batchState": {
+      "pending": "Analysis is still running.",
+      "partial": "Partial analysis. Only the available findings are shown.",
+      "unavailable": "Findings could not be read for this run.",
+      "not_applicable": "This run did not include Failure Analysis.",
+      "error": "Failure analysis did not complete."
+    },
+    "store": {
+      "disabled": "The regional Insight Store is disabled. An account operator can enable the default Store in AgentCore; batch snapshots are still available.",
+      "updating": "The regional Insight Store is updating.",
+      "error": "The regional Insight Store reported a configuration error.",
+      "denied": "The workspace role cannot read the Insight Store.",
+      "unsupported": "The Insights API is not available in this environment.",
+      "unavailable": "The regional Insight Store could not be read."
+    },
+    "metadata": {
+      "CUSTOMER_KEY_UNAVAILABLE": "The encryption key is unavailable. Generated content cannot be displayed.",
+      "UNAVAILABLE": "The generated content is currently unavailable."
+    }
+  },
   "topbar": {
     "console": "CONSOLE",
     "allSystemsGo": "ALL SYSTEMS GO",
@@ -3317,6 +3366,15 @@
     "run.not_active": "This run already ended and cannot be stopped.",
     "run.not_deletable": "Only failed or stopped runs can be removed — stop an active run first; completed runs are kept as evidence.",
     "run.not_found": "Evaluation run not found.",
+    "evaluator.base_not_supported": "Failure Analysis cannot be used as the base of a derived evaluator. Choose another base.",
+    "insight.denied": "The workspace cannot read Agent Insights. Check its AWS read permissions.",
+    "insight.invalid_cursor": "This page link is no longer valid. Refresh the findings list.",
+    "insight.not_found": "This finding or source is unavailable in the current project.",
+    "insight.unavailable": "Agent Insights could not be read. Try again.",
+    "insight.unsupported": "Agent Insights is unavailable for this workspace or AWS Region.",
+    "observability.evaluator_not_supported": "Use Failure Analysis in a batch or online evaluation.",
+    "online_eval.failure_analysis_already_enabled": "Failure Analysis is already enabled for this endpoint. Use an existing evaluation or choose another evaluator.",
+    "insights.preview_retired": "Legacy insights reports have been retired. Start a new evaluation with Failure Analysis.",
     "run.rerun_unsupported": "Only a dataset replay or a time-window evaluator run can be evaluated again.",
     "run.not_recheckable": "Only a failed run that started a batch evaluation can be rechecked.",
     "run.not_snapshotable": "Only a completed run tied to a criteria table can be snapshotted.",
@@ -3611,7 +3669,7 @@
       "evaluators": "EVALUATORS — BUILTIN + CUSTOM",
       "mode": "MODE",
       "modeEvaluators": "EVALUATORS · scored run",
-      "modeInsights": "INSIGHTS · failure triage",
+      "modeInsights": "Historical insights report",
       "insightsHint": "Insights invokes the dataset against the agent, then clusters the resulting sessions into failure categories and user intents. Clustering needs at least 3 sessions — pick a dataset with 3+ items.",
       "submit": "START RUN",
       "submitted": "Run submitted — it appears in the list as it progresses.",
@@ -3688,9 +3746,9 @@
     "insights": {
       "title": "INSIGHTS — FAILURE TRIAGE",
       "sub": "failure analysis · user intents",
-      "empty": "RUN INSIGHTS ON A COMPLETED RUN'S SESSIONS",
-      "runOnSessions": "INSIGHTS · THESE SESSIONS",
-      "needSessions": "needs ≥3 sessions (clustering minimum)",
+      "empty": "Select a run with sessions to analyze failures",
+      "runOnSessions": "Analyze failures in these sessions",
+      "needSessions": "Requires at least one session",
       "partial": "PARTIAL RESULT — the evaluation service reported:",
       "secFailures": "FAILURES",
       "secIntents": "USER INTENTS",
@@ -3698,10 +3756,10 @@
       "sessions": "{{count}} session(s)",
       "pendingDup": "an identical insights run is already queued or running",
       "confirmRun": {
-        "title": "Run insights on these sessions",
-        "body": "This creates a new insights run over the {{count}} sessions of {{run}}. Batch capacity is limited per account, so duplicate submissions just queue up behind running work.",
-        "bodyRepeat": "These sessions already have completed insights — continuing repeats the same analysis one more time: a new insights run over the {{count}} sessions of {{run}}, re-invoking the evaluation service with additional usage.",
-        "confirm": "RUN INSIGHTS"
+        "title": "Analyze failures in these sessions",
+        "body": "Run Failure Analysis on {{count}} sessions from {{run}}. This creates a new batch evaluation and incurs evaluation charges. Estimated cost: {{estimate}}.",
+        "bodyRepeat": "These sessions already have an analysis. Continuing repeats Failure Analysis on {{count}} sessions from {{run}} and incurs additional evaluation charges. Estimated cost: {{estimate}}.",
+        "confirm": "Run Failure Analysis"
       }
     },
     "runFailedToast": "Eval run failed — {{agent}}: {{msg}}",
@@ -4104,6 +4162,7 @@
       }
     },
     "evaluatorNames": {
+      "FailureAnalysis": "Failure Analysis",
       "GoalSuccessRate": "Goal Success Rate",
       "Helpfulness": "Helpfulness",
       "Correctness": "Correctness",
@@ -7531,9 +7590,9 @@
       "mode": "Evaluation type",
       "modeEvaluators": "Evaluator scoring",
       "modeEvaluatorsDesc": "Evaluators score every session",
-      "modeInsights": "Insights · failure analysis",
+      "modeInsights": "Historical insights report",
       "modeInsightsDesc": "Cluster sessions into failure categories and user intents",
-      "modeInsightsShort": "Insights",
+      "modeInsightsShort": "Historical report",
       "stepInsights": "Select analysis types",
       "pickInsights": "Select analysis types",
       "errInsights": "Select at least one analysis type",
@@ -8135,7 +8194,7 @@
       },
       "mode": {
         "scores": "Scores",
-        "insights": "Insights"
+        "insights": "Historical report"
       },
       "modeDesc": {
         "scores": "Evaluators judge each sampled session; results arrive about 10 minutes after a session ends.",
@@ -8224,7 +8283,8 @@
       "counts": "{{count}} records · {{sessions}} sessions",
       "judgeErrors": "{{count}} judge errors.",
       "noResults": "No results in this range yet — sessions are judged about {{count}} minutes after they end.",
-      "reportsTitle": "Insight reports",
+      "legacyReadonly": "Legacy insights are retired. Copy the configuration to start a new evaluation with Failure Analysis.",
+      "reportsTitle": "Historical insight reports",
       "reportsSub": "Scheduled reports and on-demand runs, newest first",
       "runReport": "Generate report",
       "reportPending": "A report started from the console is still running",

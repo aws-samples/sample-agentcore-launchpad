@@ -192,11 +192,6 @@ export function newDraft(): OnlineDraft {
   };
 }
 
-/** Switching the mode moves the sampling default along unless it was typed. */
-export function withMode(draft: OnlineDraft, mode: OnlineEvalMode): OnlineDraft {
-  return { ...draft, mode, sampling: draft.samplingTouched ? draft.sampling : SAMPLING_DEFAULT[mode] };
-}
-
 export const emptyFilter = (): FilterDraft => ({ key: "session.id", operator: "Contains", kind: "string", value: "" });
 
 export function encodeFilter(f: FilterDraft): OnlineEvalFilter {
@@ -234,11 +229,19 @@ export function draftFromRow(row: OnlineEvalConfigRow): OnlineDraft {
 export const MAX_DESCRIPTION = 200;
 
 /** The create form's start for a copy of `row` (`?view=new&from=online:<id>`): its agent,
- *  mode, evaluators / insights, frequencies, sampling, timeout and filters, and its
+ *  scoring evaluators, sampling, timeout and filters, and its
  *  description (else its name) with the copy suffix, cut to `MAX_DESCRIPTION`. */
 export function copyDraft(row: OnlineEvalConfigRow, copySuffix: string): { agentId: string; draft: OnlineDraft } {
   const description = `${row.description?.trim() || configName(row)}${copySuffix}`.slice(0, MAX_DESCRIPTION);
-  return { agentId: row.agent_id ?? "", draft: { ...draftFromRow(row), description } };
+  const original = draftFromRow(row);
+  const draft = original.mode === "insights" ? {
+    ...original,
+    mode: "scores" as const,
+    evaluators: original.insights.includes("Builtin.Insight.FailureAnalysis") ? ["Builtin.FailureAnalysis"] : [],
+    insights: [],
+    frequencies: [],
+  } : original;
+  return { agentId: row.agent_id ?? "", draft: { ...draft, description } };
 }
 
 /** First problem of the draft (null ⇒ valid). */
@@ -265,8 +268,8 @@ export function validateDraft(t: TFunction, d: OnlineDraft): string | null {
 export function createBody(agentId: string, d: OnlineDraft, enable: boolean): OnlineEvalConfigCreate {
   return {
     agent_id: agentId,
-    mode: d.mode,
-    ...(d.mode === "insights" ? { insights: d.insights, clustering_frequencies: d.frequencies } : { evaluators: d.evaluators }),
+    mode: "scores",
+    evaluators: d.evaluators,
     sampling_percentage: Number(d.sampling),
     session_timeout_minutes: Number(d.timeout),
     filters: d.filters.map(encodeFilter),

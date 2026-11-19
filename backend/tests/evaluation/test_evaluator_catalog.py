@@ -34,6 +34,7 @@ TRAJECTORY_EVALUATORS = {
 }
 EXPECTED_BUILTIN_EVALUATORS = {
     **GENERAL_PROMPT_TEMPLATE_EVALUATORS,
+    "Builtin.FailureAnalysis": "SESSION",
     **SKILL_EVALUATORS,
     **TRAJECTORY_EVALUATORS,
 }
@@ -112,12 +113,12 @@ def test_catalog_classification(client, monkeypatch):
     assert len(GENERAL_PROMPT_TEMPLATE_EVALUATORS) == 14
     assert len(SKILL_EVALUATORS) == 2
     assert len(TRAJECTORY_EVALUATORS) == 3
-    assert len(builtin_rows) == len(EXPECTED_BUILTIN_EVALUATORS) == 19
+    assert len(builtin_rows) == len(EXPECTED_BUILTIN_EVALUATORS) == 20
     assert len(builtin_by_id) == len(builtin_rows)
     assert {evaluator_id: row["level"] for evaluator_id, row in builtin_by_id.items()} == (
         EXPECTED_BUILTIN_EVALUATORS
     )
-    assert res.json()["builtin_count"] == 19
+    assert res.json()["builtin_count"] == 20
     assert all(r["evaluator_type"] == "Builtin" for r in builtin_rows)
     assert all(r["provider"] == "AWS" for r in builtin_rows)
 
@@ -164,7 +165,7 @@ def test_catalog_fail_soft_builtins_only(client, monkeypatch):
     body = res.json()
     rows = body["evaluators"]
     assert all(r["source"] == "builtin" for r in rows)
-    assert body["builtin_count"] == len(rows) == 19
+    assert body["builtin_count"] == len(rows) == 20
     assert {r["id"]: r["level"] for r in rows} == EXPECTED_BUILTIN_EVALUATORS
     context_relevance = next(r for r in rows if r["id"] == "Builtin.ContextRelevance")
     assert context_relevance["level"] == "TRACE"

@@ -1,4 +1,53 @@
 {
+  "agentFindings": {
+    "title": "失败洞察",
+    "batch": "批量评估快照",
+    "online": "持续观察到的模式",
+    "history": "历史报告",
+    "agent": "Agent 端点",
+    "pickAgent": "选择 Agent",
+    "run": "评估任务",
+    "pickRun": "选择一次评估",
+    "batchHint": "查看一次批量评估所选会话的失败模式。",
+    "liveHint": "模式来自该 Agent 生产端点的抽样会话。受影响会话数按模式出现以来的全部记录统计。",
+    "noBatch": "这个时间范围内没有运行过失败分析。",
+    "noLive": "暂无活跃的在线失败模式。请确认在线评估已针对该端点抽样，并选用了失败分析。区域 Insight Store 刚启用后不久评估的会话可能不会生成失败模式，且需要足够多的相关失败才会形成。",
+    "configTitle": "持续失败模式",
+    "configHint": "失败分析会为每个被采样的会话打分（见下方结果）。AgentCore 另外会把该端点上相关的失败归并成失败模式，并给出根因和修复建议。",
+    "noLiveConfig": "暂无失败模式。会话评分说明失败分析正在运行，但 AgentCore 尚未把这些失败归并成模式。归并需要足够多的相关失败，可能晚于评分出现；区域 Insight Store 刚启用后不久评估的会话可能不会计入。",
+    "noPage": "本页没有在线失败模式。",
+    "batchClean": "已评估的会话中未发现失败。",
+    "affected": "受影响会话：{{count}}",
+    "samples": "样本会话（{{count}}）",
+    "lastSeen": "最近出现：{{time}}",
+    "cause": "根因",
+    "fix": "建议修复：",
+    "pattern": "失败模式",
+    "loading": "加载中…",
+    "retry": "重试",
+    "refresh": "重新检查",
+    "next": "下一页",
+    "previous": "上一页",
+    "batchState": {
+      "pending": "评估仍在进行。",
+      "partial": "分析未全部完成，仅显示已生成的结果。",
+      "unavailable": "无法读取本次运行的洞察。",
+      "not_applicable": "本次运行未选择失败分析。",
+      "error": "失败分析未能完成。"
+    },
+    "store": {
+      "disabled": "本区域的洞察存储未启用。账号管理员可在 AgentCore 启用默认存储。批量评估快照仍可查看。",
+      "updating": "本区域的洞察存储正在更新。",
+      "error": "本区域的洞察存储报告了配置错误。",
+      "denied": "工作区角色无权读取洞察存储。",
+      "unsupported": "当前环境未提供洞察 API。",
+      "unavailable": "当前无法读取本区域的洞察存储。"
+    },
+    "metadata": {
+      "CUSTOMER_KEY_UNAVAILABLE": "加密密钥不可用，无法显示生成的内容。",
+      "UNAVAILABLE": "生成的内容暂时不可用。"
+    }
+  },
   "topbar": {
     "console": "控制台",
     "allSystemsGo": "系统运行正常",
@@ -3317,6 +3366,15 @@
     "run.not_active": "该运行已结束，无法停止。",
     "run.not_deletable": "只能删除失败或已停止的运行——请先停止进行中的运行；已完成的运行会作为证据保留。",
     "run.not_found": "未找到该评估运行。",
+    "evaluator.base_not_supported": "失败分析不能作为派生评估器的基础。请选择其他评估器。",
+    "insight.denied": "当前工作区无权读取 Agent Insights。请检查 AWS 读取权限。",
+    "insight.invalid_cursor": "此分页链接已失效。请刷新洞察列表。",
+    "insight.not_found": "当前项目中找不到此洞察或数据源。",
+    "insight.unavailable": "暂时无法读取 Agent Insights。请重试。",
+    "insight.unsupported": "当前工作区或 AWS 区域不支持 Agent Insights。",
+    "observability.evaluator_not_supported": "请在批量或在线评估中使用失败分析。",
+    "online_eval.failure_analysis_already_enabled": "此端点已启用失败分析。请使用现有评估，或另选评估器。",
+    "insights.preview_retired": "旧版洞察报告已停用。请新建评估并选择失败分析。",
     "run.rerun_unsupported": "只有数据集回放或时间窗的评估器运行可以再评一次。",
     "run.not_recheckable": "只有已启动批量评估的失败运行才能重新检查。",
     "run.not_snapshotable": "只有已完成且关联判据表的运行才能生成快照。",
@@ -3611,7 +3669,7 @@
       "evaluators": "评估器 — 内置 + 自定义",
       "mode": "模式",
       "modeEvaluators": "评估器 · 打分运行",
-      "modeInsights": "洞察 · 失败归因",
+      "modeInsights": "历史洞察报告",
       "insightsHint": "洞察模式会用数据集调用 Agent，然后把产生的会话聚类为失败类别与用户意图。聚类至少需要 3 个会话——请选择含 3 条以上的数据集。",
       "submit": "启动运行",
       "submitted": "运行已提交——进度会实时出现在列表中。",
@@ -3688,9 +3746,9 @@
     "insights": {
       "title": "洞察 — 失败归因",
       "sub": "失败分析 · 用户意图",
-      "empty": "对已完成运行的会话执行洞察",
-      "runOnSessions": "洞察 · 这些会话",
-      "needSessions": "至少需要 3 个会话（聚类下限）",
+      "empty": "选择包含会话的任务以运行失败分析",
+      "runOnSessions": "分析这些会话的失败原因",
+      "needSessions": "至少需要一个会话",
       "partial": "部分结果——评估服务返回：",
       "secFailures": "失败类别",
       "secIntents": "用户意图",
@@ -3698,10 +3756,10 @@
       "sessions": "{{count}} 个会话",
       "pendingDup": "相同会话的洞察运行已在排队或进行中",
       "confirmRun": {
-        "title": "对这些会话运行洞察",
-        "body": "将基于 {{run}} 的 {{count}} 个会话新建一个洞察运行。账户的批次并发有限额，重复提交只会在运行中的任务后排队。",
-        "bodyRepeat": "这些会话已经有完成的洞察结果——继续将把同样的分析重复再运行一次：基于 {{run}} 的 {{count}} 个会话新建一条洞察运行记录，重新调用评估服务并产生额外用量。",
-        "confirm": "运行洞察"
+        "title": "分析这些会话的失败原因",
+        "body": "将对 {{run}} 的 {{count}} 个会话创建失败分析任务，并产生评估费用。 预估费用：{{estimate}}。",
+        "bodyRepeat": "这些会话已有分析。继续会对 {{run}} 的 {{count}} 个会话再次运行失败分析，并产生额外评估费用。 预估费用：{{estimate}}。",
+        "confirm": "运行失败分析"
       }
     },
     "runFailedToast": "评估运行失败 — {{agent}}:{{msg}}",
@@ -3928,7 +3986,7 @@
       },
       "mode": {
         "scores": "打分",
-        "insights": "洞察"
+        "insights": "历史报告"
       },
       "insightsCount": "{{count}} 项洞察",
       "freq": {
@@ -4104,6 +4162,7 @@
       }
     },
     "evaluatorNames": {
+      "FailureAnalysis": "失败分析",
       "GoalSuccessRate": "目标达成率",
       "Helpfulness": "有用性",
       "Correctness": "正确性",
@@ -7531,9 +7590,9 @@
       "mode": "评估类型",
       "modeEvaluators": "评估器打分",
       "modeEvaluatorsDesc": "由评估器对每个会话打分",
-      "modeInsights": "洞察 · 失败归因",
+      "modeInsights": "历史洞察报告",
       "modeInsightsDesc": "把会话聚类为失败类别与用户意图",
-      "modeInsightsShort": "洞察",
+      "modeInsightsShort": "历史报告",
       "stepInsights": "选择分析类型",
       "pickInsights": "选择分析类型",
       "errInsights": "请至少选择一种分析类型",
@@ -8135,7 +8194,7 @@
       },
       "mode": {
         "scores": "评分",
-        "insights": "洞察"
+        "insights": "历史报告"
       },
       "modeDesc": {
         "scores": "评估器为每个抽样会话打分，会话结束约 10 分钟后产出结果。",
@@ -8224,7 +8283,8 @@
       "counts": "{{count}} 条记录 · {{sessions}} 个会话",
       "judgeErrors": "评判出错 {{count}} 次。",
       "noResults": "该时间范围内暂无结果：会话结束约 {{count}} 分钟后才会被评判。",
-      "reportsTitle": "洞察报告",
+      "legacyReadonly": "旧版洞察已停用。可复制配置以创建使用失败分析的新评估。",
+      "reportsTitle": "历史洞察报告",
       "reportsSub": "定时报告与按需生成的报告，按时间倒序",
       "runReport": "生成报告",
       "reportPending": "控制台发起的报告仍在运行",

@@ -8,6 +8,8 @@ import { coverageInfo, hasInsightTrees, runCoverage } from "../../../lib/evaluat
 import { previousComparable } from "../../compare";
 import { fmtTime } from "../../format";
 import { useLoad, useV2Toast } from "../../hooks";
+import { BatchFindingResults } from "../../../components/AgentFindings";
+import { FAILURE_ANALYSIS_ID } from "../../../lib/agent-findings";
 import { InsightClusters } from "../../InsightClusters";
 import { EvaluatorBreakdown, ResultsTable, SummaryKpis } from "../../ResultsView";
 import { rowsFromRun, summarize } from "../../results";
@@ -245,7 +247,8 @@ export function TaskDetail({ id }: { id: string }) {
         />
       </Card>
 
-      {insightsRun ? (
+      {!insightsRun && data.evaluators.includes(FAILURE_ANALYSIS_ID) && <BatchFindingResults key={id} runId={id} status={data.status} />}
+        {insightsRun ? (
         <Card title={t("v2.taskDetail.insightsTitle")}>
           {hasInsightTrees(data.run?.insights) ? (
             <InsightClusters insights={data.run?.insights ?? {}} />

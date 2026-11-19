@@ -208,7 +208,7 @@ Anthropic 投资收益）、**口径与正负号**（TTM 自由现金流是净�
 | `INVOKING` | 逐条回放数据集，真实调用 Agent，记录每条对应的 session id |
 | `WAITING` | 等 span 落进 CloudWatch `aws/spans`，默认等 180 秒 |
 | `EVALUATING` | `StartBatchEvaluation` 精确圈定这些 session，不会误评别的流量 |
-| `COMPLETED` | 各评估器均分，或洞察树 |
+| `COMPLETED` | 各评估器均分；选用失败分析时还可查看批量快照 |
 
 ![评估得分](../static/images/08-run-scores.png)
 *图 8-6：完成页示例。展开后可查看四项指标各自的均分。图中数值只用于说明界面。*
@@ -269,7 +269,7 @@ Runtime 检索后给出真值。这是知识库接地价值的量化证据，也
 
 ### 可选：跑一次洞察（失败归因）
 
-评分面板可对同一批会话运行失败分析、用户意图和执行摘要。通常需要 15–25 分钟，本实验不执行。
+可用同一批会话新建一次性评估，并选用「失败分析」（`Builtin.FailureAnalysis`）。评估使用已有遥测，不会重新调用 Agent。本实验不执行此可选步骤。
 
 ---
 

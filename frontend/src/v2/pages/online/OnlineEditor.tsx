@@ -17,9 +17,6 @@ import {
   emptyFilter,
   type FilterDraft,
   type FilterKind,
-  FREQUENCIES,
-  INSIGHT_TYPES,
-  insightLabel,
   isEditable,
   isTransient,
   MAX_DESCRIPTION,
@@ -31,9 +28,8 @@ import {
   OPERATORS,
   patchBody,
   validateDraft,
-  withMode,
 } from "../../online";
-import { Alert, Button, Card, Field, FlowHeader, OptionCard, Select, Spin } from "../../ui";
+import { Alert, Button, Card, Field, FlowHeader, Select, Spin } from "../../ui";
 import { backTarget } from "../tasks/back";
 import { StrategySwitch } from "../tasks/StrategySwitch";
 
@@ -103,11 +99,6 @@ function FilterRows({ filters, onChange }: { filters: FilterDraft[]; onChange: (
       </div>
     </div>
   );
-}
-
-function toggleOrdered<T extends string>(all: readonly T[], picked: T[], value: T): T[] {
-  // canonical order, whatever the click order
-  return all.filter((x) => (x === value ? !picked.includes(x) : picked.includes(x)));
 }
 
 /**
@@ -207,11 +198,11 @@ export function OnlineEditor({ id, seedFrom = null }: { id: string | null; seedF
   if (editing && existing.loading && !row) return <Spin />;
   if (editing && existing.error && !row) return <Alert tone="error">{existing.error}</Alert>;
   if (!editing && seedFrom && seed.loading && !copied) return <Spin />;
-  if (row && !isEditable(row)) {
+  if (row && (!isEditable(row) || modeOf(row) === "insights")) {
     return (
       <>
         <FlowHeader title={t("v2.online.editTitle")} onBack={back} />
-        <Alert tone="warn">{t("v2.online.notEditable")}</Alert>
+        <Alert tone="warn">{t(modeOf(row) === "insights" ? "v2.online.legacyReadonly" : "v2.online.notEditable")}</Alert>
       </>
     );
   }
@@ -260,21 +251,6 @@ export function OnlineEditor({ id, seedFrom = null }: { id: string | null; seedF
           <Field label={t("v2.tasks.description")} hint={t("v2.online.descHint")}>
             <input className="v2-input" maxLength={MAX_DESCRIPTION} value={draft.description} onChange={(e) => set({ description: e.target.value })} data-testid="v2-online-desc" />
           </Field>
-          <Field label={t("v2.online.colMode")} full hint={editing ? t("v2.online.modeFixed") : undefined}>
-            <div className="v2-options" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-              {(["scores", "insights"] as OnlineEvalMode[]).map((m) => (
-                <OptionCard
-                  key={m}
-                  title={t(`v2.online.mode.${m}`)}
-                  desc={t(`v2.online.modeDesc.${m}`)}
-                  on={mode === m}
-                  disabled={editing && mode !== m}
-                  onClick={() => !editing && setDraft((prev) => withMode(prev, m))}
-                  testId={`v2-online-mode-${m}`}
-                />
-              ))}
-            </div>
-          </Field>
           {!editing && (
             <Field label={t("v2.online.enableOnCreate")}>
               <label className="v2-check">
@@ -301,36 +277,7 @@ export function OnlineEditor({ id, seedFrom = null }: { id: string | null; seedF
             testIdPrefix="v2-online-eval"
           />
         </Card>
-      ) : (
-        <Card title={t("v2.online.insightsTitle")} sub={t("v2.online.insightsSub")}>
-          <div className="v2-form">
-            <Field label={t("v2.online.insightTypes")}>
-              <div className="v2-checks">
-                {INSIGHT_TYPES.map((id) => (
-                  <label key={id} className="v2-check">
-                    <input
-                      type="checkbox"
-                      checked={draft.insights.includes(id)}
-                      onChange={() => set({ insights: toggleOrdered(INSIGHT_TYPES, draft.insights as (typeof INSIGHT_TYPES)[number][], id) })}
-                    />
-                    {insightLabel(t, id)}
-                  </label>
-                ))}
-              </div>
-            </Field>
-            <Field label={t("v2.online.frequencies")} hint={t("v2.online.frequenciesHint")}>
-              <div className="v2-checks">
-                {FREQUENCIES.map((f) => (
-                  <label key={f} className="v2-check">
-                    <input type="checkbox" checked={draft.frequencies.includes(f)} onChange={() => set({ frequencies: toggleOrdered(FREQUENCIES, draft.frequencies, f) })} />
-                    {t(`v2.online.freq.${f}`)}
-                  </label>
-                ))}
-              </div>
-            </Field>
-          </div>
-        </Card>
-      )}
+      ) : null}
 
       <Card title={t("v2.online.samplingTitle")}>
         <div className="v2-form cols-2">

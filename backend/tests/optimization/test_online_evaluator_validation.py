@@ -262,3 +262,21 @@ def test_canary_prefix_keys_the_unsupported_code():
             code_prefix="canary", require_numeric=True,
         )
     assert excinfo.value.code == "canary.evaluator_unsupported"
+
+
+def test_failure_analysis_is_only_for_ordinary_online_configs():
+    """Experiments and canaries compare arm means; the evaluator writes agent-level
+    findings and has its own duplicate-source check, which only the online-config
+    path runs — so the shared validator refuses it unless that path opts in."""
+    control = RegionControl(["Builtin.FailureAnalysis", "Builtin.Helpfulness"])
+    for prefix in ("experiment", "canary"):
+        with pytest.raises(AppError) as err:
+            normalize_online_evaluators(
+                ["Builtin.Helpfulness", "Builtin.FailureAnalysis"], control, code_prefix=prefix,
+            )
+        assert err.value.code == f"{prefix}.evaluator_unsupported"
+        assert err.value.status_code == 400
+    assert normalize_online_evaluators(
+        ["Builtin.FailureAnalysis"], control, code_prefix="online_eval",
+        allow_failure_analysis=True,
+    ) == ["Builtin.FailureAnalysis"]

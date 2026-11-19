@@ -2,8 +2,7 @@
 """E2E: REAL batch evaluation + insights for a platform-deployed zip agent.
 
 Flow: ensure eval-target agent (zip_runtime) → upload 3-item dataset →
-      evaluators run (Correctness+Helpfulness) → scores → insights run over
-      the same sessions → failure/intent excerpt.
+      one mixed batch (Correctness, Helpfulness, Failure Analysis) → scores and findings.
 
 Run:  cd backend && uv run python scripts/e2e_eval_run.py [--keep]
 """
@@ -81,10 +80,10 @@ def main() -> int:
         evaluators = client.get("/api/eval/evaluators").json()
         print(f"  builtin: {evaluators['builtin_count']}")
 
-        print("── starting evaluators run (Correctness + Helpfulness)…")
+        print("── starting mixed batch (Correctness, Helpfulness and Failure Analysis)…")
         run = client.post("/api/eval/runs", json={
             "agent_id": agent["id"], "dataset_id": dataset["id"],
-            "evaluators": ["Builtin.Correctness", "Builtin.Helpfulness"],
+            "evaluators": ["Builtin.Correctness", "Builtin.Helpfulness", "Builtin.FailureAnalysis"],
             "wait_seconds": 180,
         }).json()
         result = wait_run(client, run["id"])
@@ -95,17 +94,11 @@ def main() -> int:
         print(f"  scores: {json.dumps(result['scores'], indent=1)}")
         assert len(result["scores"]) >= 1, "expected numeric scores"
 
-        print("── starting insights run over the same sessions…")
-        insights_run = client.post("/api/eval/runs", json={
-            "agent_id": agent["id"], "mode": "insights",
-            "session_ids": result["session_ids"], "wait_seconds": 0,
-        }).json()
-        insights_result = wait_run(client, insights_run["id"])
-        if insights_result["status"] != "completed":
-            print(f"INSIGHTS FAILED: {insights_result['error']}")
-            return 1
-        excerpt = json.dumps(insights_result["insights"], ensure_ascii=False)[:900]
-        print(f"  insights excerpt: {excerpt}")
+        resp = client.get(f"/api/eval/runs/{run['id']}/findings")
+        resp.raise_for_status()
+        findings = resp.json()
+        assert findings["state"] == "ready", (findings["state"], findings["diagnostics"])
+        print(f"  failure patterns: {len(findings['findings'])}")
 
         print("E2E EVAL RUN: PASS")
         return 0

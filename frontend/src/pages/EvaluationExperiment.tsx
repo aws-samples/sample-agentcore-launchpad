@@ -33,7 +33,7 @@ import {
   type EvaluationRunInfo,
   type ExperimentReadiness,
 } from "../lib/evaluation";
-import { evaluatorLabel, evaluatorPolarity } from "../lib/evaluators";
+import { evaluatorLabel, evaluatorPolarity, FAILURE_ANALYSIS_EVALUATOR } from "../lib/evaluators";
 import { fmtScore } from "../lib/format";
 import { RuntimeCanaryView } from "./EvaluationRuntimeCanary";
 import {
@@ -344,7 +344,7 @@ function ConfigurationExperimentView() {
     fetch("/api/eval/evaluators")
       .then((res) => (res.ok ? res.json() : { evaluators: [] }))
       .then((body: { evaluators: EvaluatorInfo[] }) =>
-        setEvaluators(body.evaluators.filter((e) => !e.requires_ground_truth)))
+        setEvaluators(body.evaluators.filter((e) => !e.requires_ground_truth && e.id !== FAILURE_ANALYSIS_EVALUATOR)))
       .catch(() => {});
     void refresh();
     const timer = setInterval(() => void refresh(), 8000);

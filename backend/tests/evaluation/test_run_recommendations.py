@@ -261,6 +261,7 @@ def test_every_usable_evaluator_is_offered_grouped_and_recommended(client, monke
         "judge-deleted": "unavailable",
         "judge-gt": "ground_truth",
         "Builtin.Refusal": "lower_is_better",
+        "Builtin.FailureAnalysis": "lower_is_better",
         "Builtin.TrajectoryExactOrderMatch": "ground_truth",
         "Builtin.TrajectoryInOrderMatch": "ground_truth",
         "Builtin.TrajectoryAnyOrderMatch": "ground_truth",
