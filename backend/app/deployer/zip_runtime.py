@@ -175,7 +175,9 @@ def build_zip(
             # --require-hashes: every artifact must match the lock, so a
             # compromised or re-uploaded distribution fails the build instead of
             # shipping.
-            "--require-hashes", "-r", str(lock),
+            # uv already resolved the full target graph. pip would re-evaluate
+            # dependency markers against the build host despite the target flags.
+            "--no-deps", "--require-hashes", "-r", str(lock),
             "-t", str(pkg_dir),
             *pip_platform_args(),
             "--only-binary=:all:",

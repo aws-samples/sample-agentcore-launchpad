@@ -321,7 +321,8 @@ def resolve_requirements_into(
     proc = pip_runner(
         [
             sys.executable, "-m", "pip", "install",
-            "--require-hashes", "-r", str(lock),
+            # Install the target graph without re-evaluating build-host markers.
+            "--no-deps", "--require-hashes", "-r", str(lock),
             "-t", str(src_root),
             *pip_platform_args(),
             "--only-binary=:all:",
