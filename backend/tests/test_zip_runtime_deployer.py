@@ -70,6 +70,7 @@ def test_build_zip_contains_expected_files(tmp_path: Path):
     assert "--only-binary=:all:" in cmd
     # the install must verify against the lock, not re-resolve the declared ranges
     assert "--require-hashes" in cmd
+    assert "--no-deps" in cmd
     assert "-r" in cmd
 
 

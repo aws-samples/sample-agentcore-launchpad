@@ -220,9 +220,12 @@ leaves no record. The stage now runs `uv pip compile --generate-hashes` for the
 deploy target (aarch64, Python 3.13, defined once in
 `app/core/runtime_target.py` so the resolve and the install cannot disagree)
 with `--only-binary=:all:`, then installs those same wheel-only candidates with
-`--require-hashes`. Without the matching binary constraint, the resolver can
-lock an sdist-only release that the Runtime's ARM64 binary-only install
-rejects. A substituted or re-uploaded distribution fails the build. The lock
+`--require-hashes --no-deps`. The non-universal lock contains the full target graph;
+pip only installs it, since pip would otherwise evaluate dependency markers
+against the build host even with target flags. Without the matching binary
+constraint, the resolver can lock an sdist-only release that the Runtime's
+ARM64 binary-only install rejects. A substituted or re-uploaded distribution
+fails the build. The lock
 ships inside the zip as `requirements.lock`, so the artifact carries its own
 bill of materials. There is deliberately no fallback: a resolve failure fails
 the stage.

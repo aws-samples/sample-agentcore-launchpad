@@ -751,6 +751,7 @@ def test_resolve_requirements_pip_args(tmp_path):
     assert "aarch64-manylinux_2_28" in compile_cmd
     install = commands[-1]
     assert "--require-hashes" in install
+    assert "--no-deps" in install
     # …and the install carries the full tag ladder down to manylinux2014: pip
     # does not widen --platform itself, and most wheels are tagged 2_17.
     assert "manylinux_2_28_aarch64" in install
