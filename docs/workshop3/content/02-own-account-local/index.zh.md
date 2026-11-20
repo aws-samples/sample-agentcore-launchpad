@@ -54,7 +54,7 @@ msiexec.exe /i https://awscli.amazonaws.com/AWSCLIV2.msi
 如果本机还没有源码：
 
 ```bash
-git clone --depth 1 --branch v0.0.41 https://github.com/aws-samples/sample-agentcore-launchpad.git
+git clone --depth 1 --branch v0.0.9 https://github.com/aws-samples/sample-agentcore-launchpad.git
 cd sample-agentcore-launchpad
 ```
 

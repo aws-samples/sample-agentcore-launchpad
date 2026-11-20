@@ -15,7 +15,7 @@ Parameters:
     AllowedPattern: "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\\.git)?$"
   GitBranch:
     Type: String
-    Default: v0.0.41
+    Default: v0.0.9
     Description: Git branch or tag to check out.
     AllowedPattern: "^[A-Za-z0-9._/-]+$"
   InstanceType:
