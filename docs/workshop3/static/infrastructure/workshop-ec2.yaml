@@ -96,6 +96,14 @@ Resources:
       RouteTableId: !Ref PublicRouteTable
       SubnetId: !Ref PublicSubnet
 
+  # Accounts with VPC Block Public Access on would cut the instance off from the
+  # internet mid-boot (apt, git clone, CloudFront origin). A no-op when BPA is off.
+  PublicSubnetBpaExclusion:
+    Type: AWS::EC2::VPCBlockPublicAccessExclusion
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      InternetGatewayExclusionMode: allow-bidirectional
+
   WorkshopSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -213,6 +221,7 @@ Resources:
       - DefaultRoute
       - PublicSubnetRouteTableAssociation
       - TransactionSearchLogsPolicy
+      - PublicSubnetBpaExclusion
     CreationPolicy:
       ResourceSignal:
         Count: 1
