@@ -54,8 +54,9 @@ msiexec.exe /i https://awscli.amazonaws.com/AWSCLIV2.msi
 如果本机还没有源码：
 
 ```bash
-git clone --depth 1 --branch v0.0.9 https://github.com/aws-samples/sample-agentcore-launchpad.git
+git clone https://github.com/aws-samples/sample-agentcore-launchpad.git
 cd sample-agentcore-launchpad
+git checkout 24f68417c919ca7413c71b615d1d4311dafe99a6
 ```
 
 从这里开始，本章和后续章节的命令都在本地源码目录中执行。不要使用 Session Manager，也不要运行

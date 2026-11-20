@@ -15,8 +15,9 @@ Parameters:
     AllowedPattern: "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\\.git)?$"
   GitBranch:
     Type: String
-    Default: v0.0.9
-    Description: Git branch or tag to check out.
+    # A full commit SHA, so the lab is reproducible without waiting for a tag.
+    Default: 24f68417c919ca7413c71b615d1d4311dafe99a6
+    Description: Git commit SHA (full 40 chars), tag, or branch to check out.
     AllowedPattern: "^[A-Za-z0-9._/-]+$"
   InstanceType:
     Type: String
@@ -95,6 +96,14 @@ Resources:
     Properties:
       RouteTableId: !Ref PublicRouteTable
       SubnetId: !Ref PublicSubnet
+
+  # Accounts with VPC Block Public Access on would cut the instance off from the
+  # internet mid-boot (apt, git clone, CloudFront origin). A no-op when BPA is off.
+  PublicSubnetBpaExclusion:
+    Type: AWS::EC2::VPCBlockPublicAccessExclusion
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      InternetGatewayExclusionMode: allow-bidirectional
 
   WorkshopSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -213,6 +222,7 @@ Resources:
       - DefaultRoute
       - PublicSubnetRouteTableAssociation
       - TransactionSearchLogsPolicy
+      - PublicSubnetBpaExclusion
     CreationPolicy:
       ResourceSignal:
         Count: 1
@@ -389,9 +399,12 @@ Resources:
 
           install -d -o ubuntu -g ubuntu /home/ubuntu/agentcore_launchpad
           rm -rf /home/ubuntu/agentcore_launchpad
-          runuser -u ubuntu -- \
-            git clone --depth 1 --branch "${GitBranch}" \
-            "${GitRepositoryUrl}" /home/ubuntu/agentcore_launchpad
+          # clone --branch cannot take a commit SHA; fetch-by-ref takes SHA, tag or branch.
+          G="runuser -u ubuntu -- git -C /home/ubuntu/agentcore_launchpad"
+          runuser -u ubuntu -- git init -q /home/ubuntu/agentcore_launchpad
+          $G remote add origin "${GitRepositoryUrl}"
+          $G fetch -q --depth 1 origin "${GitBranch}"
+          $G checkout -q FETCH_HEAD
 
           apt-get install -y nginx
 
