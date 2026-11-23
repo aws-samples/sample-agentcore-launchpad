@@ -617,7 +617,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
         # session storage + BYO mounts (storage-mounts §1.5, §3.2), on create and on
         # every update — UpdateAgentRuntime detaches an omitted list. An MCP server
         # mounts them too: its tools may serve files.
-        mounts = filesystem_configurations(spec) or None
+        mounts = filesystem_configurations(spec, row.id) or None
         if detail := describe_mounts(spec):
             ctx.log(detail)
 
@@ -669,7 +669,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 **_kwargs(),
                 **runtime_config_kwargs(spec, updating=True, live=live),
                 "filesystem_configurations": runtime_update_mounts(
-                    client, runtime_id, spec, live_runtime=live,
+                    client, runtime_id, spec, live_runtime=live, agent_id=row.id,
                     managed_paths=published_mount_paths(db, row.id), vpc=vpc, log=ctx.log),
             }
             updated = agent_iam.retry_iam_propagation(

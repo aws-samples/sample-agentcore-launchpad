@@ -182,6 +182,33 @@ def get_job(db: Session, workspace_id: str, job_id: str) -> dict[str, Any]:
 S3_GATEWAY_DOCS = "https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-s3.html"
 
 
+def s3_gateway_endpoint(facts: dict[str, Any], region: str) -> dict[str, Any]:
+    """Whether an S3 gateway endpoint of ``region`` serves the route tables of the
+    profile's subnets (``network_preflight.gather`` facts): ``ok``, ``unrouted`` (an
+    endpoint exists, some subnet's route table is not on it) or ``missing``."""
+    from app.services import network_preflight
+
+    s3_service = f"com.amazonaws.{region}.s3"
+    gateways = [e for e in facts.get("endpoints") or []
+                if e.get("ServiceName") == s3_service
+                and str(e.get("VpcEndpointType", "")).lower() == "gateway"]
+    routed = {t for e in gateways for t in e.get("RouteTableIds") or []}
+    tables = facts.get("route_tables") or []
+    unrouted = []
+    for subnet in facts["subnets"]:
+        table = network_preflight._route_table_of(subnet["SubnetId"], tables)
+        if table is None or table.get("RouteTableId") not in routed:
+            unrouted.append(subnet["SubnetId"])
+    return {
+        "service_name": s3_service,
+        "endpoint_ids": sorted(e.get("VpcEndpointId", "") for e in gateways),
+        "status": "ok" if gateways and not unrouted
+        else ("unrouted" if gateways else "missing"),
+        "unrouted_subnets": sorted(unrouted),
+        "docs": S3_GATEWAY_DOCS,
+    }
+
+
 def plan(db: Session, workspace: Any, network_profile_id: str,
          storage_id: str | None = None) -> dict[str, Any]:
     """What a create would put into the network profile's VPC, read before anything is
@@ -242,17 +269,7 @@ def plan(db: Session, workspace: Any, network_profile_id: str,
         "required_outbound": {"protocol": "tcp", "port": NFS_PORT, "destination": name},
     } for gid in agent_group_ids]
 
-    s3_service = f"com.amazonaws.{workspace.region}.s3"
-    gateways = [e for e in facts.get("endpoints") or []
-                if e.get("ServiceName") == s3_service
-                and str(e.get("VpcEndpointType", "")).lower() == "gateway"]
-    routed = {t for e in gateways for t in e.get("RouteTableIds") or []}
-    tables = facts.get("route_tables") or []
-    unrouted = []
-    for subnet in facts["subnets"]:
-        table = network_preflight._route_table_of(subnet["SubnetId"], tables)
-        if table is None or table.get("RouteTableId") not in routed:
-            unrouted.append(subnet["SubnetId"])
+    s3_endpoint = s3_gateway_endpoint(facts, workspace.region)
     return {
         "network_profile_id": profile.id,
         "vpc_id": facts.get("vpc_id"),
@@ -268,14 +285,7 @@ def plan(db: Session, workspace: Any, network_profile_id: str,
                            "availability_zone_id": s["availability_zone_id"]}
                           for s in mount_subnets],
         "agent_security_groups": agent_groups,
-        "s3_gateway_endpoint": {
-            "service_name": s3_service,
-            "endpoint_ids": sorted(e.get("VpcEndpointId", "") for e in gateways),
-            "status": "ok" if gateways and not unrouted
-            else ("unrouted" if gateways else "missing"),
-            "unrouted_subnets": sorted(unrouted),
-            "docs": S3_GATEWAY_DOCS,
-        },
+        "s3_gateway_endpoint": s3_endpoint,
         "nat_gateways": sorted(n.get("NatGatewayId", "")
                                for n in facts.get("nat_gateways") or []),
     }

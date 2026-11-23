@@ -51,7 +51,8 @@ def test_a_conflict_at_a_spec_path_is_logged_and_the_spec_wins():
 def spec(monkeypatch):
     # the spec's own entries, without building a VPC-bound AgentSpec
     monkeypatch.setattr(filesystem, "filesystem_configurations",
-                        lambda _spec: [{"sessionStorage": {"mountPath": "/mnt/workspace"}}])
+                        lambda _spec, _agent_id=None: [
+                            {"sessionStorage": {"mountPath": "/mnt/workspace"}}])
     return object()
 
 

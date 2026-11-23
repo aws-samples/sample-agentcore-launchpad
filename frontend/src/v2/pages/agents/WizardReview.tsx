@@ -8,7 +8,7 @@ import {
   byocModelList,
   contextLayerSupported,
   contextLayerVia,
-  hasByoMounts,
+  hasNfsMounts,
   managedGatewayAttached,
   pythonLabel,
   resolveKb,
@@ -303,7 +303,7 @@ export function WizardReview({
         ? profile
           ? <>{profile.name} · {mono(profile.id)}</>
           : t("v2.agents.wizard.networkProfile", { id: form.networkProfileId })
-        : method === "container" && hasByoMounts(form)
+        : method === "container" && hasNfsMounts(form)
           ? mono(`${form.vpcSubnets} · ${form.vpcSgs}`)
           : t("network.public"),
     },

@@ -141,7 +141,7 @@ Resources:
         # whenever a statement changes (backend/tests/test_spoke_template_version.py
         # fails otherwise); the hub compares it with spoke_template.EXPECTED_VERSION.
         - Key: launchpad:template-version
-          Value: "2"
+          Value: "3"
       ManagedPolicyArns:
         - Ref: WorkspaceBedrockTelemetryPolicy
       Policies:
@@ -324,6 +324,24 @@ Resources:
                 Action:
                   - s3:ListAllMyBuckets
                 Resource: "*"
+
+              # The S3 bucket entries of the storage catalog (`s3bucket`): the check
+              # reads the bucket an administrator registered — HeadBucket (ListBucket),
+              # its Region, default encryption, Block Public Access and versioning —
+              # and never writes. Read-only metadata, on any bucket of the account: the
+              # entries name customer buckets, which do not carry the launchpad- prefix.
+              # No object can be read here (the mount runs as the agent's own role), but
+              # HeadBucket needs s3:ListBucket, which also lists key names.
+              - Sid: S3CatalogRead
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:GetBucketVersioning
+                  - s3:GetEncryptionConfiguration
+                  - s3:ListBucket
+                Resource:
+                  Fn::Sub: "arn:${AWS::Partition}:s3:::*"
 
               # ── ECR ────────────────────────────────────────────────────────
               # Receive-only. Images arrive by promotion: the hub copies the tested

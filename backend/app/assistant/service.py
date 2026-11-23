@@ -3011,7 +3011,7 @@ def approve_proposal(
         from app.services import storage_mounts
 
         stored = storage_mounts.normalize_spec_storage(
-            db, row.id, current_project(), spec.model_dump(mode="json"))
+            db, row.id, current_project(), spec.model_dump(mode="json"), creating=True)
         storage_mounts.assert_preflight(db, workspace, stored, current_project())
         spec = AgentSpec.model_validate(stored)
     # 4. ONE short write transaction: lock → recheck principal/workspace → re-read

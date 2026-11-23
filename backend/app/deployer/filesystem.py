@@ -24,8 +24,13 @@ from app.services.agentcore.filesystem_kinds import (  # noqa: F401 — re-expor
 )
 
 
-def filesystem_configurations(spec: AgentSpec) -> list[dict]:
-    """The AWS shapes for ``spec.filesystem``; ``[]`` when nothing is mounted."""
+def filesystem_configurations(spec: AgentSpec, agent_id: str | None = None) -> list[dict]:
+    """The AWS shapes for ``spec.filesystem``; ``[]`` when nothing is mounted.
+
+    ``agent_id`` is the agent the spec belongs to: a per-session S3 bucket mount's
+    prefix names it (``<entry prefix><agent_id>/{runtimeSessionId}/``), so every caller
+    that has the agent must pass it, and a spec with such a mount raises ``ValueError``
+    without one rather than send a wrong prefix."""
     fs = spec.filesystem
     out: list[dict] = []
     if fs.session_storage:
@@ -40,7 +45,7 @@ def filesystem_configurations(spec: AgentSpec) -> list[dict]:
         }})
     from app.services.storage_mounts import filesystem_entries
 
-    out.extend(filesystem_entries(spec))  # catalog mounts (storage-mounts §4.2)
+    out.extend(filesystem_entries(spec, agent_id))  # catalog mounts (storage-mounts §4.2)
     return out
 
 
@@ -91,7 +96,8 @@ def external_entries(live: list[dict] | None, platform_entries: list[dict],
 
 
 def runtime_update_mounts(control, runtime_id: str, spec: AgentSpec, *, managed_paths,
-                          vpc, log, live_runtime: dict | None = None) -> list[dict] | None:
+                          vpc, log, live_runtime: dict | None = None,
+                          agent_id: str | None = None) -> list[dict] | None:
     """``filesystemConfigurations`` for an UpdateAgentRuntime: the spec's entries plus
     the mounts on the live runtime that the platform did not set. Without them the
     update would detach a mount added in the AWS console. A runtime moving to PUBLIC
@@ -100,7 +106,7 @@ def runtime_update_mounts(control, runtime_id: str, spec: AgentSpec, *, managed_
     on PUBLIC and is kept."""
     from app.services.agentcore import runtime as rt
 
-    platform = filesystem_configurations(spec)
+    platform = filesystem_configurations(spec, agent_id)
     # Reuse the deployer's read for both mounts and Runtime billing preservation.
     # Existing callers without a detail still perform exactly one live read.
     detail = live_runtime if live_runtime is not None else rt.get_runtime(control, runtime_id)

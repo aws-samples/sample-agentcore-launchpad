@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { type AgentForm, hasByoMounts } from "../../../lib/agent-spec";
+import { type AgentForm, hasNfsMounts } from "../../../lib/agent-spec";
 import { type NetworkChoice, networkChoices, RUNTIME_NETWORK_PURPOSES } from "../../../lib/api/agent-network";
 import { useNetworkProfiles } from "../../../lib/useNetworkProfiles";
 import { Alert, Card, Field, Segmented, Select, Spin, Tag, type TagTone } from "../../ui";
@@ -30,7 +30,7 @@ export function NetworkSection({ form, set }: Omit<SectionProps, "cat" | "err">)
   const choices: NetworkChoice[] = profiles ? networkChoices(profiles, form.networkProfileId, RUNTIME_NETWORK_PURPOSES) : [];
   const current = choices.find((c) => c.profile.id === form.networkProfileId) ?? null;
   // a container's legacy inline ids (BYO mounts, no profile) stay in the storage card
-  const inline = form.method === "container" && !form.networkProfileId && hasByoMounts(form);
+  const inline = form.method === "container" && !form.networkProfileId && hasNfsMounts(form);
 
   const choose = (next: Mode) => {
     setMode(next);

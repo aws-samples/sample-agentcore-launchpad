@@ -346,8 +346,17 @@ class ByoMount(BaseModel):
 # a storage catalog id (`models/storage.STORAGE_ID_PATTERN`): `datasets`, `skills-lib`
 STORAGE_ID_RE = r"^[a-z0-9][a-z0-9-]{1,31}$"
 # S3 Files + EFS mounts together (catalog + inline), leaving one of AgentCore's five
-# filesystemConfigurations for session storage (storage-mounts §4.2)
+# filesystemConfigurations for session storage (storage-mounts §4.2). The proposal lists
+# of the architect (S3 Files / EFS only) are bounded by it; `FilesystemConfig` itself
+# counts every entry (session storage and S3 buckets included) against the AWS limit.
 MAX_BYO_MOUNTS = 4
+MAX_FILESYSTEM_ENTRIES = 5
+
+# `s3bucket` catalog entries: the bucket is an existing S3 bucket prefix (no catalog
+# prefix may carry an IAM wildcard or the session token — the platform adds the latter)
+BUCKET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+BUCKET_OWNER_RE = re.compile(r"^\d{12}$")
+BUCKET_REGION_RE = re.compile(r"^([a-z]+-){2,3}\d+$")
 
 
 class StorageMountRef(BaseModel):
@@ -358,7 +367,9 @@ class StorageMountRef(BaseModel):
     ``kind`` and ``access_point_arn`` are the catalog entry's, stamped by the server when
     the spec is stored (`services/storage_mounts.normalize_spec_storage`) so the deployers
     map the reference without a catalog read; whatever a client sends there is replaced,
-    and promotion re-stamps them from the target workspace's entry."""
+    and promotion re-stamps them from the target workspace's entry. An ``s3bucket`` entry
+    carries ``bucket`` / ``prefix`` / ``scope`` / ``bucket_owner`` / ``bucket_region`` /
+    ``kms_key_arn`` instead of an access point, stamped the same way."""
 
     model_config = {"extra": "forbid"}
 
@@ -366,8 +377,15 @@ class StorageMountRef(BaseModel):
     # default `/mnt/<storage_id>`
     mount_path: str = Field(default="", max_length=200)
     mode: Literal["ro", "rw"] = "ro"
-    kind: Literal["s3files", "efs"] | None = None
+    kind: Literal["s3files", "efs", "s3bucket"] | None = None
     access_point_arn: str | None = Field(default=None, max_length=2048)
+    # `s3bucket` only (stamped from the catalog entry)
+    bucket: str | None = Field(default=None, max_length=63)
+    prefix: str | None = Field(default=None, max_length=1024)
+    scope: Literal["per_session", "shared"] | None = None
+    bucket_owner: str | None = Field(default=None, max_length=12)
+    bucket_region: str | None = Field(default=None, max_length=32)
+    kms_key_arn: str | None = Field(default=None, max_length=2048)
 
     @model_validator(mode="after")
     def _path(self) -> "StorageMountRef":
@@ -375,16 +393,25 @@ class StorageMountRef(BaseModel):
             self.mount_path = f"/mnt/{self.storage_id}"
         if not re.match(MOUNT_PATH_RE, self.mount_path) or len(self.mount_path) < 6:
             raise ValueError(f"'{self.mount_path}' is not a mount path (/mnt/<name>)")
-        if self.access_point_arn and self.kind:
+        if self.access_point_arn and self.kind in ("s3files", "efs"):
             shape = _S3_FILES_AP_RE if self.kind == "s3files" else _EFS_AP_RE
             if not shape.match(self.access_point_arn):
                 raise ValueError(
                     f"'{self.access_point_arn}' is not an {self.kind} access point ARN"
                 )
+        if self.kind == "s3bucket":
+            if self.bucket and not BUCKET_NAME_RE.match(self.bucket):
+                raise ValueError(f"'{self.bucket}' is not an S3 bucket name")
+            if self.bucket_owner and not BUCKET_OWNER_RE.match(self.bucket_owner):
+                raise ValueError("bucket_owner must be a 12-digit account id")
+            if self.bucket_region and not BUCKET_REGION_RE.match(self.bucket_region):
+                raise ValueError(f"'{self.bucket_region}' is not a region")
         return self
 
     @property
     def resolved(self) -> bool:
+        if self.kind == "s3bucket":
+            return bool(self.bucket and self.scope)
         return bool(self.kind and self.access_point_arn)
 
 
@@ -427,6 +454,18 @@ AgentNetwork = NetworkProfileRef | VpcNetwork
 BYO_MOUNT_METHODS = frozenset({"container", "zip_runtime", "studio", "byoc", "harness"})
 # method → why a BYO mount is refused there (the probe conclusion); empty today
 BYO_MOUNT_UNSUPPORTED: dict[str, str] = {}
+# method → why an `s3bucket` catalog mount (AgentCore `s3BucketMount`) is refused there.
+# Probe P3 (2026-11-23, us-west-2): CreateHarness accepts the entry, but the backing
+# runtime fails CREATE_FAILED ("Each filesystemConfigurations entry must specify exactly
+# one of …") — the harness service drops the member when it forwards the list. A
+# re-probe that passes lifts the refusal by deleting the row.
+BUCKET_MOUNT_UNSUPPORTED: dict[str, str] = {
+    "harness": (
+        "AgentCore's managed Harness does not forward S3 bucket mounts to its backing "
+        "runtime (it fails CREATE_FAILED, probed 2026-11-23) — use a Runtime method "
+        "(zip_runtime, container, byoc)"
+    ),
+}
 
 
 class FilesystemConfig(BaseModel):
@@ -443,11 +482,25 @@ class FilesystemConfig(BaseModel):
     efs: list[ByoMount] = Field(default_factory=list, max_length=2)
     # storage catalog references (storage-mounts §4.2); the inline lists above are the
     # legacy shape, still accepted
-    mounts: list[StorageMountRef] = Field(default_factory=list, max_length=MAX_BYO_MOUNTS)
+    mounts: list[StorageMountRef] = Field(default_factory=list,
+                                          max_length=MAX_FILESYSTEM_ENTRIES)
 
     @property
     def byo(self) -> bool:
         return bool(self.s3_files or self.efs or self.mounts)
+
+    @property
+    def needs_vpc(self) -> bool:
+        """Whether a mount rides NFS (S3 Files / EFS, inline or catalog) and so needs the
+        agent in a VPC. An S3 bucket mount works on PUBLIC; a reference not yet stamped
+        (kind unknown) is checked once it is — by the storage preflight and the stored
+        spec's own validation."""
+        return bool(self.s3_files or self.efs
+                    or any(m.kind in ("s3files", "efs") for m in self.mounts))
+
+    def bucket_mounts(self) -> list[StorageMountRef]:
+        """The catalog mounts of kind ``s3bucket`` (stamped or not)."""
+        return [m for m in self.mounts if m.kind == "s3bucket"]
 
     def byo_mounts(self) -> list[tuple[str, ByoMount]]:
         """``(kind, mount)`` for every inline BYO mount, ``kind`` ∈ {s3files, efs}."""
@@ -459,10 +512,12 @@ class FilesystemConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check(self) -> "FilesystemConfig":
-        if len(self.s3_files) + len(self.efs) + len(self.mounts) > MAX_BYO_MOUNTS:
+        # every filesystemConfigurations entry counts against AgentCore's limit of five
+        limit = MAX_FILESYSTEM_ENTRIES - (1 if self.session_storage else 0)
+        if len(self.s3_files) + len(self.efs) + len(self.mounts) > limit:
             raise ValueError(
-                f"at most {MAX_BYO_MOUNTS} S3 Files / EFS mounts per agent (plus session "
-                "storage)"
+                f"at most {limit} S3 Files / EFS / S3 bucket mounts per agent"
+                + (" (plus session storage)" if self.session_storage else "")
             )
         if len({m.storage_id for m in self.mounts}) != len(self.mounts):
             raise ValueError("a storage entry is mounted once per agent")
@@ -1251,7 +1306,13 @@ class AgentSpec(BaseModel):
                 f"BYO file systems (S3 Files / EFS) are not supported by the "
                 f"{self.method} method ({reason}); it mounts session storage only"
             )
-        if self.network is None:
+        for mount in self.filesystem.bucket_mounts():
+            if self.method in BUCKET_MOUNT_UNSUPPORTED:
+                raise ValueError(
+                    f"S3 bucket mounts ('{mount.storage_id}') are not supported by the "
+                    f"{self.method} method: {BUCKET_MOUNT_UNSUPPORTED[self.method]}"
+                )
+        if self.filesystem.needs_vpc and self.network is None:
             raise ValueError(
                 "BYO file systems (S3 Files / EFS) require VPC network configuration "
                 "— choose a network profile for this agent"

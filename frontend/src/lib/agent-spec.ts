@@ -28,7 +28,7 @@ import {
 } from "./models";
 import { DEFAULT_HARNESS_NATIVE_TOOLS, DEFAULT_TIMEOUT_SECONDS } from "./agent-defaults";
 import { defaultRuntimeConfig, runtimeConfigSupported, runtimeConfigValid } from "./runtime-config";
-import { type CatalogMountRow, catalogMountsSpec, catalogRowsFromSpec, MAX_BYO_MOUNTS } from "./api/storage";
+import { type CatalogMountRow, catalogMountsSpec, catalogRowsFromSpec, maxMounts, rowNeedsVpc } from "./api/storage";
 import { BYO_MOUNT_METHODS } from "./storage-mounts";
 import { emptyStrandsForm, type StrandsForm, strandsFormFromSpec, strandsSpec, strandsValid } from "./strands-builder";
 import {
@@ -895,9 +895,18 @@ export const byocBuiltinRefs = (builtins: readonly string[]) =>
 
 export const byocModelList = (models: string[]) => models.map((m) => m.trim()).filter(Boolean);
 
-/** Any S3 Files / EFS mount: inline by ARN, or picked from the catalog. */
+/** Any S3 Files / EFS / S3 bucket mount: inline by ARN, or picked from the catalog. */
 export const hasByoMounts = (form: Pick<AgentForm, "s3Mounts" | "efsMounts"> & { catalogMounts?: readonly CatalogMountRow[] }) =>
   form.s3Mounts.length > 0 || form.efsMounts.length > 0 || (form.catalogMounts?.length ?? 0) > 0;
+
+/** An S3 Files / EFS mount (NFS): the agent must run in a VPC. An S3 bucket mount does
+ *  not — it works on PUBLIC and VPC alike. */
+export const hasNfsMounts = (form: Pick<AgentForm, "s3Mounts" | "efsMounts"> & { catalogMounts?: readonly CatalogMountRow[] }) =>
+  form.s3Mounts.length > 0 || form.efsMounts.length > 0 || (form.catalogMounts ?? []).some(rowNeedsVpc);
+
+/** The agent mounts an S3 bucket entry from the catalog. */
+export const hasBucketMounts = (form: Pick<AgentForm, "catalogMounts">) =>
+  (form.catalogMounts ?? []).some((r) => r.kind === "s3bucket");
 
 /**
  * `inbound_auth` as the form states it: nothing for a method that cannot carry a
@@ -963,7 +972,7 @@ export function networkSpec(form: AgentForm): Pick<AgentSpecInput, "network"> {
     const ref: NetworkProfileRefInput = { profile_id: form.networkProfileId };
     return { network: ref };
   }
-  if (form.method === "container" && hasByoMounts(form)) {
+  if (form.method === "container" && hasNfsMounts(form)) {
     return { network: { subnets: splitIds(form.vpcSubnets), security_groups: splitIds(form.vpcSgs) } };
   }
   return {};
@@ -1235,7 +1244,7 @@ export interface FilesystemIssues {
   /** `s3:<i>` / `efs:<i>` → which half of the row is invalid */
   rows: Record<string, { arn: boolean; path: boolean }>;
   duplicatePaths: boolean;
-  /** inline + catalog mounts over `MAX_BYO_MOUNTS` */
+  /** inline + catalog mounts over `maxMounts(sessionFs)` (AgentCore's five entries, session storage included) */
   tooMany: boolean;
   vpc: boolean;
 }
@@ -1263,9 +1272,9 @@ export function filesystemIssues(form: AgentForm): FilesystemIssues {
     sessionMount: form.sessionFs && !MOUNT_RE.test(form.sessionMount),
     rows,
     duplicatePaths: new Set(paths).size !== paths.length,
-    tooMany: s3Mounts.length + efsMounts.length + catalogMounts.length > MAX_BYO_MOUNTS,
+    tooMany: s3Mounts.length + efsMounts.length + catalogMounts.length > maxMounts(form.sessionFs),
     vpc:
-      hasByoMounts({ s3Mounts, efsMounts, catalogMounts }) &&
+      hasNfsMounts({ s3Mounts, efsMounts, catalogMounts }) &&
       !form.networkProfileId &&
       (form.method !== "container" ||
         splitIds(form.vpcSubnets).length === 0 ||

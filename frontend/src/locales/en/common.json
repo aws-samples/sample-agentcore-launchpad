@@ -2694,6 +2694,10 @@
     "storage.not_found": "That storage is not in this workspace's catalog.",
     "storage.id_exists": "A storage with this ID is already registered in this workspace.",
     "storage.invalid_access_point": "That is not an S3 Files or EFS access point ARN.",
+    "storage.invalid_bucket": "That is not a usable S3 bucket entry — check the bucket name, the prefix (letters, digits and ! _ . ' ( ) / - only, no wildcards or placeholders), the owner account and the Region. Directory buckets are not supported.",
+    "storage.requires_v2": "S3 bucket storage needs Runtime platform version V2 — switch this agent to V2 in its Runtime settings.",
+    "storage.method_unsupported": "This kind of agent cannot mount S3 bucket storage — the managed Harness does not pass it to its runtime. Use a Runtime method (zip, container or bring-your-own-code).",
+    "storage.policy_too_large": "The S3 bucket mounts need more IAM policy than one role may carry — mount fewer buckets.",
     "storage.mode_exceeds_max": "The storage cannot be mounted with this mode — it allows a narrower mode (switch read-write mounts to read-only first).",
     "storage.in_use": "Agents still mount this storage — remove the mount from them first.",
     "storage.check_failed": "The access point could not be read — check that it exists and that the workspace role may describe it.",
@@ -16139,10 +16143,10 @@
       "nav": "Storage",
       "eyebrow": "Configure",
       "title": "Storage",
-      "sub": "S3 Files and EFS access points agents in {{workspace}} ({{region}}) may mount",
+      "sub": "S3 Files / EFS access points and S3 bucket prefixes agents in {{workspace}} ({{region}}) may mount",
       "create": "Register storage",
       "empty": "No storage registered",
-      "emptyBody": "Register an S3 Files or EFS access point; agents then mount it by id.",
+      "emptyBody": "Register an S3 Files / EFS access point or an S3 bucket prefix; agents then mount it by id.",
       "created": "Registered {{name}}",
       "saved": "Saved {{name}}",
       "archived": "Archived {{name}}",
@@ -16158,14 +16162,15 @@
       "col": {
         "name": "Name",
         "kind": "Kind",
-        "azs": "Mount target AZs",
+        "azs": "Mount targets · bucket",
         "mode": "Max mode · data",
         "check": "Check",
         "users": "Used by"
       },
       "kind": {
         "s3files": "S3 Files",
-        "efs": "EFS"
+        "efs": "EFS",
+        "s3bucket": "S3 bucket"
       },
       "mode": {
         "ro": "read-only",
@@ -16200,7 +16205,28 @@
         "rwHint": "Agents may mount this storage read-write. Agents sharing it need their own locking or separate directories.",
         "errId": "2–32 lowercase letters, digits or '-'",
         "errArn": "Not an S3 Files or EFS access point ARN",
-        "errName": "At most 64 characters"
+        "errName": "At most 64 characters",
+        "kind": "Kind",
+        "kindAccessPoint": "S3 Files / EFS access point",
+        "kindBucket": "S3 bucket",
+        "bucket": "Bucket",
+        "bucketHint": "An existing general purpose bucket (not a directory bucket). The platform never creates or changes it.",
+        "prefix": "Prefix",
+        "prefixHint": "Optional folder inside the bucket, like team/data. Leave empty for the whole bucket. No wildcards or placeholders.",
+        "scope": "Layout",
+        "scopePerSession": "Per session — private to one session of one agent",
+        "scopeShared": "Shared — the prefix as it is, for every session and agent",
+        "scopePerSessionHint": "Each agent session mounts {{path}}. Files of one session are invisible to the next; use it for working and output files.",
+        "scopeSharedHint": "Every agent that mounts it sees {{path}}. Use it for shared datasets; writers need their own locking or folders.",
+        "owner": "Bucket owner account",
+        "ownerHint": "Only for a bucket in another account (12 digits). That account's bucket policy must allow the workspace's agent roles.",
+        "region": "Bucket Region",
+        "regionHint": "Only when the bucket is not in the workspace's Region — AgentCore rejects the mount otherwise.",
+        "errBucket": "Not a general purpose S3 bucket name",
+        "errPrefix": "Letters, digits and ! _ . ' ( ) / - only; no wildcards, placeholders or double slashes",
+        "errOwner": "A 12-digit account id",
+        "errRegion": "Not a Region such as us-east-1",
+        "profileHintBucket": "The check also verifies this network has a route to S3 (a gateway endpoint or a NAT gateway)."
       },
       "detail": {
         "basic": "Storage",
@@ -16220,7 +16246,19 @@
         "version": "Version",
         "endpoint": "Endpoint",
         "path": "Path",
-        "mode": "Mode"
+        "mode": "Mode",
+        "bucketUri": "Bucket prefix",
+        "scope": "Layout",
+        "mountedAs": "Mounted prefix",
+        "encryption": "Encryption",
+        "owner": "Bucket owner",
+        "region": "Bucket Region",
+        "iam": "Role statements agents get",
+        "iamHint": "Added to each mounting agent's own execution role (<agent_id> is that agent). A per-session mount is limited to the session's own folder by aws:AgentCoreRuntimeSourceSid.",
+        "bucketPolicy": "Recommended bucket policy",
+        "bucketPolicyHint": "The platform does not change your bucket. Apply this policy yourself — needed for a bucket in another account, and for per-session folders it also confines each session to its own folder. That confinement denies every Launchpad agent role in the workspace account any other path of this bucket while it runs in a session, so do not apply it to a bucket that other entries or agents also mount.",
+        "copy": "Copy",
+        "copied": "Copied"
       },
       "access": {
         "title": "Project access",
@@ -16246,12 +16284,14 @@
       },
       "picker": {
         "title": "Storage from the catalog",
-        "hint": "Up to {{max}} S3 Files / EFS mounts in total. Read-only unless the storage allows read-write.",
+        "hint": "Up to {{max}} S3 Files / EFS / S3 bucket mounts in total. Read-only unless the storage allows read-write.",
         "choose": "Choose storage…",
         "add": "Add mount",
         "none": "No storage is available to this project. Ask an administrator to register it.",
         "modeTooWide": "This storage can only be mounted read-only",
-        "preflightOk": "Storage preflight passed"
+        "preflightOk": "Storage preflight passed",
+        "needsV2": "S3 bucket storage needs Runtime platform V2 — switch to V2 in Runtime settings.",
+        "noHarness": "A managed Harness cannot mount S3 buckets — use a Runtime method (zip, container or bring-your-own-code)."
       },
       "provision": {
         "open": "Create S3 Files",
@@ -16333,6 +16373,10 @@
         "typeId": "Type {{id}} to confirm",
         "confirm": "Delete",
         "queued": "Deleting {{name}} — follow its progress below"
+      },
+      "scope": {
+        "per_session": "per session",
+        "shared": "shared"
       }
     },
     "menuSettings": {

@@ -4,12 +4,13 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import i18n from "../../../i18n";
 import type { AgentInfo } from "../../../lib/api";
-import type { AgentStorage, StorageEntry, StorageProvisionPlan } from "../../../lib/api/storage";
+import { type AgentStorage, emptyStorageForm, type StorageEntry, type StorageProvisionPlan } from "../../../lib/api/storage";
 import { hostedGroups } from "../../nav";
 import { StorageCardView } from "../agent/StorageCard";
 import { ProvisionJobs } from "./ProvisionJobs";
 import { ProvisionPlan } from "./ProvisionPlan";
 import { StorageTable } from "./Storage";
+import { RegisterDialog } from "./RegisterDialog";
 import { StorageDetail } from "./StorageDetail";
 
 const agent = { id: "a1", name: "lab", method: "container", status: "active", spec: {} } as unknown as AgentInfo;
@@ -152,6 +153,103 @@ describe("storage page", () => {
     const admin = hostedGroups(true).flatMap((g) => g.items.map((i) => i.to));
     expect(admin.indexOf("/v3/storage")).toBe(admin.indexOf("/v3/network") + 1);
     expect(hostedGroups(false).flatMap((g) => g.items.map((i) => i.to))).not.toContain("/v3/storage");
+  });
+});
+
+const bucketEntry: StorageEntry = {
+  ...entry,
+  id: "reports",
+  name: "Team reports",
+  kind: "s3bucket",
+  access_point_arn: "",
+  file_system_arn: null,
+  bucket_arn: null,
+  posix_uid: null,
+  posix_gid: null,
+  root_directory: null,
+  mount_target_azs: [],
+  mount_targets: [],
+  vpc_id: null,
+  bucket: "acme-data",
+  prefix: "team/",
+  scope: "per_session",
+  bucket_owner: "444455556666",
+  bucket_region: "us-east-1",
+  encryption: "sse-kms",
+  kms_key_arn: "arn:aws:kms:us-west-2:111122223333:key/abcd",
+  max_mode: "rw",
+  data_class: "scratch",
+  status: "ok",
+  check_results: [{ check: "s3.bucket", severity: "ok", message: "the bucket 'acme-data' is reachable" }],
+  iam_preview: [{ Effect: "Allow", Action: "s3:ListBucket", Resource: "arn:aws:s3:::acme-data" }],
+  bucket_policy: { Version: "2012-10-17", Statement: [{ Sid: "LaunchpadAgentsList" }] },
+  agents: [],
+  writers: 0,
+  multi_writer: false,
+};
+
+describe("S3 bucket storage", () => {
+  beforeAll(async () => {
+    vi.stubGlobal("document", { documentElement: {} });
+    await i18n.changeLanguage("en");
+  });
+
+  it("lists a bucket entry by its prefix, not by mount target AZs", () => {
+    const html = render(<StorageTable entries={[bucketEntry]} selectedId="" busyId={null} onSelect={() => {}} onCheck={() => {}} onEdit={() => {}} onArchive={() => {}} />);
+    expect(html).toContain("Team reports");
+    expect(html).toContain("S3 bucket");
+    expect(html).toContain("s3://acme-data/team/");
+  });
+
+  it("shows the bucket facts, the role statements and the bucket policy to copy", () => {
+    const html = render(<StorageDetail entry={bucketEntry} />);
+    expect(html).toContain("s3://acme-data/team/");
+    expect(html).toContain("s3://acme-data/team/&lt;agent_id&gt;/&lt;session_id&gt;/");
+    expect(html).toContain("per session");
+    expect(html).toContain("444455556666");
+    expect(html).toContain("us-east-1");
+    expect(html).toContain("sse-kms");
+    expect(html).toContain("the bucket &#x27;acme-data&#x27; is reachable");
+    expect(html).toContain('data-testid="v3-storage-iam"');
+    expect(html).toContain("s3:ListBucket");
+    expect(html).toContain('data-testid="v3-storage-bucket-policy"');
+    expect(html).toContain("LaunchpadAgentsList");
+    // no access point, file system or POSIX rows for a bucket
+    expect(html).not.toContain("POSIX identity");
+    expect(html).not.toContain("Access point ARN");
+  });
+
+  it("registers a bucket prefix: bucket, prefix, layout with its explainer, owner and Region", () => {
+    const form = { ...emptyStorageForm(), kind: "s3bucket" as const, bucket: "acme-data", prefix: "team" };
+    const html = render(<RegisterDialog creating initial={form} profiles={[]} onClose={() => {}} onSubmit={async () => {}} />);
+    expect(html).toContain("Bucket owner account");
+    expect(html).toContain("Bucket Region");
+    expect(html).toContain('data-testid="v3-storage-scope-per_session"');
+    expect(html).toContain('data-testid="v3-storage-scope-shared"');
+    expect(html).toContain("s3://acme-data/team/&lt;agent_id&gt;/&lt;session_id&gt;/");
+    expect(html).not.toContain("Access point ARN");
+    const ap = render(<RegisterDialog creating initial={emptyStorageForm()} profiles={[]} onClose={() => {}} onSubmit={async () => {}} />);
+    expect(ap).toContain("Access point ARN");
+    expect(ap).not.toContain("Bucket owner account");
+  });
+
+  it("shows a registered bucket entry's layout read-only", () => {
+    const form = { ...emptyStorageForm(), kind: "s3bucket" as const, bucket: "acme-data", scope: "shared" as const };
+    const html = render(<RegisterDialog creating={false} initial={form} profiles={[]} onClose={() => {}} onSubmit={async () => {}} />);
+    expect(html).not.toContain('data-testid="v3-storage-scope-shared"');
+    expect(html).toContain("Shared — the prefix as it is");
+  });
+
+  it("lists a catalog bucket mount on the agent's card with its scope", () => {
+    const html = render(<StorageCardView agent={agent} loading={false} error={null} data={{
+      agent_id: "a1", version: "3", session_storage: "/mnt/workspace", inline: [],
+      mounts: [{ storage_id: "reports", mount_path: "/mnt/reports", mode: "rw", missing: false, entry: {
+        name: "Team reports", kind: "s3bucket", bucket: "acme-data", prefix: "team/", scope: "per_session",
+        status: "ok", max_mode: "rw", data_class: "scratch", archived: false, checked_at: null, blocking: 0, warnings: 0 } }],
+    }} />);
+    expect(html).toContain("Team reports");
+    expect(html).toContain("s3://acme-data/team/");
+    expect(html).toContain("per session");
   });
 });
 

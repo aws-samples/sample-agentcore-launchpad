@@ -486,7 +486,7 @@ def test_historical_canary_completion_does_not_drop_target_explicit_choice(monke
 def test_candidate_mint_itself_carries_explicit_target_choice(monkeypatch, tmp_path):
     edited = AgentSpec(**spec_input())
     agent = SimpleNamespace(
-        resource_id="billing_rt-abcdefghij", name=edited.name, project_id=None,
+        id="a" * 32, resource_id="billing_rt-abcdefghij", name=edited.name, project_id=None,
         workspace_id="default", spec=spec_input(runtime_config=BASELINE),
     )
     control = VersionedControl()

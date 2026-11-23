@@ -9,6 +9,7 @@ import { useAuth } from "../../../auth/auth-context";
 import { ErrorCallout } from "../../../components/ErrorCallout";
 import { networkApi } from "../../../lib/api/networkProfiles";
 import {
+  bucketUri,
   checksOf,
   countChecks,
   emptyStorageForm,
@@ -34,7 +35,13 @@ import { StorageDetail } from "./StorageDetail";
 const toForm = (e: StorageEntry): StorageForm => ({
   id: e.id,
   name: e.name,
+  kind: e.kind,
   access_point_arn: e.access_point_arn,
+  bucket: e.bucket ?? "",
+  prefix: e.prefix ?? "",
+  scope: e.scope ?? "per_session",
+  bucket_owner: e.bucket_owner ?? "",
+  bucket_region: e.bucket_region ?? "",
   max_mode: e.max_mode,
   data_class: e.data_class,
   network_profile_id: e.network_profile_id ?? "",
@@ -42,7 +49,7 @@ const toForm = (e: StorageEntry): StorageForm => ({
 
 /**
  * Configure → Storage (storage-mounts §10; platform administrators): the workspace's
- * storage catalog — register an S3 Files / EFS access point, run its check and read the
+ * storage catalog — register an S3 Files / EFS access point or an S3 bucket prefix, run its check and read the
  * results, edit / archive it, the shared view (who mounts it, how), and the per-project
  * allowed set. Workspace-scoped (`X-Workspace`); `?id=` opens one entry's detail.
  */
@@ -270,7 +277,9 @@ export function StorageTable({
                 </div>
               </td>
               <td>{t(`v3.storage.kind.${e.kind}`)}</td>
-              <td className="mono">{e.mount_target_azs.join(", ") || "—"}</td>
+              <td className="mono">
+                {e.kind === "s3bucket" ? bucketUri(e) : e.mount_target_azs.join(", ") || "—"}
+              </td>
               <td>
                 {t(`v3.storage.mode.${e.max_mode}`)} · {t(`v3.storage.dataClass.${e.data_class}`)}
               </td>

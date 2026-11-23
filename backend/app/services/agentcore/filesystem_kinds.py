@@ -29,6 +29,15 @@ SESSION_TOKEN = "{runtimeSessionId}"
 # The live-view label of each member (`storage_mounts.live_mounts`).
 LIVE_KIND = {S3_FILES_KIND: "s3files", EFS_KIND: "efs", S3_BUCKET_KIND: "s3bucket"}
 
+# The ``s3bucket`` catalog kind's layout (`models/storage.StorageMount.scope`):
+# ``per_session`` mounts ``<entry prefix><agent id>/{runtimeSessionId}/`` (private to one
+# session of one agent, platform-forced), ``shared`` mounts the entry prefix as it is.
+SCOPE_PER_SESSION = "per_session"
+SCOPE_SHARED = "shared"
+# What the role policy writes where the runtime substitutes the session id
+# (``aws:AgentCoreRuntimeSourceSid`` is the invoking session's id, probed live).
+SOURCE_SID_VAR = "${aws:AgentCoreRuntimeSourceSid}"
+
 
 def member_kind(entry: dict[str, Any]) -> str:
     """The union key of one filesystemConfigurations entry ('' if it has none)."""
@@ -48,3 +57,21 @@ def per_session_prefix(entry: dict[str, Any]) -> bool:
     if member_kind(entry) != S3_BUCKET_KIND:
         return False
     return SESSION_TOKEN in str((entry.get(S3_BUCKET_KIND) or {}).get("prefix") or "")
+
+
+def mounted_prefix(entry_prefix: str | None, scope: str | None, agent_id: str | None) -> str:
+    """The ``prefix`` an ``s3BucketMount`` of a catalog entry carries: the entry prefix
+    (``''`` or ``x/y/``) for a shared entry, ``<entry prefix><agent id>/{runtimeSessionId}/``
+    for a per-session one. A per-session mount cannot be rendered without its agent."""
+    base = entry_prefix or ""
+    if scope != SCOPE_PER_SESSION:
+        return base
+    if not agent_id:
+        raise ValueError("a per-session S3 bucket mount needs its agent id")
+    return f"{base}{agent_id}/{SESSION_TOKEN}/"
+
+
+def iam_prefix(prefix: str) -> str:
+    """``prefix`` as an IAM policy writes it: the session token becomes the
+    ``aws:AgentCoreRuntimeSourceSid`` variable."""
+    return prefix.replace(SESSION_TOKEN, SOURCE_SID_VAR)

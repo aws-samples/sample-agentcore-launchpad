@@ -136,6 +136,17 @@ def _shared_kb_statements(inp: BoundaryInputs) -> list[dict[str, Any]]:
 EXTRA_BOUNDARY_STATEMENT_BUILDERS.append(_shared_kb_statements)
 
 
+def _storage_bucket_statements(inp: BoundaryInputs) -> list[dict[str, Any]]:
+    """S3 bucket entries allowed to the project (the mount runs under the boundary,
+    probe P9, 2026-11-23)."""
+    from app.services import storage_mounts
+
+    return storage_mounts.boundary_statements(inp)
+
+
+EXTRA_BOUNDARY_STATEMENT_BUILDERS.append(_storage_bucket_statements)
+
+
 # ── the document ──────────────────────────────────────────────────────────────
 
 

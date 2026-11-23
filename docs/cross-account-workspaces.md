@@ -84,6 +84,14 @@ aws cloudformation deploy \
 IAM is global, so the region of this deployment does not matter — the role
 covers every region you register for that account.
 
+The standard template is larger than CloudFormation's 51,200-byte limit for a
+template passed inline, so `deploy` needs somewhere to stage it: add
+`--s3-bucket <a bucket in the stack's region>` to the command (the CLI uploads the
+template and passes a `TemplateURL`), or upload the file in the CloudFormation console
+(**Upload a template file**, which stages it in S3 for you). The same applies to the
+update command the console prints for an `outdated` stack. The prod template is
+smaller and deploys inline.
+
 The stack outputs `RoleArn`; it must equal what you registered in step 1.
 
 ### 2b. Check the pair before you provision (optional, one second)

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import en from "../locales/en/common.json";
 import zh from "../locales/zh-CN/common.json";
-import { BYO_MOUNT_METHODS, byoMethod, byoRowsMode, mountNeedsProfile } from "./storage-mounts";
+import { BYO_MOUNT_METHODS, bucketMountIssue, byoMethod, byoRowsMode, mountNeedsProfile } from "./storage-mounts";
 
 describe("BYO mount methods (storage-mounts §3)", () => {
   it("lists every method, as the backend does", () => {
@@ -51,6 +51,35 @@ describe("storage.mount locales", () => {
       k.split(".").reduce<unknown>((o, part) => (o as Record<string, unknown>)[part], zh.storage.mount),
     )) {
       expect(String(text)).not.toMatch(/[一-鿿][,;:?!]|[,;:?!]\s*[一-鿿]/);
+    }
+  });
+});
+
+describe("bucketMountIssue (an S3 bucket mount needs a Runtime on platform V2)", () => {
+  const v2 = { platform_version: "V2" };
+  it("names nothing for any other kind of storage", () => {
+    expect(bucketMountIssue("s3files", "harness", null)).toBeNull();
+    expect(bucketMountIssue(undefined, "zip_runtime", null)).toBeNull();
+  });
+
+  it("refuses the managed Harness, whatever its settings", () => {
+    expect(bucketMountIssue("s3bucket", "harness", v2)).toBe("noHarness");
+  });
+
+  it("asks for V2 until it is chosen explicitly (V1, or the settings left unset)", () => {
+    expect(bucketMountIssue("s3bucket", "zip_runtime", { platform_version: "V1" })).toBe("needsV2");
+    expect(bucketMountIssue("s3bucket", "container", null)).toBe("needsV2");
+    expect(bucketMountIssue("s3bucket", "byoc", undefined)).toBe("needsV2");
+    expect(bucketMountIssue("s3bucket", "zip_runtime", v2)).toBeNull();
+  });
+});
+
+describe("the picker's V2 and Harness copy", () => {
+  it("exists in both locales", () => {
+    for (const locale of [en, zh]) {
+      const picker = (locale as { v3: { storage: { picker: Record<string, string> } } }).v3.storage.picker;
+      expect(picker.needsV2).toBeTruthy();
+      expect(picker.noHarness).toBeTruthy();
     }
   });
 });

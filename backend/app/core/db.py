@@ -517,6 +517,7 @@ def _migrate(bind) -> None:
     _migrate_user_external_identity(bind)
     _migrate_sso_saml_scim_columns(bind)
     _migrate_agent_teardown_pending(bind)
+    _migrate_storage_bucket_columns(bind)
 
 
 def _migrate_department_settings(bind) -> None:
@@ -2215,3 +2216,27 @@ def _migrate_agent_teardown_pending(bind) -> None:
     if "teardown_pending_at" not in {c["name"] for c in inspector.get_columns("agents")}:
         with bind.begin() as conn:
             conn.execute(text("ALTER TABLE agents ADD COLUMN teardown_pending_at TIMESTAMP"))
+
+
+def _migrate_storage_bucket_columns(bind) -> None:
+    """The `s3bucket` storage-catalog kind's columns (`models/storage.StorageMount`):
+    NULL on every existing S3 Files / EFS row, which never reads them."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    if "storage_mounts" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("storage_mounts")}
+    columns = {
+        "bucket": "VARCHAR(63)",
+        "prefix": "VARCHAR(1024)",
+        "scope": "VARCHAR(16)",
+        "bucket_owner": "VARCHAR(12)",
+        "bucket_region": "VARCHAR(32)",
+        "encryption": "VARCHAR(16)",
+        "kms_key_arn": "VARCHAR(2048)",
+    }
+    with bind.begin() as conn:
+        for name, ddl in columns.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE storage_mounts ADD COLUMN {name} {ddl}"))

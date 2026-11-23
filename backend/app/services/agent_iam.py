@@ -988,7 +988,8 @@ def _skill_prefix(skill_path: str) -> str:
 # simulator plus live UpdateAgentRuntime probes (2026-07-13).
 # ---------------------------------------------------------------------------
 
-def fs_policy_document(spec: AgentSpec) -> dict | None:
+def fs_policy_document(spec: AgentSpec, agent_id: str | None = None,
+                       partition: str = "aws") -> dict | None:
     """Inline policy granting mount access to the BYO access points.
 
     S3 Files APs embed the file-system ARN (strip '/access-point/…'); EFS APs don't —
@@ -1000,11 +1001,16 @@ def fs_policy_document(spec: AgentSpec) -> dict | None:
       s3files:AccessPointArn condition key → its own unconditioned statement;
     - AgentCore's create/update validation ALSO requires ListMountTargets on the
       file system (undocumented).
+
+    S3 bucket mounts (storage catalog kind ``s3bucket``) add prefix-scoped S3 statements;
+    a per-session one is scoped to ``${aws:AgentCoreRuntimeSourceSid}`` under
+    ``<entry prefix><agent_id>/``, so ``agent_id`` is required for those.
     """
     # inline (read-write) and catalog (per-mode) mounts, one builder (storage-mounts §4.3)
     from app.services.storage_mounts import storage_iam_statements
 
-    statements: list[dict] = storage_iam_statements(spec)
+    statements: list[dict] = storage_iam_statements(
+        spec, agent_id=agent_id, partition=partition)
     if not statements:
         return None
     return {"Version": "2012-10-17", "Statement": statements}
@@ -1108,7 +1114,7 @@ def ensure_role(
             )
         ),
     )
-    _sync_fs_policy(iam, name, agent, spec, log)
+    _sync_fs_policy(iam, name, agent, spec, log, ctx.partition)
     return role_arn
 
 
@@ -1131,11 +1137,12 @@ def _resolves_to_jwt(agent: Agent) -> bool:
 
 
 def _sync_fs_policy(
-    iam: Any, role_name: str, agent: Agent, spec: AgentSpec, log: Callable[[str], None]
+    iam: Any, role_name: str, agent: Agent, spec: AgentSpec, log: Callable[[str], None],
+    partition: str = "aws",
 ) -> None:
     """Attach the BYO-mount policy, or drop a stale one when the mounts were removed
     on re-publish."""
-    policy = fs_policy_document(spec)
+    policy = fs_policy_document(spec, agent.id, partition)
     name = fs_policy_name(agent.name)
     if policy:
         iam.put_role_policy(
@@ -1201,7 +1208,7 @@ def provision_execution_role(
                           cost_tags.entry(cost_tags.IAM_ROLE, name=name),
                           cost_tags.agent_tags(agent, workspace.id), log)
     detail = f"iam role · {name}"
-    if fs_policy_document(spec):
+    if fs_policy_document(spec, agent.id, ctx.partition):
         detail += f" (+ {fs_policy_name(agent.name)})"
     if boundary is not None:
         detail += f" · boundary {boundary.label}"

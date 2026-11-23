@@ -77,7 +77,8 @@ def test_a_catalog_reference_defaults_to_read_only_under_its_id():
 
 
 @pytest.mark.parametrize("filesystem, match", [
-    ({"mounts": [{"storage_id": "datasets"}]}, "require VPC network"),
+    ({"mounts": [{"storage_id": "datasets", "kind": "s3files", "access_point_arn": S3_AP}]},
+     "require VPC network"),
     ({"mounts": [{"storage_id": "Bad Id"}]}, "storage_id"),
     ({"mounts": [{"storage_id": "a1"}, {"storage_id": "a1", "mount_path": "/mnt/b"}]},
      "mounted once"),

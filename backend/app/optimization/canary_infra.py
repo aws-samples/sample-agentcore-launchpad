@@ -96,7 +96,7 @@ def _candidate_mounts(live: dict, spec: Any, agent: Any, log: Any) -> list[dict]
     from app.deployer.filesystem import merge_live, mount_path, needs_vpc
     from app.deployer.mounts import manifest_paths
 
-    platform = filesystem_configurations(spec)
+    platform = filesystem_configurations(spec, agent.id)
     merged = merge_live(live.get("filesystemConfigurations"), platform,
                         managed_paths=manifest_paths(agent.spec))
     kept = merged[len(platform):]

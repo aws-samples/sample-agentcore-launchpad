@@ -326,6 +326,62 @@ def test_every_identity_grant_survives_the_boundary():
                         )
 
 
+def test_s3_bucket_mount_grants_survive_the_boundary():
+    """An `s3bucket` catalog mount's role statements (per-session with the
+    `aws:AgentCoreRuntimeSourceSid` variable, shared, KMS) fit under the boundary of a
+    project the entries are allowed to — and nothing else on S3 opens (probe P9: the mount
+    runs under the boundary, so without these the mount fails 424 access denied)."""
+    from app.models.ledger import Workspace
+    from app.services import storage_mounts
+    from tests.conftest import TEST_PROJECT
+
+    kms = f"arn:aws:kms:{REGION}:{ACCT}:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+    agent_id = "b" * 32
+    sid_var = "${aws:AgentCoreRuntimeSourceSid}"
+    sid = "0123456789012345678901234567890123456789"
+    db = SessionLocal()
+    try:
+        for entry in ({"id": "reports", "bucket": "acme-data", "prefix": "team",
+                       "scope": "per_session", "max_mode": "rw"},
+                      {"id": "lake", "bucket": "acme-lake", "scope": "shared"}):
+            storage_mounts.register(db, DEFAULT_WORKSPACE_ID, {**entry, "kind": "s3bucket"}, "o")
+        db.query(storage_mounts.StorageMount).filter_by(id="reports").one().kms_key_arn = kms
+        db.commit()
+        storage_mounts.set_project_entries(db, DEFAULT_WORKSPACE_ID, TEST_PROJECT,
+                                           ["reports", "lake"])
+        workspace = db.get(Workspace, DEFAULT_WORKSPACE_ID)
+        inp = _inputs(TEST_PROJECT, account_id=workspace.account_id, region=workspace.region)
+        stored = storage_mounts.normalize_spec_storage(
+            db, DEFAULT_WORKSPACE_ID, TEST_PROJECT,
+            {"name": "probe", "method": "zip_runtime", "system_prompt": "p",
+             "runtime_config": {"platform_version": "V2", "billing_model": "consumption"},
+             "filesystem": {"mounts": [{"storage_id": "reports", "mode": "rw"},
+                                       {"storage_id": "lake", "mode": "ro"}]}})
+    finally:
+        db.close()
+    boundary = boundary_policy_document(inp)
+    document = agent_iam.fs_policy_document(AgentSpec.model_validate(stored), agent_id)
+    assert document and any("kms:Decrypt" in _as_list(st["Action"])
+                            for st in document["Statement"])
+    for statement in document["Statement"]:
+        condition = json.loads(json.dumps(statement.get("Condition") or {}).replace(sid_var, sid))
+        prefixes = (condition.get("StringLike") or {}).get("s3:prefix") or [""]
+        for action in _as_list(statement["Action"]):
+            for resource in _as_list(statement["Resource"]):
+                concrete = resource.replace(sid_var, sid).replace("*", "x1")
+                for prefix in prefixes:
+                    context = {"s3:prefix": prefix.replace("*", "x1")}
+                    assert _allowed(boundary, action, concrete, context), (action, concrete)
+    # …and the boundary opens no other bucket, nor a prefix outside the entry's
+    assert not _allowed(boundary, "s3:GetObject", "arn:aws:s3:::someone-else/x")
+    assert not _allowed(boundary, "s3:ListBucket", "arn:aws:s3:::acme-data",
+                        {"s3:prefix": "other/"})
+    # a project the entries are not allowed to gets nothing of it
+    other = boundary_policy_document(_inputs("beta", account_id=inp.account_id,
+                                             region=inp.region))
+    assert not _allowed(other, "s3:GetObject", "arn:aws:s3:::acme-data/team/x")
+
+
 def test_extra_statement_builders_reach_the_identity_policy(monkeypatch):
     seen: list[Any] = []
 

@@ -16,6 +16,7 @@ import {
   DISPLAY_NAME_MAX,
   filesystemIssues,
   hasByoMounts,
+  hasNfsMounts,
   managedGatewayAttached,
   MAX_MOUNTS_PER_KIND,
   type MountRow,
@@ -43,8 +44,9 @@ import {
 import {
   type CatalogMountRow,
   catalogMountsSpec,
-  MAX_BYO_MOUNTS,
+  maxMounts,
   modeAllowed,
+  mountedPrefixHint,
   newCatalogRow,
   pickable,
   type StorageEntry,
@@ -52,7 +54,8 @@ import {
   storageApi,
 } from "../../../lib/api/storage";
 import { useModelCatalog } from "../../../lib/model-catalog";
-import { byoRowsMode, mountNeedsProfile } from "../../../lib/storage-mounts";
+import { bucketMountIssue, byoRowsMode, mountNeedsProfile } from "../../../lib/storage-mounts";
+import { runtimeConfigSupported } from "../../../lib/runtime-config";
 import { CUSTOM_MODEL_OPTION, type ModelSource, modelOptionsFor } from "../../../lib/models";
 import { useAuth } from "../../../auth/auth-context";
 import { HintLabel } from "../../Glossary";
@@ -478,7 +481,8 @@ function CatalogMountsField({ form, set, inlineCount }: Pick<SectionProps, "set"
     };
   }, []);
 
-  const key = JSON.stringify([rows, form.networkProfileId, form.method]);
+  const platform = runtimeConfigSupported(form.method) ? form.runtimeConfig?.platform_version ?? null : null;
+  const key = JSON.stringify([rows, form.networkProfileId, form.method, platform]);
   useEffect(() => {
     if (rows.length === 0) {
       setReport(null);
@@ -488,7 +492,10 @@ function CatalogMountsField({ form, set, inlineCount }: Pick<SectionProps, "set"
     const timer = window.setTimeout(() => {
       setChecking(true);
       storageApi
-        .preflight({ mounts: catalogMountsSpec(rows), network_profile_id: form.networkProfileId || null, method: form.method })
+        .preflight({
+          mounts: catalogMountsSpec(rows), network_profile_id: form.networkProfileId || null, method: form.method,
+          ...(platform ? { platform_version: platform } : {}),
+        })
         .then((res) => live && setReport(res))
         .catch((e: unknown) => live && setReport({ status: "blocked", results: [{ check: "preflight", severity: "block", message: errorMessage(e) }] }))
         .finally(() => live && setChecking(false));
@@ -502,11 +509,18 @@ function CatalogMountsField({ form, set, inlineCount }: Pick<SectionProps, "set"
   }, [key]);
 
   const byId = new Map((entries ?? []).map((e) => [e.id, e]));
-  const options = pickable(entries ?? [], rows).map((e) => ({ value: e.id, label: `${e.name} (${e.id})` }));
-  const full = rows.length + inlineCount >= MAX_BYO_MOUNTS;
+  // an S3 bucket mount: Runtime methods only (the Harness drops it), and platform V2
+  const harness = form.method === "harness";
+  const options = pickable(entries ?? [], rows).map((e) => ({
+    value: e.id,
+    label: `${e.name} (${e.id})${e.kind === "s3bucket" ? ` · ${t("v3.storage.kind.s3bucket")}` : ""}`,
+    disabled: harness && e.kind === "s3bucket",
+  }));
+  const limit = maxMounts(form.sessionFs);
+  const full = rows.length + inlineCount >= limit;
   const patch = (i: number, change: Partial<CatalogMountRow>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...change } : r)));
   return (
-    <Field label={t("v3.storage.picker.title")} hint={t("v3.storage.picker.hint", { max: MAX_BYO_MOUNTS })}>
+    <Field label={t("v3.storage.picker.title")} hint={t("v3.storage.picker.hint", { max: limit })}>
       {entries === null ? <Spin /> : (
         <div className="v2-agents-rows" data-testid="v2-agent-fs-catalog">
           {loadError && <Alert tone="error">{loadError}</Alert>}
@@ -514,7 +528,12 @@ function CatalogMountsField({ form, set, inlineCount }: Pick<SectionProps, "set"
             const entry = byId.get(row.storageId);
             return (
               <div key={row.storageId} className="v2-agents-row mount">
-                <span className="mono" title={entry?.access_point_arn}>{entry ? `${entry.name} (${row.storageId})` : row.storageId}</span>
+                <span className="mono" title={entry?.kind === "s3bucket" ? mountedPrefixHint(entry) : entry?.access_point_arn}>
+                  {entry ? `${entry.name} (${row.storageId})` : row.storageId}
+                  {entry?.kind === "s3bucket" && entry.scope && (
+                    <small> · {t(`v3.storage.scope.${entry.scope}`)}</small>
+                  )}
+                </span>
                 <input
                   className="v2-input mono"
                   value={row.path}
@@ -534,13 +553,17 @@ function CatalogMountsField({ form, set, inlineCount }: Pick<SectionProps, "set"
                 />
                 <RemoveButton onClick={() => setRows(rows.filter((_, j) => j !== i))} />
                 {entry && !modeAllowed(row, entry) && <span className="v2-agents-err">{t("v3.storage.picker.modeTooWide")}</span>}
+                {(() => {
+                  const issue = bucketMountIssue(entry?.kind, form.method, form.runtimeConfig);
+                  return issue && <span className="v2-agents-err" data-testid={`v2-agent-fs-catalog-${issue}-${i}`}>{t(`v3.storage.picker.${issue}`)}</span>;
+                })()}
               </div>
             );
           })}
           {options.length > 0 && !full ? (
             <div style={{ display: "flex", gap: 8 }}>
               <Select value={pick} options={options} placeholder={t("v3.storage.picker.choose")} onChange={setPick} testId="v2-agent-fs-catalog-pick" />
-              <Button size="sm" disabled={!pick} onClick={() => { setRows([...rows, newCatalogRow(pick)]); setPick(""); }} testId="v2-agent-fs-catalog-add">
+              <Button size="sm" disabled={!pick} onClick={() => { setRows([...rows, newCatalogRow(pick, byId.get(pick)?.kind)]); setPick(""); }} testId="v2-agent-fs-catalog-add">
                 <Plus size={13} aria-hidden="true" />
                 {t("v3.storage.picker.add")}
               </Button>
@@ -586,7 +609,7 @@ export function FilesystemCard({
   const rowsMode = byoAllowed ? byoRowsMode(form.method, isAdmin, byo) : "hidden";
   const editable = rowsMode === "edit";
   const { profiles } = useNetworkProfiles();
-  const needsProfile = mountNeedsProfile({ method: form.method, networkProfileId: form.networkProfileId, hasByo: byo });
+  const needsProfile = mountNeedsProfile({ method: form.method, networkProfileId: form.networkProfileId, hasByo: byoAllowed && hasNfsMounts(form) });
   const show = (on: boolean, key: string) => (touched && on ? t(key) : undefined);
   const kinds = [
     { kind: "s3" as const, field: "s3Mounts" as const, label: "S3 Files", ph: "create.configure.fsS3ArnPlaceholder" },
@@ -690,7 +713,7 @@ export function FilesystemCard({
           <CatalogMountsField form={form} set={set} inlineCount={form.s3Mounts.length + form.efsMounts.length} />
         )}
         {touched && issues.duplicatePaths && <span className="v2-agents-err">{t("v2.agents.wizard.errDupPath")}</span>}
-        {issues.tooMany && <span className="v2-agents-err" data-testid="v2-agent-fs-too-many">{t("v2.agents.wizard.errTooManyMounts", { max: MAX_BYO_MOUNTS })}</span>}
+        {issues.tooMany && <span className="v2-agents-err" data-testid="v2-agent-fs-too-many">{t("v2.agents.wizard.errTooManyMounts", { max: maxMounts(form.sessionFs) })}</span>}
         {needsProfile && (
           <div data-testid="v2-agent-fs-needs-profile">
             <Alert tone={touched ? "error" : "warn"}>{t("storage.mount.needsProfile")}</Alert>

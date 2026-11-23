@@ -179,7 +179,7 @@ def test_canary_mint_preserves_live_billing_and_restore_uses_original_or_explici
 ):
     spec = deploy_spec(method, config)
     stub = LiveControl()
-    agent = SimpleNamespace(name=spec.name, resource_id="billing_rt-abcdefghij",
+    agent = SimpleNamespace(id="a" * 32, name=spec.name, resource_id="billing_rt-abcdefghij",
                             project_id=None, workspace_id="default", spec=spec.model_dump(),
                             version="1")
     original = deepcopy(vars(agent))
