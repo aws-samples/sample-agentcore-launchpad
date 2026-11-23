@@ -26,6 +26,8 @@ import re
 from typing import Any
 from urllib.parse import quote
 
+from botocore.config import Config
+
 from app.core.errors import AppError, NotFoundError, cleanup_error
 from app.services.agentcore.filesystem_kinds import (
     OUTPUTS_RETENTION_DAYS,
@@ -44,6 +46,14 @@ DELETE_BATCH = 1000
 
 # the session-id alphabet AgentCore accepts under a `{runtimeSessionId}` prefix — also
 # what keeps a stored id from widening the prefix the console reads
+# SigV4 on the *regional* virtual-hosted host. The default presign is SigV2 on the global
+# endpoint (S3 answers 307 to the regional one); `signature_version="s3v4"` alone still
+# signs `<bucket>.s3.amazonaws.com`, which S3 rejects with 400 "the region 'us-west-2' is
+# wrong; expecting 'us-east-1'" (live 2026-11-23) — `addressing_style="virtual"` is what
+# puts the Region in the host.
+_SIGV4 = "agent-files-s3v4"
+_PRESIGN_CONFIG = Config(signature_version="s3v4", s3={"addressing_style": "virtual"})
+
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,255}$")
 # an agent id is the ledger's 32-hex id; nothing else may form a delete prefix
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9]{8,64}$")
@@ -196,7 +206,7 @@ def presign(agent: Any, session_id: str, rel_path: str, workspace: Any,
                             "this agent has no session output folder")
     rel = clean_relative_path(rel_path)
     name = rel.rsplit("/", 1)[-1]
-    client = s3 or workspace.client("s3")
+    client = s3 or workspace.client("s3", cache_token=_SIGV4, config=_PRESIGN_CONFIG)
     url = client.generate_presigned_url(
         "get_object",
         Params={"Bucket": outputs["bucket"], "Key": f"{prefix}{rel}",

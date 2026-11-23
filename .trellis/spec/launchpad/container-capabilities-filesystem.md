@@ -369,6 +369,13 @@ restamp_outputs(spec, resources, project_id) -> bool                  # promotio
 bucket_policy(bucket, partition) / lifecycle_configuration()          # spoke bootstrap applies; CDK twin
 list_files / presign / clean_relative_path / delete_prefix / delete_agent_files
 ```
+
+> **Gotcha — presign host (live 2026-11-23):** `presign` must use
+> `Config(signature_version="s3v4", s3={"addressing_style": "virtual"})`. The default client
+> signs SigV2 on the global host (S3 answers `307`); `signature_version="s3v4"` alone still
+> signs `<bucket>.s3.amazonaws.com`, which S3 rejects with `400 AuthorizationQueryParametersError`
+> ("the region 'us-west-2' is wrong; expecting 'us-east-1'"). Only `addressing_style="virtual"`
+> yields `<bucket>.s3.<region>.amazonaws.com`. Unit test: `test_presign_asks_for_a_sigv4_regional_host_client`.
 HTTP: `GET /api/chat/{agent_id}/sessions/{session_id}/files`,
 `GET …/files/download?path=` (both `MEMBER` in `ROUTE_POLICY`; the service checks owner/admin).
 

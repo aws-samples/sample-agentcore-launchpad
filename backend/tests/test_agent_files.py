@@ -419,6 +419,20 @@ def test_presign_uses_the_servers_prefix_and_an_attachment_disposition():
         "ExpiresIn": 300}]
 
 
+def test_presign_asks_for_a_sigv4_regional_host_client(monkeypatch):
+    seen: dict = {}
+
+    def fake_client(self, service, *a, **k):
+        seen.update(service=service, **k)
+        return FakeS3()
+
+    monkeypatch.setattr(workspace_module.WorkspaceContext, "client", fake_client)
+    agent_files.presign(_agent_row(), SESSION, "a.txt", ws_ctx())
+    assert seen["service"] == "s3"
+    assert seen["config"].signature_version == "s3v4" and seen["cache_token"]
+    assert seen["config"].s3 == {"addressing_style": "virtual"}
+
+
 @pytest.mark.parametrize("path", ["", "/etc/passwd", "../other/x", "a/../../x", "a//b",
                                   "./a", "a/.", "a\\b", "a\nb", "x" * 1025])
 def test_presign_refuses_a_path_that_leaves_the_session_folder(path):
