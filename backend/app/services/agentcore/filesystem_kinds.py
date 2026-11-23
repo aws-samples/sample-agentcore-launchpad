@@ -38,6 +38,14 @@ SCOPE_SHARED = "shared"
 # (``aws:AgentCoreRuntimeSourceSid`` is the invoking session's id, probed live).
 SOURCE_SID_VAR = "${aws:AgentCoreRuntimeSourceSid}"
 
+# The session output folder (`filesystem.outputs`, task 11-23-s3mount-p2): one platform
+# bucket per workspace, one prefix per (project, agent, session). One formula for the
+# mount, the role policy, the files API and the delete hooks.
+OUTPUTS_BUCKET_PREFIX = "launchpad-agent-files-"
+OUTPUTS_DEFAULT_PATH = "/mnt/outputs"
+OUTPUTS_SHARED_KEY = "shared"  # the project segment of an agent filed under no project
+OUTPUTS_RETENTION_DAYS = 30
+
 
 def member_kind(entry: dict[str, Any]) -> str:
     """The union key of one filesystemConfigurations entry ('' if it has none)."""
@@ -75,3 +83,24 @@ def iam_prefix(prefix: str) -> str:
     """``prefix`` as an IAM policy writes it: the session token becomes the
     ``aws:AgentCoreRuntimeSourceSid`` variable."""
     return prefix.replace(SESSION_TOKEN, SOURCE_SID_VAR)
+
+
+def outputs_bucket_name(account_id: str, region: str) -> str:
+    """The workspace's agent-files bucket (names are global; this one carries account
+    and Region, as the artifacts bucket does)."""
+    return f"{OUTPUTS_BUCKET_PREFIX}{account_id}-{region}"
+
+
+def outputs_agent_prefix(project_key: str | None, agent_id: str) -> str:
+    """``projects/<project|shared>/agents/<agent_id>/`` — everything an agent ever wrote
+    to its output folder (what an agent delete removes)."""
+    if not agent_id:
+        raise ValueError("the session output folder needs its agent id")
+    return f"projects/{project_key or OUTPUTS_SHARED_KEY}/agents/{agent_id}/"
+
+
+def outputs_prefix(project_key: str | None, agent_id: str,
+                   session: str = SESSION_TOKEN) -> str:
+    """The prefix of one session's output folder. With the default ``session`` it is
+    the ``s3BucketMount`` prefix (AgentCore substitutes the session id for the token)."""
+    return f"{outputs_agent_prefix(project_key, agent_id)}sessions/{session}/"

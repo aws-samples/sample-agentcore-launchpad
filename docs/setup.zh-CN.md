@@ -42,6 +42,7 @@ bootstrap 还负责安装 Harness 转 Runtime 时使用的 CLI。它会把固定
 | 资源 | 名称 |
 |---|---|
 | S3 产物桶 | `launchpad-artifacts-<acct>-<region>` |
+| S3 Agent 文件桶（会话输出文件夹；对象 30 天后过期，删除栈时**保留**） | `launchpad-agent-files-<acct>-<region>` |
 | ECR 仓库 | `launchpad-agents` |
 | CodeBuild(ARM64) | `launchpad-agent-builder` |
 | Cognito 用户池 | `launchpad-users`(+ 组 `platform-admin`、`hr-analyst`,演示用户 `admin`/`demo`) |

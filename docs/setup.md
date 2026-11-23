@@ -38,6 +38,7 @@ What it creates / 创建内容:
 | Resource | Name |
 |---|---|
 | S3 artifacts bucket | `launchpad-artifacts-<acct>-<region>` |
+| S3 agent-files bucket (session output folders; objects expire after 30 days, **retained** on stack delete) | `launchpad-agent-files-<acct>-<region>` |
 | ECR repo | `launchpad-agents` |
 | CodeBuild (ARM64) | `launchpad-agent-builder` |
 | Cognito user pool | `launchpad-users` (+ groups `platform-admin`, `hr-analyst`, demo users `admin`/`demo`) |

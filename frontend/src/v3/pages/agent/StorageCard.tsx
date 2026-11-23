@@ -49,7 +49,7 @@ export function StorageCardView({
   const external = (data.live?.entries ?? []).filter((m) => m.origin === "external");
   // nothing beyond session storage: keep the overview short
   if (data.mounts.length === 0 && data.inline.length === 0 && external.length === 0
-    && data.live?.status !== "unavailable") return null;
+    && !data.outputs && data.live?.status !== "unavailable") return null;
   const change = <Link to={editPath(agent)} className="v3-inline-link">{t("v3.storage.card.change")}</Link>;
   return (
     <Panel title={title} end={change}>
@@ -91,6 +91,18 @@ export function StorageCardView({
               </td>
             </tr>
           ))}
+          {data.outputs && (
+            <tr data-testid="v3-agent-storage-outputs">
+              <td className="mono">{data.outputs.mount_path}</td>
+              <td>
+                <b>{t("v3.storage.card.outputs")}</b>{" "}
+                <Chip s="off">{t("v3.storage.scope.per_session")}</Chip>
+                <div><small>{t("v3.storage.card.outputsHint")}</small></div>
+              </td>
+              <td><Chip s="wait">{t("v3.storage.mode.rw")}</Chip></td>
+              <td>—</td>
+            </tr>
+          )}
           {data.inline.map((m, i) => (
             <tr key={`inline-${i}`}>
               <td className="mono">{m.mount_path ?? "—"}</td>

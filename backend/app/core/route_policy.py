@@ -248,6 +248,9 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("GET", "/api/chat/{agent_id}/history"): MEMBER,
     ("GET", "/api/chat/{agent_id}/memory"): MEMBER,
     ("GET", "/api/chat/{agent_id}/sessions"): MEMBER,
+    # the session's own user or an admin (service-level check, then the missing-session 404)
+    ("GET", "/api/chat/{agent_id}/sessions/{session_id}/files"): MEMBER,
+    ("GET", "/api/chat/{agent_id}/sessions/{session_id}/files/download"): MEMBER,
     ("POST", "/api/chat/{agent_id}/sessions/{session_id}/stop"): PERM_PROJECT_USE,
     # ---- studio local-debug scaffolding: prod refuses these in the handler
     # (local_exec guard) regardless of role ----

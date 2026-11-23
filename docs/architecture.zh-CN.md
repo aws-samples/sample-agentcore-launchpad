@@ -378,6 +378,34 @@ spec 的 `filesystem.mounts[]`；`filesystem_entries(spec, agent_id)` 把它们�
 - **Agent 如何得知。** 清单条目带有 `scope`；提示词说明“只能整文件写入——不能追加、重命名或原地修改”（Mountpoint for S3：
   追加 `EPERM`、原地修改 `EBADF`、重命名 `ENOSYS`），按会话挂载的还会标注“仅限本次会话”。
 
+**会话输出文件**（`filesystem.outputs`，`services/agent_files.py`）。成员可以为每个 Agent 开启一个按会话隔离的可读写
+输出文件夹（默认关闭；位于 V2 向导的文件系统卡片）。它是挂在工作区自己的 **Agent 文件存储桶**
+（`launchpad-agent-files-<account>-<region>`，`resources.agent_files_bucket`）上的 `s3BucketMount`，前缀为
+`projects/<project|shared>/agents/<agent id>/sessions/{runtimeSessionId}/`，挂载到 `/mnt/outputs`。它不是目录条目，
+因此不需要允许名单：spec 里是 `outputs: {mount_path, bucket, project_key}`，其中 `bucket` 和 `project_key` 由服务端写入
+（`storage_mounts.normalize_outputs`，由创建和重新发布路由调用；晋级时按目标工作区重新写入，目标工作区没有该桶则报
+`storage.agent_files_unavailable` 未映射）。同一个公式（`filesystem_kinds.outputs_prefix`）同时服务于挂载、角色策略
+（与目录桶共用同一个构建器，对 Agent 自己的前缀读写）、文件 API 和删除钩子。
+
+- **门槛。** 仅限平台版本 V2 的 Runtime 方式（`422 storage.requires_v2`；Harness 与目录桶一样由 `BUCKET_MOUNT_UNSUPPORTED`
+  拒绝——`AgentSpec` 校验器直接拒绝）；工作区没有该桶时返回 `422 storage.agent_files_unavailable`，直到其引导流程创建它
+  （hub：`make bootstrap` 更新 CDK 栈；spoke：`storage` 阶段，spoke 模板 v3 提供 `s3:PutLifecycleConfiguration`）。
+  该文件夹占 AgentCore 五个 `filesystemConfigurations` 中的一个。
+- **存储桶。** 不开版本控制（过期必须真正删除）、SSE-S3、Block Public Access，对象创建 30 天后过期，未完成的分片上传一天后清理，
+  CDK 中为 `RETAIN`（客户文件在栈拆除后仍保留；`teardown.py` 不会删它）。桶策略（`agent_files.bucket_policy`，由 spoke
+  引导流程应用；CDK 栈带有相同的语句，两者均有测试固定）为仅限 TLS，加上经探测（P4b）验证的会话限制：带
+  `aws:AgentCoreRuntimeSourceSid` 的请求在 `.../sessions/${sid}/*` 之外的对象操作和该前缀之外的 `ListBucket` 都会被拒绝；
+  后端请求不带该键，不受影响。隔离项目的权限边界在其某个 Agent 开启文件夹时，获得该桶中本项目自己的 `projects/<pid>/*`。
+- **文件 API。** `GET /api/chat/{agent_id}/sessions/{session_id}/files` 列出文件，`…/files/download?path=` 签发预签名
+  URL（五分钟，附件）。前缀由 Agent 记录和会话台账计算；`path` 必须留在其中。只有该会话自己的用户（`ChatSession.actor_id`）
+  或管理员可读，其他人得到“会话不存在”的 404——比对话记录列表更严格。V3 对话检查器的**文件**标签页（`?inspect=files`）
+  列出文件，每轮结束后重新加载，并通过预签名 URL 下载。
+- **保留与删除。** 对象 30 天后过期。删除 Agent（删除路由、项目清除、会话清空、延迟拆除巡检）会尽力删除
+  `projects/<project|shared>/agents/<agent id>/`（`agent_files.delete_agent_files`：分页列出并批量删除，绝不抛出；
+  生命周期规则作为兜底）。工作区清除只删除台账行、不触碰 AWS，因此这里没有需要删除的内容。
+- **Agent 如何得知。** 清单条目带 `purpose: "outputs"`；提示词说明把要交给用户的文件（只能整文件写入）保存到那里，
+  用户可在对话中下载 30 天。
+
 **会写入生产存储的运行**（storage-mounts §8.2）。在 `gated` 工作区中，若 Agent 以读写方式挂载了 `shared_state` 存储，
 评估回放或金丝雀都会写入该存储，后端因此返回 `409 storage.write_confirm_required` 并附上这些挂载。控制台无法事先判断，
 所以运行页与金丝雀页照常发送请求，收到该回复后询问一次，再带 `confirm_storage: true` 重发（`lib/storage-confirm.ts`）；

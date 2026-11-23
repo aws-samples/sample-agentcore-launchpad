@@ -50,6 +50,7 @@ from app.core.db import SessionLocal
 from app.core.regions import partition_for_region
 from app.models.ledger import Job, Workspace
 from app.services import (
+    agent_files,
     aws_clients,
     cost_tags,
     gateway_bootstrap,
@@ -60,6 +61,7 @@ from app.services import (
 )
 from app.services import bootstrap as hub_bootstrap
 from app.services.agent_iam import retry_iam_propagation
+from app.services.agentcore.filesystem_kinds import outputs_bucket_name
 from app.services.policy_identity import POLICY_GROUPS
 from app.services.workspace import (
     WorkspaceContext,
@@ -722,6 +724,62 @@ def _ensure_bucket(ctx: BootstrapContext, s3: Any, bucket: str) -> bool:
     return created
 
 
+def _agent_files_bucket_name(ctx: BootstrapContext) -> str:
+    return outputs_bucket_name(ctx.account_id, ctx.region)
+
+
+def _ensure_agent_files_bucket(ctx: BootstrapContext, s3: Any, bucket: str) -> bool:
+    """Create-or-adopt the session-output bucket (`services/agent_files`) and apply its
+    posture (idempotent puts): Block Public Access, SSE-S3, **no versioning** (the
+    30-day expiry must really delete), the lifecycle rule, and the policy that confines
+    a runtime session to its own folder. Mirrors the CDK bucket of the hub stack."""
+    created = False
+    params: dict[str, Any] = {"Bucket": bucket}
+    if ctx.region != "us-east-1":
+        params["CreateBucketConfiguration"] = {"LocationConstraint": ctx.region}
+    try:
+        s3.create_bucket(**params)
+        created = True
+        ctx.log(f"created agent-files bucket {bucket}")
+    except ClientError as exc:
+        code = _error_code(exc)
+        if code == "BucketAlreadyOwnedByYou":
+            ctx.log(f"reusing agent-files bucket {bucket}")
+        elif code == "BucketAlreadyExists":
+            raise BootstrapError(
+                f"S3 bucket {bucket} exists in another account — bucket names are "
+                "globally unique; this one encodes the account and region, so the "
+                "workspace's account_id is probably wrong"
+            ) from exc
+        else:
+            raise
+    s3.put_public_access_block(
+        Bucket=bucket,
+        PublicAccessBlockConfiguration={
+            "BlockPublicAcls": True,
+            "IgnorePublicAcls": True,
+            "BlockPublicPolicy": True,
+            "RestrictPublicBuckets": True,
+        },
+    )
+    s3.put_bucket_encryption(
+        Bucket=bucket,
+        ServerSideEncryptionConfiguration={
+            "Rules": [
+                {"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}
+            ]
+        },
+    )
+    s3.put_bucket_lifecycle_configuration(
+        Bucket=bucket, LifecycleConfiguration=agent_files.lifecycle_configuration()
+    )
+    s3.put_bucket_policy(
+        Bucket=bucket,
+        Policy=json.dumps(agent_files.bucket_policy(bucket, ctx.workspace.partition)),
+    )
+    return created
+
+
 def _ensure_repository(ctx: BootstrapContext, ecr: Any, name: str) -> str:
     try:
         repo = ecr.describe_repositories(repositoryNames=[name])["repositories"][0]
@@ -753,15 +811,18 @@ def _shared_tags(ctx: BootstrapContext) -> dict[str, str]:
 def _stage_storage(ctx: BootstrapContext) -> str:
     bucket = _artifacts_bucket_name(ctx)
     _ensure_bucket(ctx, ctx.workspace.client("s3"), bucket)
+    files_bucket = _agent_files_bucket_name(ctx)
+    _ensure_agent_files_bucket(ctx, ctx.workspace.client("s3"), files_bucket)
     repo_uri = _ensure_repository(ctx, ctx.workspace.client("ecr"), ECR_REPO_NAME)
     ctx.record(
         {
             "artifacts_bucket": bucket,
+            "agent_files_bucket": files_bucket,
             "ecr_repo": ECR_REPO_NAME,
             "ecr_repo_uri": repo_uri,
         }
     )
-    return f"{bucket} · {ECR_REPO_NAME}"
+    return f"{bucket} · {files_bucket} · {ECR_REPO_NAME}"
 
 
 # ── stage: codebuild ───────────────────────────────────────────────────────

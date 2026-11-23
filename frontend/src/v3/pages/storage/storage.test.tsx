@@ -319,6 +319,17 @@ describe("agent storage card", () => {
     expect(html).toContain("works on the PUBLIC network");
   });
 
+  it("lists the session output folder as a read-write per-session row", () => {
+    const html = render(<StorageCardView agent={agent} loading={false} error={null} data={{
+      ...data, mounts: [], inline: [], outputs: { mount_path: "/mnt/outputs", bucket: "launchpad-agent-files-1-us-west-2" },
+    }} />);
+    expect(html).toContain('data-testid="v3-agent-storage-outputs"');
+    expect(html).toContain("/mnt/outputs");
+    expect(html).toContain("Session output files");
+    expect(html).toContain("per session");
+    expect(html).toContain("downloadable from the chat for 30 days");
+  });
+
   it("renders nothing when only session storage is mounted", () => {
     expect(render(<StorageCardView agent={agent} loading={false} error={null} data={{ ...data, mounts: [], inline: [] }} />)).toBe("");
   });

@@ -6,20 +6,25 @@
   covers keys). Trigger: any change to the rail, `?inspect=`, or the chat page's URL writes.
 
 ## 2. Signatures
-- `frontend/src/v3/pages/chat/inspect.ts`: `InspectTab = "trace" | "memory"`,
+- `frontend/src/v3/pages/chat/inspect.ts`: `InspectTab = "trace" | "memory" | "files"` (the files tab: task `11-23-s3mount-p2-agent-files`), `fileSize(bytes)`,
   `inspectTab(raw) → InspectTab | null`, `SPAN_LIMIT = 12`,
   `spanBars(trace, limit?) → { span, left, width }[]` (% of the drawn extent, width ≥ 0.8).
 - `frontend/src/v3/pages/chat/Inspector.tsx`: `Inspector({ tab, onTab, onClose, agentId, sessionId, busy, memoryState })`.
 - Backend (unchanged): `GET /api/traces/{session}` (`lookback_hours=3`), `GET /api/chat/{agent}/memory?session_id=`.
 
 ## 3. Contracts
-- `?inspect=trace|memory` = rail open on that tab; absent/invalid = closed (two columns).
+- `?inspect=trace|memory|files` = rail open on that tab; absent/invalid = closed (two columns).
 - Every `setParams` on the page goes through `nav()` (or keeps `inspect` itself): a write that
   replaces the query must carry `inspect`, or the rail closes on session/agent change.
 - Parent keys `<Inspector>` on `agent:session` → a new conversation starts empty.
 - The open tab loads on mount, on tab change and when `busy` (turn running or restoring) falls;
   never while busy. Each tab has its own request sequence (a newer read of the same tab wins).
 - Memory tab: `memoryState === "off"` → note only, no fetch.
+- Files tab: `GET /api/chat/{agent}/sessions/{sid}/files` on the same load triggers (mount, tab change,
+  `busy` falling); `enabled:false` → "no session output folder" note + link to the edit wizard; a download
+  fetches the presigned URL (`…/files/download?path=`, 5 min) on click and navigates to it; shows the
+  30-day retention note and a truncation note past 1000 files. Only the session's user / an admin gets data
+  (404 `chat.session_not_found` otherwise → the usual `v3.chat.inspect.failed` notice).
 - Links: 在可观测中打开 → `/v3/observability?tab=sessions&view=session&id=`; 在记忆中打开 →
   `/v3/memory?tab=short-term&actor=<actor_id>&session=`.
 

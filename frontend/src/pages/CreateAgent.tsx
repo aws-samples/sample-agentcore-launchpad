@@ -64,6 +64,7 @@ import {
   byocBuiltinLabelKey,
   byocBuiltinsFromStored,
   DEFAULT_AGENT_SDK,
+  DEFAULT_OUTPUTS_MOUNT,
   DEFAULT_SESSION_MOUNT,
   defaultModelForMethod,
   entrypointAfterUpload,
@@ -194,6 +195,7 @@ interface StoredSpec {
     session_storage?: { mount_path?: string } | null;
     s3_files?: { access_point_arn?: string; mount_path?: string }[];
     efs?: { access_point_arn?: string; mount_path?: string }[];
+    outputs?: { mount_path?: string } | null;
   };
   network?: { subnets?: string[]; security_groups?: string[]; profile_id?: string } | null;
   byoc?: ByocConfigInput;
@@ -898,6 +900,9 @@ function CreateAgentWizard({ mode, agentId }: { mode: AgentsMode; agentId?: stri
   // AgentCore Runtime filesystem configuration (container method only)
   const [sessionFs, setSessionFs] = useState(true);
   const [sessionMount, setSessionMount] = useState(DEFAULT_SESSION_MOUNT);
+  // the per-session output folder: toggled in the V2 wizard; the classic page only keeps it
+  const [outputsFs, setOutputsFs] = useState(false);
+  const [outputsMount, setOutputsMount] = useState(DEFAULT_OUTPUTS_MOUNT);
   const [s3Mounts, setS3Mounts] = useState<MountRow[]>([]);
   const [efsMounts, setEfsMounts] = useState<MountRow[]>([]);
   const [vpcSubnets, setVpcSubnets] = useState("");
@@ -1171,6 +1176,8 @@ const deployLock = !canDeploy
     setGitUrl("");
     setSessionFs(true);
     setSessionMount(DEFAULT_SESSION_MOUNT);
+    setOutputsFs(false);
+    setOutputsMount(DEFAULT_OUTPUTS_MOUNT);
     setS3Mounts([]);
     setEfsMounts([]);
     setVpcSubnets("");
@@ -1279,6 +1286,8 @@ const deployLock = !canDeploy
     mcpServers,
     sessionFs,
     sessionMount,
+    outputsFs,
+    outputsMount,
     s3Mounts,
     efsMounts,
     // the classic wizard has no catalog picker: a re-publish keeps the stored picks
@@ -1595,6 +1604,8 @@ const deployLock = !canDeploy
     const fs = spec.filesystem;
     setSessionFs(fs ? fs.session_storage != null : true);
     setSessionMount(fs?.session_storage?.mount_path ?? DEFAULT_SESSION_MOUNT);
+    setOutputsFs(Boolean(fs?.outputs));
+    setOutputsMount(fs?.outputs?.mount_path ?? DEFAULT_OUTPUTS_MOUNT);
     setS3Mounts(
       (fs?.s3_files ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
     );

@@ -962,6 +962,9 @@ export interface FilesystemInput {
   efs: ByoMountInput[];
   /** catalog picks by id (storage-mounts §4) */
   mounts?: { storage_id: string; mount_path?: string; mode?: "ro" | "rw" }[];
+  /** the per-session output folder the chat's Files tab serves (null = off); the
+   *  server stamps the bucket and project */
+  outputs?: { mount_path: string } | null;
 }
 
 export interface VpcNetworkInput {
@@ -7584,6 +7587,24 @@ export interface ChatTraceSpan {
   duration_ms: number | null;
 }
 
+/** One file of a session's output folder (`GET /api/chat/{agent}/sessions/{sid}/files`). */
+export interface SessionFile {
+  /** path relative to the session folder */
+  key_rel: string;
+  size: number;
+  last_modified: string | null;
+}
+
+export interface SessionFiles {
+  /** false: the agent has no session output folder */
+  enabled: boolean;
+  files: SessionFile[];
+  /** more than 1000 files — only the newest are listed */
+  truncated: boolean;
+  retention_days: number;
+  mount_path?: string | null;
+}
+
 /** `GET /api/traces/{session_id}` — aws/spans for one session. */
 export interface ChatTraceInfo {
   span_count: number;
@@ -7639,6 +7660,16 @@ export const chatApi = {
     ),
   trace: (sessionId: string) =>
     request<ChatTraceInfo>(`/api/traces/${encodeURIComponent(sessionId)}`),
+  /** the files the agent wrote to this session's output folder (the session's user or an admin) */
+  files: (agentId: string, sessionId: string) =>
+    request<SessionFiles>(
+      `/api/chat/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/files`,
+    ),
+  /** a five-minute presigned download URL for one file (`path` is relative to the folder) */
+  fileUrl: (agentId: string, sessionId: string, path: string) =>
+    request<{ url: string; name: string; expires_in: number }>(
+      `/api/chat/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}/files/download?path=${encodeURIComponent(path)}`,
+    ),
   apiKeys: () => request<{ keys: ApiKeyInfo[] }>("/api/apikeys"),
   createApiKey: (name: string, options: ApiKeyOptions = {}) =>
     request<ApiKeyInfo>("/api/apikeys", { method: "POST", body: JSON.stringify({ name, ...options }) }),

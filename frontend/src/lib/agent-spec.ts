@@ -143,6 +143,8 @@ export const promptWithToolkit = (prev: string, kitPrompt: string) =>
 // AgentCore mount-path contract: exactly one level under /mnt
 export const MOUNT_RE = /^\/mnt\/[a-zA-Z0-9._-]+$/;
 export const DEFAULT_SESSION_MOUNT = "/mnt/workspace";
+/** the per-session output folder the chat's Files tab serves (`filesystem.outputs`) */
+export const DEFAULT_OUTPUTS_MOUNT = "/mnt/outputs";
 /** AgentCore allows at most two BYO mounts of each kind */
 export const MAX_MOUNTS_PER_KIND = 2;
 /** Methods whose spec carries `filesystem`: managed session storage on all three,
@@ -505,6 +507,9 @@ export interface AgentForm {
   // container filesystem configuration
   sessionFs: boolean;
   sessionMount: string;
+  /** the per-session output folder (Runtime methods on platform V2) */
+  outputsFs: boolean;
+  outputsMount: string;
   s3Mounts: MountRow[];
   efsMounts: MountRow[];
   /** mounts picked from the workspace's storage catalog (storage-mounts §4, SM-2) */
@@ -654,6 +659,8 @@ export const emptyAgentForm = (method: AgentMethod = "harness"): AgentForm => ({
   mcpServers: "",
   sessionFs: true,
   sessionMount: DEFAULT_SESSION_MOUNT,
+  outputsFs: false,
+  outputsMount: DEFAULT_OUTPUTS_MOUNT,
   s3Mounts: [],
   efsMounts: [],
   catalogMounts: [],
@@ -715,6 +722,8 @@ export interface StoredAgentSpec {
     efs?: { access_point_arn?: string; mount_path?: string }[];
     /** catalog picks by id (the server stamps kind and ARN) */
     mounts?: { storage_id?: string; mount_path?: string; mode?: string }[];
+    /** the per-session output folder (the server stamps its bucket and project) */
+    outputs?: { mount_path?: string } | null;
   };
   /** inline VPC ids (legacy) or a workspace network profile */
   network?: { subnets?: string[]; security_groups?: string[]; profile_id?: string } | null;
@@ -778,6 +787,8 @@ export function formFromStoredSpec(
     mcpServers: spec.env?.LAUNCHPAD_MCP_SERVERS ?? "",
     sessionFs: fs ? fs.session_storage != null : true,
     sessionMount: fs?.session_storage?.mount_path ?? DEFAULT_SESSION_MOUNT,
+    outputsFs: Boolean(fs?.outputs),
+    outputsMount: fs?.outputs?.mount_path ?? DEFAULT_OUTPUTS_MOUNT,
     s3Mounts: (fs?.s3_files ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
     efsMounts: (fs?.efs ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
     catalogMounts: catalogRowsFromSpec(fs),
@@ -957,6 +968,9 @@ export function filesystemSpec(form: AgentForm): Pick<AgentSpecInput, "filesyste
       s3_files: form.s3Mounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
       efs: form.efsMounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
       mounts: catalogMountsSpec(form.catalogMounts ?? []),
+      // the Harness drops an S3 bucket mount, so it never carries the folder; omitted
+      // when off (a re-publish replaces the stored spec, so absent = off)
+      ...(form.outputsFs && form.method !== "harness" ? { outputs: { mount_path: form.outputsMount } } : {}),
     },
   };
 }
@@ -1241,6 +1255,7 @@ export function republishSpec(built: AgentSpecInput, stored: unknown): AgentSpec
  *  where the method mounts them — rows a method switch left behind are not sent. */
 export interface FilesystemIssues {
   sessionMount: boolean;
+  outputsMount: boolean;
   /** `s3:<i>` / `efs:<i>` → which half of the row is invalid */
   rows: Record<string, { arn: boolean; path: boolean }>;
   duplicatePaths: boolean;
@@ -1254,8 +1269,10 @@ export function filesystemIssues(form: AgentForm): FilesystemIssues {
   const s3Mounts = byo ? form.s3Mounts : [];
   const efsMounts = byo ? form.efsMounts : [];
   const catalogMounts = byo ? (form.catalogMounts ?? []) : [];
+  const outputs = form.outputsFs && form.method !== "harness";
   const paths = [
     ...(form.sessionFs ? [form.sessionMount] : []),
+    ...(outputs ? [form.outputsMount] : []),
     ...s3Mounts.map((m) => m.path),
     ...efsMounts.map((m) => m.path),
     ...catalogMountsSpec(catalogMounts).map((m) => m.mount_path),
@@ -1270,9 +1287,11 @@ export function filesystemIssues(form: AgentForm): FilesystemIssues {
   }
   return {
     sessionMount: form.sessionFs && !MOUNT_RE.test(form.sessionMount),
+    outputsMount: outputs && !MOUNT_RE.test(form.outputsMount),
     rows,
     duplicatePaths: new Set(paths).size !== paths.length,
-    tooMany: s3Mounts.length + efsMounts.length + catalogMounts.length > maxMounts(form.sessionFs),
+    tooMany:
+      s3Mounts.length + efsMounts.length + catalogMounts.length + (outputs ? 1 : 0) > maxMounts(form.sessionFs),
     vpc:
       hasNfsMounts({ s3Mounts, efsMounts, catalogMounts }) &&
       !form.networkProfileId &&
@@ -1287,6 +1306,7 @@ export const filesystemValid = (form: AgentForm) => {
   const issues = filesystemIssues(form);
   return (
     !issues.sessionMount &&
+    !issues.outputsMount &&
     Object.keys(issues.rows).length === 0 &&
     !issues.duplicatePaths &&
     !issues.tooMany &&

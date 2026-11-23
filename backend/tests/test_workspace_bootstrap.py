@@ -143,6 +143,9 @@ class FakeS3:
     def put_bucket_policy(self, Bucket, Policy):  # noqa: N803
         self._put(Bucket, "policy", Policy)
 
+    def put_bucket_lifecycle_configuration(self, Bucket, LifecycleConfiguration):  # noqa: N803
+        self._put(Bucket, "lifecycle", LifecycleConfiguration)
+
 
 class FakeEcr:
     def __init__(self) -> None:
@@ -589,7 +592,10 @@ class TestStages:
             "user_pool_domain",
             # optional: older workspaces predate the console's S3 Files creation
             "s3files_sync_role_arn",
+            # optional: older workspaces predate the session output folder
+            "agent_files_bucket",
         }
+        assert resources["agent_files_bucket"] == f"launchpad-agent-files-{ACCOUNT}-{REGION}"
         assert resources["artifacts_bucket"] == f"launchpad-artifacts-{ACCOUNT}-{REGION}"
         assert resources["ecr_repo"] == "launchpad-agents"
         assert resources["codebuild_project"] == "launchpad-agent-builder"
@@ -619,7 +625,7 @@ class TestStages:
             f"launchpad-s3files-sync-{REGION}",
             f"launchpad-codebuild-role-{REGION}",
         ]
-        assert len(aws.s3.created) == 1
+        assert len(aws.s3.created) == 2  # artifacts + agent-files, once each
         assert aws.ecr.created == ["launchpad-agents"]
         assert aws.codebuild.created == ["launchpad-agent-builder"]
         assert aws.cognito.created_pools == ["launchpad-users"]
@@ -657,6 +663,30 @@ class TestStages:
         assert applied["versioning"] == {"Status": "Enabled"}
         assert applied["public_access_block"]["BlockPublicAcls"] is True
         assert "aws:SecureTransport" in applied["policy"]
+
+    def test_the_agent_files_bucket_is_unversioned_expiring_and_session_confined(self, aws):
+        """The session output folder's bucket (`services/agent_files`): no versioning (the
+        30-day expiry must really delete), the lifecycle rule, and the probe-verified
+        policy that confines a runtime session to its own folder."""
+        import json
+
+        from app.services import agent_files
+
+        _register()
+        wb.STAGES["storage"](_ctx())
+        bucket = f"launchpad-agent-files-{ACCOUNT}-{REGION}"
+        applied = aws.s3.settings[bucket]
+        assert "versioning" not in applied
+        assert applied["public_access_block"]["RestrictPublicBuckets"] is True
+        assert applied["encryption"]["Rules"][0]["ApplyServerSideEncryptionByDefault"] == {
+            "SSEAlgorithm": "AES256"}
+        assert applied["lifecycle"] == agent_files.lifecycle_configuration()
+        assert json.loads(applied["policy"]) == agent_files.bucket_policy(bucket)
+        assert {s3["bucket"] for s3 in aws.s3.created} >= {bucket}
+        # re-running reuses the bucket and re-applies the same posture
+        wb.STAGES["storage"](_ctx())
+        assert len([c for c in aws.s3.created if c["bucket"] == bucket]) == 1
+        assert aws.s3.settings[bucket]["lifecycle"] == agent_files.lifecycle_configuration()
 
     def test_us_east_1_gets_no_location_constraint(self, aws):
         """create_bucket rejects a LocationConstraint naming us-east-1."""
@@ -1136,7 +1166,7 @@ class TestRunner:
         assert _row().bootstrap_status == "ready"
         # the skipped stages did not provision a second set of anything
         assert aws.iam.created == roles_after_first_run
-        assert len(aws.s3.created) == 1
+        assert len(aws.s3.created) == 2  # artifacts + agent-files, once each
         assert aws.cognito.created_pools == ["launchpad-users"]
 
     def test_a_resumed_job_reads_the_previous_runs_identifiers(self, aws, monkeypatch):

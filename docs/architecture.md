@@ -575,6 +575,49 @@ re-publish merge, the canary candidate and the session-id guard.
   `EPERM`, in-place edit `EBADF`, rename `ENOSYS`) and "this session only" for a per-session
   mount.
 
+**Session output files** (`filesystem.outputs`, `services/agent_files.py`). A member can switch on
+one per-session, read-write output folder per agent (off by default; the V2 wizard's file
+system card). It is an `s3BucketMount` on the workspace's own **agent-files bucket**
+(`launchpad-agent-files-<account>-<region>`, `resources.agent_files_bucket`) at
+`projects/<project|shared>/agents/<agent id>/sessions/{runtimeSessionId}/`, mounted at
+`/mnt/outputs`. It is not a catalog entry, so no allow list applies: the spec carries
+`outputs: {mount_path, bucket, project_key}` where the server stamps `bucket` and
+`project_key` (`storage_mounts.normalize_outputs`, called from the create and re-publish
+routes; promotion re-stamps them from the target workspace, and a target without the bucket
+is unmapped `storage.agent_files_unavailable`). One formula (`filesystem_kinds.outputs_prefix`)
+serves the mount, the role policy (the same builder as catalog buckets, read-write on the agent's
+own prefix), the files API and the delete hooks.
+
+- **Gate.** Runtime methods on platform V2 only (`422 storage.requires_v2`; the Harness is refused
+  by the same `BUCKET_MOUNT_UNSUPPORTED` row as catalog buckets — the `AgentSpec` validator
+  rejects it); a workspace without the bucket answers `422 storage.agent_files_unavailable` until
+  its bootstrap (hub: `make bootstrap` updates the CDK stack; spoke: the `storage` stage, spoke
+  template v3 for `s3:PutLifecycleConfiguration`) creates it. The folder counts as one of
+  AgentCore's five `filesystemConfigurations`.
+- **Bucket.** Unversioned (the expiry must really delete), SSE-S3, Block Public Access, objects
+  expire 30 days after creation and incomplete multipart uploads after a day, `RETAIN` in CDK
+  (customer files outlive a stack teardown; `teardown.py` leaves it). The policy
+  (`agent_files.bucket_policy`, applied by the spoke bootstrap; the CDK stack carries the same
+  statements, both pinned by tests) is TLS-only plus the probe-verified (P4b) session
+  confinement: a request carrying `aws:AgentCoreRuntimeSourceSid` is denied object actions
+  outside `.../sessions/${sid}/*` and `ListBucket` outside that prefix; the backend's requests
+  carry no such key and are unaffected. An isolated project's boundary gets the project's own
+  `projects/<pid>/*` of the bucket when one of its agents has the folder.
+- **Files API.** `GET /api/chat/{agent_id}/sessions/{session_id}/files` lists and
+  `…/files/download?path=` presigns (five minutes, attachment). The prefix is computed from the
+  agent row and the session ledger; `path` must stay inside it. Only the session's own user
+  (`ChatSession.actor_id`) or an administrator may read; anyone else gets the missing-session
+  404 — stricter than the transcript list. The V3 chat inspector's **Files** tab (`?inspect=files`)
+  lists the files, reloads after each finished turn, and downloads through the presigned URL.
+- **Retention and delete.** Objects expire after 30 days. Deleting an agent (the delete route,
+  a project purge, a conversation clear, the deferred teardown sweep) removes
+  `projects/<project|shared>/agents/<agent id>/` best-effort (`agent_files.delete_agent_files`:
+  paginated list + batched delete, never raises; the lifecycle rule is the backstop). A workspace
+  purge removes ledger rows only and leaves AWS untouched, so it has nothing to delete here.
+- **What the agent is told.** The manifest entry has `purpose: "outputs"`; the prompt says to
+  save the files the user should receive there (whole files only) and that the user can download
+  them from the chat for 30 days.
+
 **Runs that write production storage** (storage-mounts §8.2). In a gated workspace an
 evaluation replay or a canary of an agent that mounts `shared_state` storage read-write
 writes into it, so the backend answers `409 storage.write_confirm_required` with the

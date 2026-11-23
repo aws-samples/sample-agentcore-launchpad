@@ -30,7 +30,10 @@ Scope (reverse creation order, dependents before the shared substrate):
   7b. Coding runtime (launchpad_coding_runtime runtime + its IAM role, runtime
      first); its image tags and the coding/ repo snapshots live in
      stack-owned ECR/S3
-  8. CDK stack launchpad-base (S3 bucket auto-empties, ECR force-deletes)
+  8. CDK stack launchpad-base (S3 bucket auto-empties, ECR force-deletes). The
+     agent-files bucket (launchpad-agent-files-<account>-<region>, the agents'
+     session output folders) is RETAINED on purpose — customer files outlive the
+     stack; empty and delete it by hand once nobody needs them.
 
 Out of scope: X-Ray Transaction Search (account-wide, shared observability)
 and deployed agent runtimes — delete demo agents from the

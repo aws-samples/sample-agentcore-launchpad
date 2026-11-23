@@ -1,3 +1,5 @@
+import json
+
 import aws_cdk as cdk
 import pytest
 from aws_cdk.assertions import Match, Template
@@ -24,7 +26,8 @@ def east_template() -> Template:
 
 
 def test_core_resources_present(template: Template):
-    template.resource_count_is("AWS::S3::Bucket", 1)
+    # the artifacts bucket and the agent-files bucket
+    template.resource_count_is("AWS::S3::Bucket", 2)
     template.resource_count_is("AWS::ECR::Repository", 1)
     template.resource_count_is("AWS::CodeBuild::Project", 1)
     template.resource_count_is("AWS::Cognito::UserPool", 1)
@@ -427,3 +430,83 @@ def test_group_attachments_wait_for_their_group_and_user(template: Template):
             k for k, u in users.items() if u["Properties"]["Username"] == props["Username"]
         ]
         assert group_id in deps and user_id in deps
+
+
+def _agent_files_bucket(template: Template) -> dict:
+    (bucket,) = [
+        res
+        for res in template.find_resources("AWS::S3::Bucket").values()
+        if res["Properties"]["BucketName"].startswith("launchpad-agent-files-")
+    ]
+    return bucket
+
+
+def test_agent_files_bucket_is_unversioned_expiring_and_retained(template: Template):
+    """The session output folders (`filesystem.outputs`): objects expire 30 days after
+    creation, so versioning must stay off (it would only add delete markers); customer
+    files outlive a stack teardown, unlike the artifacts bucket."""
+    bucket = _agent_files_bucket(template)
+    props = bucket["Properties"]
+    assert bucket["DeletionPolicy"] == "Retain"
+    assert "VersioningConfiguration" not in props
+    assert props["PublicAccessBlockConfiguration"]["BlockPublicAcls"] is True
+    assert props["BucketEncryption"]["ServerSideEncryptionConfiguration"][0][
+        "ServerSideEncryptionByDefault"
+    ] == {"SSEAlgorithm": "AES256"}
+    (rule,) = props["LifecycleConfiguration"]["Rules"]
+    assert rule["Status"] == "Enabled"
+    assert rule["ExpirationInDays"] == 30
+    assert rule["AbortIncompleteMultipartUpload"] == {"DaysAfterInitiation": 1}
+    # auto_delete_objects is the artifacts bucket's: nothing here may empty the bucket
+    assert not any(
+        "AgentFiles" in key
+        for key, res in template.find_resources("Custom::S3AutoDeleteObjects").items()
+    )
+
+
+def test_agent_files_bucket_policy_confines_a_runtime_session_to_its_own_folder(
+    template: Template,
+):
+    """The probe-verified shape (probe P4b), the same one `services/agent_files.bucket_policy`
+    applies to a spoke's bucket: a request carrying aws:AgentCoreRuntimeSourceSid is denied
+    everything outside `.../sessions/<its sid>/`; the backend's requests carry no key."""
+    policies = [
+        res
+        for key, res in template.find_resources("AWS::S3::BucketPolicy").items()
+        if "AgentFiles" in key
+    ]
+    assert len(policies) == 1
+    statements = {s.get("Sid"): s for s in policies[0]["Properties"]["PolicyDocument"]["Statement"]}
+    in_session = {"Null": {"aws:AgentCoreRuntimeSourceSid": "false"}}
+    sessions = "projects/*/agents/*/sessions/${aws:AgentCoreRuntimeSourceSid}"
+
+    objects = statements["DenyOtherSessionsObjects"]
+    assert objects["Effect"] == "Deny" and objects["Principal"] == {"AWS": "*"}
+    assert sorted(objects["Action"]) == [
+        "s3:AbortMultipartUpload",
+        "s3:DeleteObject",
+        "s3:GetObject",
+        "s3:PutObject",
+    ]
+    assert objects["Condition"] == in_session
+    (not_resource,) = objects["NotResource"] if isinstance(objects["NotResource"], list) else [
+        objects["NotResource"]
+    ]
+    assert f"/{sessions}/*" in json.dumps(not_resource)
+
+    listing = statements["DenyListOutsideOwnSession"]
+    assert listing["Effect"] == "Deny" and listing["Action"] == "s3:ListBucket"
+    assert listing["Condition"] == {
+        **in_session,
+        "StringNotLike": {"s3:prefix": [f"{sessions}/*", sessions]},
+    }
+    # enforce_ssl: TLS-only, like the artifacts bucket
+    assert any(
+        s.get("Condition", {}).get("Bool") == {"aws:SecureTransport": "false"}
+        for s in statements.values()
+    )
+
+
+def test_agent_files_bucket_name_is_an_output(template: Template):
+    outputs = template.to_json()["Outputs"]
+    assert "AgentFilesBucketName" in outputs

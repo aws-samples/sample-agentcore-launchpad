@@ -105,6 +105,9 @@ class BoundaryInputs:
     api_key_connections: tuple[str, ...] = ()
     # §10.8: once the project has application inference profiles, system profiles go
     application_inference_profiles: bool = False
+    # the workspace's agent-files bucket, set only when a project agent has a session
+    # output folder (`filesystem.outputs`): its mount runs under this boundary too
+    agent_files_bucket: str = ""
 
     @property
     def partition(self) -> str:
@@ -272,6 +275,23 @@ def boundary_policy_document(inp: BoundaryInputs) -> dict[str, Any]:
             "Condition": {"StringLike": {"s3:prefix": [f"{prefix}*" for prefix in prefixes]}},
         })
 
+    # ---- session output folder: the project's own prefix of the agent-files bucket;
+    # the per-agent role policy narrows it to the agent's own sessions ----
+    if inp.agent_files_bucket:
+        files = f"arn:{p}:s3:::{inp.agent_files_bucket}"
+        project_prefix = f"projects/{pid}/"
+        statements.append({
+            "Sid": "AgentFilesObjects", "Effect": "Allow",
+            "Action": ["s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload",
+                       "s3:DeleteObject"],
+            "Resource": [f"{files}/{project_prefix}*"],
+        })
+        statements.append({
+            "Sid": "AgentFilesList", "Effect": "Allow", "Action": ["s3:ListBucket"],
+            "Resource": [files],
+            "Condition": {"StringLike": {"s3:prefix": [f"{project_prefix}*"]}},
+        })
+
     # ---- ECR: the project repository and the legacy shared one (pull only); tagged
     # repositories: ProjectTagged ----
     repo = f"arn:{p}:ecr:{region}:{acct}:repository"
@@ -404,8 +424,11 @@ class _Needs:
     kb_ids: set[str] = field(default_factory=set)
     oauth2: set[str] = field(default_factory=set)
     api_key: set[str] = field(default_factory=set)
+    outputs: bool = False
 
     def add_spec(self, spec: Any) -> None:
+        if getattr(getattr(spec, "filesystem", None), "outputs", None) is not None:
+            self.outputs = True
         for kb in getattr(spec, "knowledge_bases", None) or []:
             self.kb_ids.add(kb.kb_id)
         for tool in getattr(spec, "tools", None) or []:
@@ -479,6 +502,7 @@ def inputs_for(project_id: str, workspace: Any, *, extra_specs: Iterable[Any] = 
         oauth2_connections=tuple(sorted(needs.oauth2)),
         api_key_connections=tuple(sorted(needs.api_key)),
         application_inference_profiles=profiles,
+        agent_files_bucket=(resources.get("agent_files_bucket", "") if needs.outputs else ""),
     )
 
 

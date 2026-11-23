@@ -82,7 +82,7 @@ from app.models.assistant import (
 )
 from app.models.ledger import Agent, Deployment, Job
 from app.optimization.models import Experiment, RuntimeCanary
-from app.services import agent_artifacts
+from app.services import agent_artifacts, agent_files
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
 logger = logging.getLogger(__name__)
@@ -916,6 +916,7 @@ def _step_agents(run: _Run) -> None:
         record = _clean_registry_record(run, key, agent)
         # best-effort, never raises: an orphaned package must not hold the clear
         artifacts = agent_artifacts.delete_agent_artifacts(agent, run.workspace)
+        agent_files.delete_agent_files(agent, run.workspace)
         run.db.expire_all()
         agent = run.db.get(Agent, agent_id)
         if agent.status != "deleted":
