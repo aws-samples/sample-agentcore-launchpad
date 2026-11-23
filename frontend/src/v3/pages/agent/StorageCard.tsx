@@ -3,11 +3,22 @@ import { Link } from "react-router-dom";
 
 import { editPath } from "../../../lib/agent-admin/edit";
 import type { AgentInfo } from "../../../lib/api";
-import { type AgentStorage, storageApi } from "../../../lib/api/storage";
+import { type AgentStorage, type LiveMount, storageApi } from "../../../lib/api/storage";
 import { useLoad } from "../../hooks";
 import { Chip, Notice, Panel, Skeleton } from "../../ui";
 import { STATUS_SIGNAL } from "../storage/model";
 import { when } from "./format";
+
+const MOUNT_KIND_LABEL: Record<LiveMount["kind"], string> = {
+  efs: "EFS",
+  s3files: "S3 Files",
+  s3bucket: "S3 bucket",
+};
+
+/** `s3://bucket/prefix` of a bucket mount (the whole bucket when it has no prefix). */
+function bucketUri(m: LiveMount): string {
+  return `s3://${m.bucket ?? "—"}/${m.prefix ?? ""}`;
+}
 
 /**
  * 存储 (storage-mounts §10): the current version's mounts — each catalog entry with its
@@ -86,10 +97,17 @@ export function StorageCardView({
             <tr key={`live-${m.mount_path}`} data-testid="v3-agent-storage-external">
               <td className="mono">{m.mount_path}</td>
               <td>
-                {m.storage_id ? <><b>{m.storage_name || m.storage_id}</b> <small className="mono">{m.storage_id}</small></>
+                {m.kind === "s3bucket" ? (
+                  <>
+                    <small className="mono" data-testid="v3-agent-storage-bucket">{bucketUri(m)}</small>
+                    {(m.bucket_owner || m.bucket_region) && (
+                      <small> · {[m.bucket_owner, m.bucket_region].filter(Boolean).join(" · ")}</small>
+                    )}
+                  </>
+                ) : m.storage_id ? <><b>{m.storage_name || m.storage_id}</b> <small className="mono">{m.storage_id}</small></>
                   : <small className="mono">{m.access_point_arn ?? "—"}</small>}
                 {" "}<Chip s="info">{t("v3.storage.card.external")}</Chip>
-                {" "}<Chip s="off">{m.kind === "efs" ? "EFS" : "S3 Files"}</Chip>
+                {" "}<Chip s="off">{MOUNT_KIND_LABEL[m.kind]}</Chip>
               </td>
               <td>—</td>
               <td>—</td>
@@ -99,6 +117,9 @@ export function StorageCardView({
       </table>
       {data.inline.length > 0 && <small className="v3-hint">{t("v3.storage.card.inlineHint")}</small>}
       {external.length > 0 && <small className="v3-hint">{t("v3.storage.card.externalHint")}</small>}
+      {external.some((m) => m.kind === "s3bucket") && (
+        <small className="v3-hint">{t("v3.storage.card.externalBucketHint")}</small>
+      )}
       {data.live?.status === "unavailable" && (
         <small className="v3-hint">{t("v3.storage.card.liveUnavailable", { error: data.live.error ?? "" })}</small>
       )}

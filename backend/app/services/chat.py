@@ -25,7 +25,9 @@ from app.services.invoke import (
     harness_turn_overrides,
     invoke_agent_events,
 )
+from app.services.invoke_session import assert_session_id_compatible
 from app.services.model_access import model_access_denied
+from app.services.mount_failure import mount_failure
 from app.services.runtime_discovery import is_discovered_harness
 from app.services.workspace import WorkspaceContext, context_for_workspace
 
@@ -127,6 +129,8 @@ def chat_stream(
     buffered: list[str] = []
     try:
         refuse_assistant_session(agent, session_id)
+        # a per-session bucket mount cannot take every session id: 400 before the model
+        assert_session_id_compatible(agent, session_id)
         # the project's monthly budget (projects §11.3): a used-up budget ends the
         # stream with an `error` event (project.budget_exhausted), before the model
         from app.services.project_quotas import assert_agent_budget
@@ -207,6 +211,13 @@ def chat_stream(
             envelope(exc.code, exc.message, exc.detail), exc, status_events)}
         return
     except Exception as exc:
+        # a runtime mount that failed (HTTP 424 "S3 mount failed") is final and named
+        # (agent.mount_failed); a retry cannot mount a bucket the role cannot read
+        mount = mount_failure(exc)
+        if mount is not None:
+            yield {"event": "error", "data": _with_transient(
+                envelope(mount.code, mount.message, mount.detail), mount, status_events)}
+            return
         # a refused model call is final and named (agent.model_access_denied): the
         # console must not retry it by itself or tell the person to send it again
         denied = model_access_denied(exc)

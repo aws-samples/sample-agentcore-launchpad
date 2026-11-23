@@ -116,11 +116,18 @@ export interface StoragePreflight {
   results: StorageCheck[];
 }
 
-/** One S3 Files / EFS mount the agent's Runtime or Harness carries on AWS. */
+/** One S3 Files / EFS / S3 bucket mount the agent's Runtime or Harness carries on AWS. */
 export interface LiveMount {
-  kind: "s3files" | "efs";
+  kind: "s3files" | "efs" | "s3bucket";
   mount_path: string;
+  /** S3 Files / EFS only; null for an `s3bucket` mount */
   access_point_arn: string | null;
+  /** `s3bucket` only (null otherwise; absent on an older backend): the bucket, its prefix
+   *  (null = the whole bucket) and, when set, the bucket owner account and Region */
+  bucket?: string | null;
+  prefix?: string | null;
+  bucket_owner?: string | null;
+  bucket_region?: string | null;
   /** `external`: added outside Launchpad (AWS console, an imported agent); kept on re-publish */
   origin: "platform" | "external";
   storage_id: string | null;

@@ -91,17 +91,20 @@ def _uploader_for(workspace: WorkspaceContext) -> Callable[[str, str, str], None
 def _candidate_mounts(live: dict, spec: Any, agent: Any, log: Any) -> list[dict] | None:
     """The candidate's mounts: the spec's, plus the live runtime's that the platform did
     not set (an AWS console mount), so a candidate does not lose them. Paths the current
-    spec names are the platform's; a candidate on the PUBLIC network keeps none."""
-    from app.deployer.filesystem import merge_live, mount_path
+    spec names are the platform's; a candidate on the PUBLIC network keeps none of the
+    NFS-backed ones (S3 Files / EFS need a VPC) but keeps an ``s3BucketMount``."""
+    from app.deployer.filesystem import merge_live, mount_path, needs_vpc
     from app.deployer.mounts import manifest_paths
 
     platform = filesystem_configurations(spec)
     merged = merge_live(live.get("filesystemConfigurations"), platform,
                         managed_paths=manifest_paths(agent.spec))
     kept = merged[len(platform):]
-    if kept and spec_vpc(spec, agent.workspace_id) is None:
-        log("mounts set outside the platform are not carried to a PUBLIC candidate")
-        merged = platform
+    if any(needs_vpc(fs) for fs in kept) and spec_vpc(spec, agent.workspace_id) is None:
+        log("S3 Files / EFS mounts set outside the platform are not carried to a PUBLIC "
+            "candidate")
+        kept = [fs for fs in kept if not needs_vpc(fs)]
+        merged = [*platform, *kept]
     for fs in kept:
         log(f"mount {mount_path(fs)}: set outside the platform, kept on the candidate")
     return merged or None

@@ -84,6 +84,16 @@ approval list only after a person approves it in the console chat. `/v1` cannot
 approve: a call whose agent tried such a tool answers `409
 agent.tool_approval_requires_console` (`detail.tool`, `detail.agent_id`); the stream
 ends with an `error` event of that code.
+An agent whose runtime mounts an S3 bucket prefix per session (an `s3BucketMount` whose
+prefix contains `{runtimeSessionId}`) accepts only session ids of 33-256 characters that
+start with a letter or digit and contain only letters, digits, `_` and `-`: any other
+`session_id` (for example one containing `#`) answers `400 invoke.session_id_incompatible`
+before the agent is invoked; omit it and the platform mints a fitting one. When
+AgentCore cannot mount a runtime bucket (HTTP 424, "S3 mount failed: access denied", the
+bucket was not found, the Region was rejected), the call answers `424 agent.mount_failed`
+with AWS's reason in `detail.reason`; a retry cannot succeed until the bucket, its policy,
+the agent's execution role or the mount's Region is fixed. On a stream both codes arrive
+as the `error` event.
 
 **Sync invoke has a deadline: use the stream for chat.** A synchronous invoke sends
 nothing until the whole answer exists, and a proxy in front of the console cuts such a

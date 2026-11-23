@@ -35,7 +35,9 @@ from app.services.agentcore.client import (
     heartbeat_data_client,
 )
 from app.services.attachments import PreparedAttachments
+from app.services.invoke_session import assert_session_id_compatible
 from app.services.model_access import model_access_denied
+from app.services.mount_failure import mount_failure
 from app.services.runtime_discovery import (
     DISCOVERED_METHOD,
     is_discovered_harness,
@@ -229,9 +231,13 @@ def upstream_invoke_error(exc: BaseException, *, public: bool = False) -> AppErr
 
     A model call the agent's role may not make is named first
     (``agent.model_access_denied``): it reaches here as a ``runtimeClientError`` or a
-    ``RuntimeError`` and is final, not "usually temporary"."""
+    ``RuntimeError`` and is final, not "usually temporary". A runtime mount that
+    failed (HTTP 424, "S3 mount failed: …") is named too (``agent.mount_failed``)."""
     from app.evaluation.service import transient_invoke_error
 
+    mount = mount_failure(exc)
+    if mount is not None:
+        return mount
     denied = model_access_denied(exc, public=public)
     if denied is not None:
         return denied
@@ -944,6 +950,7 @@ def _dispatch_invoke(
 ) -> dict[str, Any]:
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
+    assert_session_id_compatible(agent, session_id)
     workspace = _agent_workspace(agent, workspace)
     if _runtime_gateway_mode(agent):
         notice, gateway_access_token = _runtime_gateway_gate(
@@ -1157,6 +1164,7 @@ def invoke_agent_events(
     """
     require_invoke_capability(agent)
     refuse_assistant_session(agent, session_id)
+    assert_session_id_compatible(agent, session_id)
     tool_approvals = _turn_approvals(tool_approvals, console_user)
     workspace = _agent_workspace(agent, workspace)
     if _runtime_gateway_mode(agent):

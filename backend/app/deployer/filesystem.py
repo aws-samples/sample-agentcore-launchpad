@@ -14,6 +14,14 @@ when one is sent (``[]`` detaches everything).
 """
 
 from app.schemas.agent import AgentSpec
+from app.services.agentcore.filesystem_kinds import (  # noqa: F401 — re-exported
+    BYO_KINDS,
+    NFS_KINDS,
+    S3_BUCKET_KIND,
+    member_kind,
+    needs_vpc,
+    per_session_prefix,
+)
 
 
 def filesystem_configurations(spec: AgentSpec) -> list[dict]:
@@ -87,8 +95,9 @@ def runtime_update_mounts(control, runtime_id: str, spec: AgentSpec, *, managed_
     """``filesystemConfigurations`` for an UpdateAgentRuntime: the spec's entries plus
     the mounts on the live runtime that the platform did not set. Without them the
     update would detach a mount added in the AWS console. A runtime moving to PUBLIC
-    cannot keep a BYO mount (AWS refuses one outside a VPC): those are detached and
-    the deploy log says so."""
+    cannot keep an NFS-backed mount (S3 Files / EFS: AWS refuses one outside a VPC):
+    those are detached and the deploy log says so. An external ``s3BucketMount`` works
+    on PUBLIC and is kept."""
     from app.services.agentcore import runtime as rt
 
     platform = filesystem_configurations(spec)
@@ -97,11 +106,12 @@ def runtime_update_mounts(control, runtime_id: str, spec: AgentSpec, *, managed_
     detail = live_runtime if live_runtime is not None else rt.get_runtime(control, runtime_id)
     live = detail.get("filesystemConfigurations") or []
     kept = external_entries(live, platform, managed_paths)
-    if kept and vpc is None:
+    if vpc is None:
         for fs in kept:
-            log(f"mount {mount_path(fs)}: set outside the platform, detached because the "
-                "runtime now runs on the PUBLIC network")
-        kept = []
+            if needs_vpc(fs):
+                log(f"mount {mount_path(fs)}: set outside the platform, detached: S3 Files "
+                    "/ EFS need a VPC and the runtime now runs on the PUBLIC network")
+        kept = [fs for fs in kept if not needs_vpc(fs)]
     for fs in kept:
         log(f"mount {mount_path(fs)}: set outside the platform, kept on this update")
     merged = merge_live(live, platform, managed_paths=managed_paths, on_conflict=log)

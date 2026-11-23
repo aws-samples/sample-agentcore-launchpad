@@ -191,3 +191,86 @@ for i of picked: api.attachSkillSources(sid, [{index: i}])   # 1st success drops
 # CORRECT: one batched call
 api.attachSkillSources(sid, picked.map(index => ({index})))
 ```
+
+## Scenario: `s3BucketMount` entries (S3 bucket mounts, all Runtime methods)
+
+### 1. Scope / Trigger
+- Trigger: AgentCore Runtime V2 mounts an S3 bucket prefix itself (Mountpoint for S3) —
+  a new `filesystemConfigurations` union member that is customer storage but **not NFS**.
+  Any code that classifies entries, merges them on update, guards invokes, or maps invoke
+  errors must use the helpers below. Probe: `backend/scripts/probe_s3_bucket_mount.py`
+  (live 2026-11-23, us-west-2; results in task `11-23-s3mount-p0-compat-probe/research/`).
+
+### 2. Signatures
+```python
+# app/services/agentcore/filesystem_kinds.py  (leaf; re-exported by deployer/filesystem.py)
+NFS_KINDS = {"s3FilesAccessPoint", "efsAccessPoint"}            # need networkMode VPC
+BYO_KINDS = NFS_KINDS | {"s3BucketMount"}
+LIVE_KIND = {"s3FilesAccessPoint": "s3files", "efsAccessPoint": "efs",
+             "s3BucketMount": "s3bucket"}
+def member_kind(entry) -> str            # union key, '' if none
+def needs_vpc(entry) -> bool             # member_kind in NFS_KINDS
+def per_session_prefix(entry) -> bool    # s3BucketMount with '{runtimeSessionId}' in prefix
+# app/services/invoke_session.py
+SESSION_ID_MOUNT_RE = r"^[A-Za-z0-9][A-Za-z0-9_-]{32,255}$"
+def assert_session_id_compatible(agent, session_id) -> None   # 400 invoke.session_id_incompatible
+# app/services/mount_failure.py
+def mount_failure(exc) -> AppError | None                     # 424 agent.mount_failed
+```
+
+### 3. Contracts
+- Wire shape (botocore ≥ 1.44.6; `backend/pyproject.toml` floor `boto3>=1.44.6`):
+  `{"s3BucketMount": {"bucket", "mountPath", "prefix"?, "s3BucketOwner"?, "s3BucketRegion"?}}`.
+- Requires `platformVersion: "V2"`; works on PUBLIC and VPC; same echo-on-update rule as
+  every member (UpdateAgentRuntime without the list clears it — probe P6).
+- `live_mounts` entry: `{kind: "s3bucket", mount_path, bucket, prefix, bucket_owner,
+  bucket_region, access_point_arn: None, origin, storage_id, storage_name}`; members it does
+  not model (e.g. `capacityProviderVolume`) are skipped.
+- Per-session IAM shape (probe P4): ListBucket `s3:prefix` [`<P>${aws:AgentCoreRuntimeSourceSid}/*`,
+  `<P>${aws:AgentCoreRuntimeSourceSid}`]; objects `<P>${aws:AgentCoreRuntimeSourceSid}/*`.
+  Bucket-policy confinement (probe P4b): Deny `Principal *`, `NotResource …/${sid}/*`,
+  condition `Null aws:AgentCoreRuntimeSourceSid = false` — requests without the key (the
+  backend) are unaffected.
+
+### 4. Validation & Error Matrix
+| Condition | Result |
+|---|---|
+| s3BucketMount on PUBLIC | allowed (create guard, re-publish merge, canary candidate) |
+| S3 Files / EFS on PUBLIC | refused before AWS (create) / detached + logged (re-publish) |
+| V1 runtime + s3BucketMount | AWS 400 at create: "s3BucketMount can only be used when platformVersion is V2." |
+| Harness + s3BucketMount | CreateHarness OK, backing runtime CREATE_FAILED ("Each filesystemConfigurations entry must specify exactly one of …") → **unsupported**, refuse |
+| spec has per-session mount + caller id outside `SESSION_ID_MOUNT_RE` | 400 `invoke.session_id_incompatible` (before AWS; AWS would answer ValidationException) |
+| invoke error text contains `S3 mount failed:` | 424 `agent.mount_failed`, `detail.reason` = AWS phrase, not retryable |
+| HTTP 424 without that text | unchanged handling — it is the generic `RuntimeClientError` of any failing container |
+| boundary/role lacks S3 actions | 424 "S3 mount failed: access denied" (mount uses the role session — boundaries apply) |
+| missing bucket | 424 "S3 mount failed: the S3 bucket was not found" |
+
+### 5. Good / Base / Bad Cases
+- Good: PUBLIC V2 zip runtime, `prefix: "sessions/{runtimeSessionId}/"`, role scoped with SourceSid.
+- Base: externally added s3BucketMount on a platform agent → kept on every re-publish, shown as `external`.
+- Bad: classifying with `"sessionStorage" not in fs` (treats S3 buckets as NFS); mapping
+  every 424 to a mount failure; appending/renaming inside the mount (EPERM / ENOSYS;
+  in-place edit EBADF — write whole files).
+
+### 6. Tests Required
+- `tests/test_filesystem_kinds.py`: botocore model has `s3BucketMount`; helpers; PUBLIC create
+  passes for bucket / refused for NFS; PUBLIC re-publish keeps bucket, detaches NFS with the
+  right log; canary candidate keeps bucket; harness update keeps external bucket; session-id
+  guard (fires only with a per-session spec mount, never on 64-hex ids) through
+  `invoke_agent_text`, `invoke_agent_events`, `chat_stream`; mount_failure text-only match
+  (a bare 424 `RuntimeClientError` → None).
+- `tests/test_live_mounts.py`: s3files / efs / s3bucket classification, session storage skipped.
+- `frontend/src/v3/pages/storage/storage.test.tsx`: StorageCard bucket row.
+
+### 7. Wrong vs Correct
+```python
+# WRONG: every non-session entry is "BYO needing a VPC"
+if any("sessionStorage" not in fs for fs in entries) and not vpc: raise ...
+# CORRECT: only NFS members need a VPC
+if any(needs_vpc(fs) for fs in entries) and not vpc: raise ...
+
+# WRONG: status-based mount detection — relabels every agent crash
+if status == 424: raise AppError("agent.mount_failed", ...)
+# CORRECT: match AWS's phrase
+if re.search(r"S3 mount failed:?\s*(.*)", text): raise AppError("agent.mount_failed", ...)
+```

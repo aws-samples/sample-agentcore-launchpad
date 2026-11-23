@@ -40,6 +40,11 @@ from app.core.errors import AppError, NotFoundError
 from app.core.project_scope import project_context
 from app.models.ledger import Agent
 from app.models.storage import ProjectStorageMount, StorageMount
+from app.services.agentcore.filesystem_kinds import (
+    LIVE_KIND,
+    S3_BUCKET_KIND,
+    member_kind,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1040,11 +1045,14 @@ def storage_iam_statements(spec: Any, resources: dict[str, dict[str, Any]] | Non
 
 
 def live_mounts(control: Any, db: Session, agent: Agent) -> dict[str, Any]:
-    """The S3 Files / EFS mounts the agent's Runtime or Harness carries on AWS, each
-    marked ``platform`` (a mount path a Launchpad publish set) or ``external`` (added
-    outside Launchpad, e.g. in the AWS console, or on an imported agent) and matched to
-    a catalog entry by access point ARN. A re-publish keeps the external ones
-    (``deployer/filesystem.merge_live``). Read-only."""
+    """The S3 Files / EFS / S3 bucket mounts the agent's Runtime or Harness carries on
+    AWS (a member of another kind is not listed), each marked ``platform`` (a mount
+    path a Launchpad publish set) or ``external`` (added outside Launchpad, e.g. in the
+    AWS console, or on an imported agent) and matched to a catalog entry by access
+    point ARN. A re-publish keeps the external ones (``deployer/filesystem.merge_live``).
+    An ``s3bucket`` entry carries ``bucket``, ``prefix``, ``bucket_owner`` and
+    ``bucket_region`` instead of an access point (the bucket fields are ``None`` on the
+    others). Read-only."""
     from app.deployer.filesystem import mount_path
     from app.deployer.mounts import manifest_paths, published_mount_paths
     from app.services.agent_versions import resource_kind
@@ -1067,16 +1075,21 @@ def live_mounts(control: Any, db: Session, agent: Agent) -> dict[str, Any]:
         StorageMount.archived_at.is_(None)))}
     out = []
     for fs in entries:
-        if "sessionStorage" in fs:
+        fs_kind = member_kind(fs)
+        label = LIVE_KIND.get(fs_kind)
+        if label is None:  # session storage, or a member this card does not model
             continue
-        member_kind, member = next(((k, v) for k, v in fs.items() if isinstance(v, dict)),
-                                   ("", {}))
+        member = fs[fs_kind]
         arn = str(member.get("accessPointArn") or "")
-        row = by_arn.get(arn)
+        row = by_arn.get(arn) if arn else None
         out.append({
-            "kind": "efs" if member_kind == "efsAccessPoint" else "s3files",
+            "kind": label,
             "mount_path": mount_path(fs),
             "access_point_arn": arn or None,
+            "bucket": member.get("bucket") if fs_kind == S3_BUCKET_KIND else None,
+            "prefix": member.get("prefix") if fs_kind == S3_BUCKET_KIND else None,
+            "bucket_owner": member.get("s3BucketOwner") if fs_kind == S3_BUCKET_KIND else None,
+            "bucket_region": member.get("s3BucketRegion") if fs_kind == S3_BUCKET_KIND else None,
             "origin": "platform" if mount_path(fs) in owned else "external",
             "storage_id": row.id if row is not None else None,
             "storage_name": row.name if row is not None else None,

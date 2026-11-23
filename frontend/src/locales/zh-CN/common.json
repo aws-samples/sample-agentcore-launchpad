@@ -2844,6 +2844,8 @@
     "agent.tool_approval_requires_console": "该 Agent 的某个工具需要人工批准，只能在 Launchpad 控制台的对话中批准。",
     "agent.upstream_error": "智能体的模型或运行时在回答前出错，通常是暂时的。请重新发送；反复出现时打开该智能体的追踪查看。",
     "agent.model_access_denied": "该智能体无权调用它的模型：执行角色没有授权这个模型，或本账号没有开通该模型的访问权限。重新发送不会成功。请重新部署该智能体以重新生成角色，或在 Amazon Bedrock 中开通该模型的访问权限，或换一个模型。",
+    "agent.mount_failed": "该智能体的运行时无法挂载它的存储，本轮没有运行。重新发送不会成功：请先修复存储桶或文件系统、它的访问策略、智能体的执行角色，或挂载所在的区域。",
+    "invoke.session_id_incompatible": "该智能体的存储按会话挂载，因此会话 ID 必须为 33 到 256 个字符，以字母或数字开头，且只包含字母、数字、“_”和“-”。请换一个会话 ID，或不指定。",
     "agent_tools.jwt_inbound": "该 Agent 不能作为工具提供：它的 Runtime 只接受 JWT Bearer 令牌，而调用方 Agent 使用 IAM 签名。",
     "agent_tools.not_deployed": "该 Agent 不能作为工具提供：它尚未部署。",
     "agent_tools.not_found": "未找到被选作工具的 Agent。",
@@ -16239,6 +16241,7 @@
         "inlineHint": "内联访问点为读写，且无法晋级。请在存储目录中登记后按 ID 挂载。",
         "external": "在 Launchpad 之外挂载",
         "externalHint": "从 AWS 回读：这些挂载是在 Launchpad 之外添加的（在 AWS 控制台里，或在导入 Agent 之前）。在 Launchpad 里重新发布会保留它们；如果要在这里管理，请先在存储页登记它的访问点，再通过编辑向导挂载。",
+        "externalBucketHint": "S3 存储桶挂载在 PUBLIC 网络和 VPC 中均可使用。在 Launchpad 里重新发布会保留它；存储桶及其权限请在 AWS 中管理。",
         "liveUnavailable": "读取 AWS 上的挂载失败（{{error}}），在 Launchpad 之外添加的挂载没有列出。"
       },
       "picker": {
