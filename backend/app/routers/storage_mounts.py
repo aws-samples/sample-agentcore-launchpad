@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -39,16 +39,44 @@ DataClass = Literal["reference", "shared_state", "scratch"]
 
 
 class RegisterBody(BaseModel):
+    """An S3 Files / EFS access point (`access_point_arn`), or — ``kind: "s3bucket"`` — an
+    existing S3 bucket prefix (`bucket`, `prefix`, `scope`, `bucket_owner`,
+    `bucket_region`). Validation of the bucket fields lives in
+    `storage_mounts.validate_bucket_fields`."""
+
     model_config = {"extra": "forbid"}
 
     id: str = Field(pattern=STORAGE_ID_PATTERN)
     name: str = Field(default="", max_length=64)
-    access_point_arn: str = Field(min_length=20, max_length=2048)
+    kind: Literal["s3files", "efs", "s3bucket"] | None = None
+    access_point_arn: str | None = Field(default=None, min_length=20, max_length=2048)
+    bucket: str | None = Field(default=None, max_length=63)
+    prefix: str | None = Field(default=None, max_length=1024)
+    scope: Literal["per_session", "shared"] | None = None
+    bucket_owner: str | None = Field(default=None, max_length=12)
+    bucket_region: str | None = Field(default=None, max_length=32)
     max_mode: Mode = "ro"
     data_class: DataClass = "reference"
     network_profile_id: str | None = Field(default=None, pattern=NETWORK_PROFILE_ID_RE)
     # run the check right after registering (the default)
     check: bool = True
+
+    @model_validator(mode="after")
+    def _one_shape(self) -> "RegisterBody":
+        bucket_fields = (self.bucket, self.prefix, self.scope, self.bucket_owner,
+                         self.bucket_region)
+        if self.kind == "s3bucket" or self.bucket:
+            if not self.bucket:
+                raise ValueError("an S3 bucket entry needs `bucket`")
+            if self.access_point_arn:
+                raise ValueError("an S3 bucket entry has no access point")
+            self.kind = "s3bucket"
+        else:
+            if not self.access_point_arn:
+                raise ValueError("`access_point_arn` is required")
+            if any(v is not None for v in bucket_fields):
+                raise ValueError("bucket fields apply to kind s3bucket only")
+        return self
 
 
 class PatchBody(BaseModel):
@@ -114,9 +142,12 @@ class PreflightBody(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    mounts: list[StorageMountRef] = Field(min_length=1, max_length=4)
+    mounts: list[StorageMountRef] = Field(min_length=1, max_length=5)
     network_profile_id: str | None = Field(default=None, pattern=NETWORK_PROFILE_ID_RE)
     method: str = Field(default="", max_length=24)
+    # Runtime platform the agent will run on, when the wizard knows it (S3 bucket
+    # mounts need V2); absent = a new agent's default
+    platform_version: Literal["V1", "V2"] | None = None
     byoc_artifact_kind: str | None = Field(default=None, max_length=32)
 
 
@@ -233,6 +264,8 @@ def preflight(
         "filesystem": {"mounts": [m.model_dump() for m in body.mounts]},
         "network": {"profile_id": body.network_profile_id} if body.network_profile_id else None,
         "byoc": {"artifact_kind": body.byoc_artifact_kind} if body.byoc_artifact_kind else None,
+        "runtime_config": {"platform_version": body.platform_version}
+        if body.platform_version else None,
     }
     project_id = _project_id(request)
     return service.preflight_spec(db, ws.context, spec,

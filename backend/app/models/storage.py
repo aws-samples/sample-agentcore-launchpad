@@ -25,7 +25,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.db import Base
 from app.models.ledger import _id, _now
 
-KINDS = ("s3files", "efs")
+KINDS = ("s3files", "efs", "s3bucket")
+SCOPES = ("per_session", "shared")  # `s3bucket` only
 MODES = ("ro", "rw")
 # §8.2: what the data is, which decides how evaluation and the release gate treat it
 DATA_CLASSES = ("reference", "shared_state", "scratch")
@@ -49,7 +50,9 @@ class StorageMount(Base):
     workspace_id: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     name: Mapped[str] = mapped_column(String(64))
     kind: Mapped[str] = mapped_column(String(16))  # KINDS
-    # immutable once registered: a reference stamped with it stays right
+    # immutable once registered: a reference stamped with it stays right. An `s3bucket`
+    # entry has none (SQLite cannot relax NOT NULL on a shipped column): it stores ``""``
+    # and every access-point keyed reader skips the kind
     access_point_arn: Mapped[str] = mapped_column(String(2048))
     # filled by the check (GetAccessPoint / DescribeAccessPoints)
     file_system_arn: Mapped[str | None] = mapped_column(String(2048), default=None)
@@ -72,6 +75,16 @@ class StorageMount(Base):
     check_results: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
     status: Mapped[str] = mapped_column(String(16), default="unchecked")
     checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # `s3bucket` only — what an administrator registers: an existing bucket prefix. All
+    # immutable like the access point; ``prefix`` is ``''`` or ``x/y/``
+    bucket: Mapped[str | None] = mapped_column(String(63), default=None)
+    prefix: Mapped[str | None] = mapped_column(String(1024), default=None)
+    scope: Mapped[str | None] = mapped_column(String(16), default=None)  # SCOPES
+    bucket_owner: Mapped[str | None] = mapped_column(String(12), default=None)
+    bucket_region: Mapped[str | None] = mapped_column(String(32), default=None)
+    # filled by the check: ``sse-s3`` | ``sse-kms`` | ``none`` and the key's ARN
+    encryption: Mapped[str | None] = mapped_column(String(16), default=None)
+    kms_key_arn: Mapped[str | None] = mapped_column(String(2048), default=None)
     created_by: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

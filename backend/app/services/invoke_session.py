@@ -37,7 +37,8 @@ def has_per_session_mount(agent: Any) -> bool:
         from app.deployer import filesystem
         from app.schemas.agent import AgentSpec
 
-        entries = filesystem.filesystem_configurations(AgentSpec(**stored))
+        entries = filesystem.filesystem_configurations(
+            AgentSpec(**stored), getattr(agent, "id", None))
     except Exception:  # noqa: BLE001 — see docstring
         return False
     return any(per_session_prefix(entry) for entry in entries)

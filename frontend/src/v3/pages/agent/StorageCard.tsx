@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 
 import { editPath } from "../../../lib/agent-admin/edit";
 import type { AgentInfo } from "../../../lib/api";
-import { type AgentStorage, type LiveMount, storageApi } from "../../../lib/api/storage";
+import { type AgentStorage, bucketUri as entryBucketUri, type LiveMount, storageApi } from "../../../lib/api/storage";
 import { useLoad } from "../../hooks";
 import { Chip, Notice, Panel, Skeleton } from "../../ui";
 import { STATUS_SIGNAL } from "../storage/model";
@@ -70,6 +70,12 @@ export function StorageCardView({
                 {m.entry ? <><b>{m.entry.name}</b> <small className="mono">{m.storage_id}</small></> : <span className="mono">{m.storage_id}</span>}
                 {m.missing && <> <Chip s="act">{t("v3.storage.card.missing")}</Chip></>}
                 {m.entry?.archived && <> <Chip s="off">{t("v3.storage.card.archived")}</Chip></>}
+                {m.entry?.kind === "s3bucket" && (
+                  <div data-testid="v3-agent-storage-entry-bucket">
+                    <small className="mono">{entryBucketUri(m.entry)}</small>
+                    {m.entry.scope && <> <Chip s="off">{t(`v3.storage.scope.${m.entry.scope}`)}</Chip></>}
+                  </div>
+                )}
               </td>
               <td><Chip s={m.mode === "rw" ? "wait" : "off"}>{t(`v3.storage.mode.${m.mode}`)}</Chip></td>
               <td>

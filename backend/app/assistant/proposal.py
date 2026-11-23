@@ -560,10 +560,12 @@ def storage_catalog(db: Any, workspace_id: str, project_id: str | None) -> list[
     """The storage catalog entries a proposal of ``project_id`` may name (its allowed
     set; every live entry when no project is current), with what an approval pins.
     Blocked entries stay listed so a reference to one explains itself."""
-    from app.services.storage_mounts import list_entries
+    from app.services.storage_mounts import S3_BUCKET, list_entries
 
     out = []
     for entry in list_entries(db, workspace_id, project_id, see_all=project_id is None):
+        if entry["kind"] == S3_BUCKET:
+            continue  # a proposal creates a Harness, which cannot mount S3 buckets (P3)
         out.append({key: entry.get(key) for key in (
             "name", "kind", "access_point_arn", "max_mode", "data_class",
             "network_profile_id", "status")} | {"storage_id": entry["id"]})

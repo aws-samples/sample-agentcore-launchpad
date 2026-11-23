@@ -274,3 +274,71 @@ if status == 424: raise AppError("agent.mount_failed", ...)
 # CORRECT: match AWS's phrase
 if re.search(r"S3 mount failed:?\s*(.*)", text): raise AppError("agent.mount_failed", ...)
 ```
+
+## Scenario: the `s3bucket` storage catalog kind (P1)
+
+### 1. Scope / Trigger
+- Trigger: any change to how an administrator-registered S3 bucket prefix becomes a
+  `s3BucketMount`: register/check, spec stamp, mapping, IAM, boundary, preflight, promotion.
+  Code: `services/storage_mounts.py`, `models/storage.py`, `deployer/filesystem.py`,
+  `deployer/mounts.py`, `services/project_iam.py`, `infra/spoke/*.yaml` (template v3).
+
+### 2. Signatures
+```python
+# models/storage.StorageMount (additive columns; `access_point_arn` stays NOT NULL -> "")
+kind="s3bucket"; bucket; prefix ("" | "x/y/"); scope ("per_session"|"shared");
+bucket_owner; bucket_region; encryption; kms_key_arn
+# services/agentcore/filesystem_kinds.py
+mounted_prefix(entry_prefix, scope, agent_id) -> str   # per_session: "<P><agent_id>/{runtimeSessionId}/"
+iam_prefix(prefix) -> str                              # token -> ${aws:AgentCoreRuntimeSourceSid}
+# services/storage_mounts.py
+register(...)                      # kind s3bucket | access point; validate_bucket_fields
+normalize_spec_storage(db, ws, project, spec, *, creating=False)  # stamp + assert_bucket_platform
+filesystem_entries(spec, agent_id) # ValueError for a per-session mount without agent_id
+storage_iam_statements(spec, resources=None, agent_id=None, partition="aws")
+bucket_iam_statements(grants, partition) / bucket_policy_preview(db, row)
+boundary_statements(inp)           # project_iam.EXTRA_BOUNDARY_STATEMENT_BUILDERS
+# deployer/filesystem.py
+filesystem_configurations(spec, agent_id=None); runtime_update_mounts(..., agent_id=None)
+# schemas/agent.py
+BUCKET_MOUNT_UNSUPPORTED = {"harness": "..."}   # data-driven refusal; delete a row to lift it
+FilesystemConfig.needs_vpc (NFS only) / bucket_mounts(); MAX_FILESYSTEM_ENTRIES = 5
+```
+
+### 3. Contracts
+- Layout is platform-forced (D1.2): admins set only the entry prefix; `per_session` mounts
+  `<entry prefix><agent_id>/{runtimeSessionId}/`. The agent id is a REQUIRED input of every
+  mapping/IAM call: thread it, never default it. Catalog prefixes carry no `* ? { } $` (they
+  become IAM `s3:prefix` / resource patterns).
+- IAM shape (probe P4): ListBucket `s3:prefix` [`<P>*`, `<P>` without slash] on the bucket
+  (no condition for a whole-bucket shared mount), object actions on `<bucket>/<P>*`
+  (`GetObject`; rw adds Put/AbortMultipartUpload/Delete), KMS Decrypt (+GenerateDataKey rw)
+  on the key the check recorded. Golden tests pin it in `tests/test_storage_s3bucket.py`.
+- Isolated projects: the boundary needs its own S3 statements (probe P9); the S3 Files/EFS
+  ones already come from the `WorkspaceWide` statement. `test_project_iam.py::
+  test_s3_bucket_mount_grants_survive_the_boundary` proves identity grants fit.
+- Spoke template v3 (`S3CatalogRead`: HeadBucket/Location/Encryption/BPA/Versioning on
+  `arn:*:s3:::*`) is what the check needs in a multi-account workspace.
+
+### 4. Validation & Error Matrix
+| Condition | Result |
+|---|---|
+| bad bucket / prefix / owner / Region, directory bucket | 422 `storage.invalid_bucket` |
+| Harness + s3bucket entry | 422 `storage.method_unsupported` |
+| Runtime without explicit V2 (existing agent) or V1 | 422 `storage.requires_v2` (new agents default V2) |
+| role policy over the inline cap | 422 `storage.policy_too_large` |
+| target workspace's entry is another kind (promotion) | 409/unmapped `storage.unmapped` |
+| bucket missing / unreachable / wrong Region (check) | block `s3.bucket_missing` / `s3.bucket_access` / `s3.region_mismatch` |
+
+### 5. Wrong vs Correct
+```python
+# WRONG: render the mount without its agent -> a shared prefix for every agent's sessions
+filesystem_entries(spec)            # raises ValueError for per_session now
+# CORRECT
+filesystem_configurations(spec, row.id)
+
+# WRONG: key access-point lookups on rows of every kind (s3bucket rows store "")
+by_arn = {r.access_point_arn: r for r in rows}
+# CORRECT: skip kind == "s3bucket"; match a live bucket entry by (bucket, mounted prefix)
+```
+

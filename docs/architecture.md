@@ -424,9 +424,9 @@ re-exported by `deployer/filesystem.py`): only `s3FilesAccessPoint` / `efsAccess
 a VPC. So the create guard admits a PUBLIC runtime with an S3 bucket mount, a PUBLIC
 re-publish (and a PUBLIC canary candidate) keeps an externally added one while still
 detaching external S3 Files / EFS mounts, and the agent's storage card lists it as kind
-`s3bucket` (`bucket`, `prefix`, owner, Region). The console cannot set one yet; an S3 bucket
-mount made in the AWS console survives re-publishes like any other external mount. Live
-facts (`backend/scripts/probe_s3_bucket_mount.py`, 2026-11-23, us-west-2):
+`s3bucket` (`bucket`, `prefix`, owner, Region). An S3 bucket mount made in the AWS console
+survives re-publishes like any other external mount; the console itself adds one only through
+the storage catalog (kind `s3bucket`, below). Live facts (`backend/scripts/probe_s3_bucket_mount.py`, 2026-11-23, us-west-2):
 
 - **V2 only**, refused at create on V1 (`s3BucketMount can only be used when
   platformVersion is V2`).
@@ -503,7 +503,7 @@ in its own `WorkshopInstanceStoragePolicy`.
 
 **The storage catalog** (storage-mounts §4, SM-2, `services/storage_mounts.py`,
 [api.md](api.md#console-storage-catalog-api)). An administrator registers an S3 Files
-or EFS access point once per workspace as a catalog entry (`storage_mounts`: id, kind,
+or EFS access point, or an S3 bucket prefix (below), once per workspace as a catalog entry (`storage_mounts`: id, kind,
 access point, `max_mode` `ro` / `rw`, `data_class`, an optional default network
 profile) and allows it per project (`project_storage_mounts`), like network profiles;
 an entry outside the project's allowed set reads as missing. A spec then mounts it by
@@ -520,9 +520,60 @@ mode**: `storage_iam_statements` grants `ClientMount` for every mount and adds
 catalog mount is a resource-mapping reference of kind `storage`: the catalog id is the
 logical name, the target workspace's entry (or the one a mapping row names) must be
 live and allowed for the project, else the release is refused (`storage.unmapped`),
-and the resolved spec is re-stamped with the target's access point. Inline access
+and the resolved spec is re-stamped with the target's access point (or bucket fields); a
+target entry of another kind than the source's counts as unmapped. Inline access
 points name the source account and are not promotable
 (`storage.inline_not_promotable`).
+
+**S3 bucket entries** (kind `s3bucket`, AgentCore Runtime V2 `s3BucketMount`). An
+administrator registers an **existing** general purpose bucket prefix — the platform never
+creates or changes the bucket — with a `scope`:
+
+- `per_session` (the default): the platform mounts `<entry prefix><agent_id>/{runtimeSessionId}/`,
+  so each session of each agent sees only its own folder (private working / output files);
+- `shared`: the entry prefix as it is, for every session and agent.
+
+The entry stores `bucket`, `prefix` (`""` or `x/y/`, never a wildcard or placeholder),
+`scope`, an optional `bucket_owner` (another account) and `bucket_region` (a bucket outside
+the workspace Region: AgentCore rejects the mount otherwise), all immutable like an access
+point; the `access_point_arn` column stays `""` and every access-point keyed path skips the
+kind. The server stamps the bucket fields (and the KMS key the check found) into the stored
+spec's `filesystem.mounts[]`; `filesystem_entries(spec, agent_id)` maps them to
+`s3BucketMount` — the agent id is a required input, threaded through every deployer, the
+re-publish merge, the canary candidate and the session-id guard.
+
+- **Gate.** A spec that mounts one needs a Runtime method on **platform V2**
+  (`422 storage.requires_v2`; a new agent defaults to V2, an existing agent must pick V2
+  explicitly) and is refused on the managed Harness (`422 storage.method_unsupported`, from
+  `BUCKET_MOUNT_UNSUPPORTED`: probe P3 showed the backing runtime fails `CREATE_FAILED`; a
+  passing re-probe lifts it by deleting that row). The architect proposes only Harness agents,
+  so it never lists these entries. S3 bucket mounts need no VPC; S3 Files / EFS still do.
+  Every `filesystemConfigurations` entry, session storage included, counts against
+  AgentCore's limit of five.
+- **IAM** (`storage_iam_statements` → `launchpad-fs-<agent>`, shapes from probe P4):
+  `s3:ListBucket` on the bucket with `s3:prefix` ∈ [`<P>*`, `<P>` without its slash] and
+  object actions on `<P>*` (`GetObject`; read-write adds `PutObject`,
+  `AbortMultipartUpload`, `DeleteObject`), plus `kms:Decrypt` (`GenerateDataKey` read-write)
+  on an SSE-KMS bucket's key. For a per-session mount `P` carries
+  `${aws:AgentCoreRuntimeSourceSid}` where the session id goes, so even direct S3 calls from
+  inside a session reach only that session's folder. An isolated project's **permissions
+  boundary** gets the same actions on the entries allowed to the project
+  (`storage_mounts.boundary_statements`, registered in
+  `project_iam.EXTRA_BOUNDARY_STATEMENT_BUILDERS`; prefix-wide — the role policy narrows),
+  because the mount runs under the boundary (probe P9).
+- **Check and preflight.** The check reads the bucket with the workspace's credentials
+  (`HeadBucket` with `ExpectedBucketOwner`, Region, default encryption, Block Public Access,
+  versioning; read-only): missing / unreachable / wrong-Region buckets block, Block Public Access
+  off warns, a KMS bucket is noted. The preflight needs no NFS checks; on a VPC network it
+  warns when neither an S3 gateway endpoint nor a NAT gateway serves the subnets, and when the
+  bucket is in another Region. The entry's detail page shows the role statements agents get
+  and a recommended **bucket policy** (what a cross-account bucket needs, plus the verified
+  per-session confinement from probe P4b) as copyable JSON; applying it is the administrator's.
+  Multi-account workspaces need the spoke role template **v3** (`S3CatalogRead`).
+- **What the agent is told.** The manifest entry carries `scope`; the prompt note says
+  "whole-file writes only — no append, rename or in-place edit" (Mountpoint for S3: append
+  `EPERM`, in-place edit `EBADF`, rename `ENOSYS`) and "this session only" for a per-session
+  mount.
 
 **Runs that write production storage** (storage-mounts §8.2). In a gated workspace an
 evaluation replay or a canary of an agent that mounts `shared_state` storage read-write

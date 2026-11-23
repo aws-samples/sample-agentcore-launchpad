@@ -1,6 +1,7 @@
 /**
  * The storage catalog's client (storage-mounts §4, §5, §9, §10): S3 Files / EFS access
- * points an administrator registers per workspace, the per-project allowed set, the
+ * points and S3 bucket prefixes an administrator registers per workspace, the per-project
+ * allowed set, the
  * check, the agent-time preflight, and an agent's storage card. The pure helpers below
  * turn the wizard's catalog picks into `filesystem.mounts` and back, and read an entry's
  * stored `check_results`.
@@ -9,7 +10,11 @@ import { getJson, sendJson } from "../api";
 
 const enc = encodeURIComponent;
 
-export type StorageKind = "s3files" | "efs";
+export type StorageKind = "s3files" | "efs" | "s3bucket";
+/** an `s3bucket` entry's layout: `per_session` mounts `<prefix><agent id>/<session id>/`
+ *  (private to one session), `shared` the prefix as it is */
+export type StorageScope = "per_session" | "shared";
+export const STORAGE_SCOPES: readonly StorageScope[] = ["per_session", "shared"];
 export type StorageMode = "ro" | "rw";
 export type StorageDataClass = "reference" | "shared_state" | "scratch";
 export type StorageStatus = "unchecked" | "ok" | "warn" | "blocked";
@@ -21,6 +26,17 @@ export const STORAGE_DATA_CLASSES: readonly StorageDataClass[] = ["reference", "
 export const STORAGE_ID_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 /** S3 Files + EFS mounts per agent (catalog + inline), session storage aside */
 export const MAX_BYO_MOUNTS = 4;
+/** AgentCore's limit on `filesystemConfigurations` entries, session storage included */
+export const MAX_FILESYSTEM_ENTRIES = 5;
+
+/** How many S3 Files / EFS / S3 bucket mounts fit next to (or without) session storage. */
+export const maxMounts = (sessionStorage: boolean) => MAX_FILESYSTEM_ENTRIES - (sessionStorage ? 1 : 0);
+
+/** `models/storage` prefix rules: no wildcard, placeholder or leading slash. */
+const BUCKET_RE = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
+const PREFIX_RE = /^[A-Za-z0-9][A-Za-z0-9!_.'()/-]*$/;
+const OWNER_RE = /^\d{12}$/;
+const REGION_RE = /^([a-z]+-){2,3}\d+$/;
 
 export interface StorageCheck {
   check: string;
@@ -57,12 +73,27 @@ export interface StorageEntry {
   workspace_id: string;
   name: string;
   kind: StorageKind;
+  /** `""` for an `s3bucket` entry */
   access_point_arn: string;
   file_system_arn: string | null;
   bucket_arn: string | null;
   posix_uid: number | null;
   posix_gid: number | null;
   root_directory: string | null;
+  /** `s3bucket` entries only (null on the others; absent on an older backend) */
+  bucket?: string | null;
+  /** `""` or `x/y/` */
+  prefix?: string | null;
+  scope?: StorageScope | null;
+  bucket_owner?: string | null;
+  bucket_region?: string | null;
+  /** from the check: `sse-s3` | `sse-kms` | `none` */
+  encryption?: string | null;
+  kms_key_arn?: string | null;
+  /** administrator detail of an `s3bucket` entry: the role statements an agent mounting
+   *  it gets (`<agent_id>` stands for the agent) and the bucket policy to apply */
+  iam_preview?: Record<string, unknown>[];
+  bucket_policy?: Record<string, unknown>;
   mount_target_azs: string[];
   mount_targets: StorageMountTarget[];
   vpc_id: string | null;
@@ -90,7 +121,15 @@ export interface StorageEntry {
 export interface StorageRegisterBody {
   id: string;
   name?: string;
-  access_point_arn: string;
+  kind?: StorageKind;
+  /** S3 Files / EFS */
+  access_point_arn?: string;
+  /** `kind: "s3bucket"` */
+  bucket?: string;
+  prefix?: string;
+  scope?: StorageScope;
+  bucket_owner?: string;
+  bucket_region?: string;
   max_mode?: StorageMode;
   data_class?: StorageDataClass;
   network_profile_id?: string | null;
@@ -148,6 +187,9 @@ export interface AgentStorage {
     entry: {
       name: string;
       kind: StorageKind;
+      bucket?: string | null;
+      prefix?: string | null;
+      scope?: StorageScope | null;
       status: StorageStatus;
       max_mode: StorageMode;
       data_class: StorageDataClass;
@@ -243,7 +285,7 @@ export const storageApi = {
   setForProject: (projectId: string, storageIds: string[]) =>
     sendJson<{ project_id: string; workspace_id: string; storage: StorageEntry[] }>(
       `${storagePath()}/projects/${enc(projectId)}`, "PUT", { storage_ids: storageIds }),
-  preflight: (body: { mounts: StorageMountRef[]; network_profile_id?: string | null; method?: string; byoc_artifact_kind?: string | null }) =>
+  preflight: (body: { mounts: StorageMountRef[]; network_profile_id?: string | null; method?: string; byoc_artifact_kind?: string | null; platform_version?: "V1" | "V2" | null }) =>
     sendJson<StoragePreflight>(`${storagePath()}/preflight`, "POST", body),
   forAgent: (agentId: string) => getJson<AgentStorage>(`${storagePath()}/agents/${enc(agentId)}`),
   /** queues the console's S3 Files creation; a retry with the same id resumes a failed job */
@@ -330,12 +372,21 @@ export interface CatalogMountRow {
   storageId: string;
   path: string;
   mode: StorageMode;
+  /** the entry's kind, when known (a pick, or a stored spec's stamp): an S3 bucket mount
+   *  needs no VPC, an S3 Files / EFS one does */
+  kind?: StorageKind;
 }
 
 export const defaultMountPath = (storageId: string) => `/mnt/${storageId}`;
 
 /** A new pick: under `/mnt/<id>`, read-only (D-1). */
-export const newCatalogRow = (storageId: string): CatalogMountRow => ({ storageId, path: defaultMountPath(storageId), mode: "ro" });
+export const newCatalogRow = (storageId: string, kind?: StorageKind): CatalogMountRow => ({
+  storageId, path: defaultMountPath(storageId), mode: "ro", ...(kind ? { kind } : {}),
+});
+
+/** A mount that rides NFS (S3 Files / EFS): it needs the agent in a VPC. A row whose kind
+ *  is not known counts as one — the safe side. */
+export const rowNeedsVpc = (row: Pick<CatalogMountRow, "kind">) => row.kind !== "s3bucket";
 
 /** `filesystem.mounts` for the spec (the server stamps kind and ARN). */
 export function catalogMountsSpec(rows: readonly CatalogMountRow[]): StorageMountRef[] {
@@ -343,13 +394,14 @@ export function catalogMountsSpec(rows: readonly CatalogMountRow[]): StorageMoun
 }
 
 /** A stored spec's `filesystem.mounts` back into rows. */
-export function catalogRowsFromSpec(fs: { mounts?: { storage_id?: string; mount_path?: string; mode?: string }[] } | null | undefined): CatalogMountRow[] {
+export function catalogRowsFromSpec(fs: { mounts?: { storage_id?: string; mount_path?: string; mode?: string; kind?: string | null }[] } | null | undefined): CatalogMountRow[] {
   return (fs?.mounts ?? [])
     .filter((m) => typeof m.storage_id === "string" && m.storage_id)
     .map((m) => ({
       storageId: m.storage_id as string,
       path: m.mount_path || defaultMountPath(m.storage_id as string),
       mode: m.mode === "rw" ? "rw" : "ro",
+      ...(m.kind === "s3files" || m.kind === "efs" || m.kind === "s3bucket" ? { kind: m.kind } : {}),
     }));
 }
 
@@ -385,14 +437,24 @@ export function countChecks(results: readonly StorageCheck[]): { block: number; 
 export interface StorageForm {
   id: string;
   name: string;
+  /** `s3bucket` registers a bucket prefix; the others an access point (whose service is
+   *  read off the ARN) */
+  kind: StorageKind;
   access_point_arn: string;
+  bucket: string;
+  prefix: string;
+  scope: StorageScope;
+  bucket_owner: string;
+  bucket_region: string;
   max_mode: StorageMode;
   data_class: StorageDataClass;
   network_profile_id: string;
 }
 
 export const emptyStorageForm = (): StorageForm => ({
-  id: "", name: "", access_point_arn: "", max_mode: "ro", data_class: "reference", network_profile_id: "",
+  id: "", name: "", kind: "s3files", access_point_arn: "", bucket: "", prefix: "",
+  scope: "per_session", bucket_owner: "", bucket_region: "",
+  max_mode: "ro", data_class: "reference", network_profile_id: "",
 });
 
 export function storageKindOfArn(arn: string): StorageKind | null {
@@ -403,22 +465,56 @@ export function storageKindOfArn(arn: string): StorageKind | null {
   return null;
 }
 
+/** A bucket entry's prefix as the server stores it: `""` or `x/y/`. */
+export const normalizePrefix = (prefix: string): string => {
+  const p = prefix.trim();
+  return p === "" || p.endsWith("/") ? p : `${p}/`;
+};
+
 /** field → i18n key of its error */
 export function validateStorage(form: StorageForm, creating: boolean): Partial<Record<keyof StorageForm, string>> {
   const out: Partial<Record<keyof StorageForm, string>> = {};
   if (creating && !STORAGE_ID_RE.test(form.id)) out.id = "v3.storage.form.errId";
-  if (creating && storageKindOfArn(form.access_point_arn) === null) out.access_point_arn = "v3.storage.form.errArn";
   if (form.name.length > 64) out.name = "v3.storage.form.errName";
+  if (!creating) return out;
+  if (form.kind === "s3bucket") {
+    const bucket = form.bucket.trim();
+    if (!BUCKET_RE.test(bucket) || bucket.includes("..") || bucket.endsWith("--x-s3")) out.bucket = "v3.storage.form.errBucket";
+    const prefix = form.prefix.trim();
+    if (prefix && (!PREFIX_RE.test(prefix) || prefix.includes("//") || prefix.length > 900)) out.prefix = "v3.storage.form.errPrefix";
+    if (form.bucket_owner.trim() && !OWNER_RE.test(form.bucket_owner.trim())) out.bucket_owner = "v3.storage.form.errOwner";
+    if (form.bucket_region.trim() && !REGION_RE.test(form.bucket_region.trim())) out.bucket_region = "v3.storage.form.errRegion";
+  } else if (storageKindOfArn(form.access_point_arn) === null) {
+    out.access_point_arn = "v3.storage.form.errArn";
+  }
   return out;
 }
 
 export function storageFormToBody(form: StorageForm): StorageRegisterBody {
-  return {
+  const common = {
     id: form.id.trim(),
     name: form.name.trim() || undefined,
-    access_point_arn: form.access_point_arn.trim(),
     max_mode: form.max_mode,
     data_class: form.data_class,
     network_profile_id: form.network_profile_id || null,
   };
+  if (form.kind === "s3bucket") {
+    return {
+      ...common,
+      kind: "s3bucket",
+      bucket: form.bucket.trim(),
+      prefix: normalizePrefix(form.prefix),
+      scope: form.scope,
+      bucket_owner: form.bucket_owner.trim() || undefined,
+      bucket_region: form.bucket_region.trim() || undefined,
+    };
+  }
+  return { ...common, access_point_arn: form.access_point_arn.trim() };
 }
+
+/** `s3://bucket/prefix` of an `s3bucket` entry (the whole bucket without a prefix). */
+export const bucketUri = (e: Pick<StorageEntry, "bucket" | "prefix">): string => `s3://${e.bucket ?? "—"}/${e.prefix ?? ""}`;
+
+/** What an agent mounting a bucket entry sees: its mounted prefix, per scope. */
+export const mountedPrefixHint = (e: Pick<StorageEntry, "bucket" | "prefix" | "scope">): string =>
+  `s3://${e.bucket ?? "—"}/${e.prefix ?? ""}${e.scope === "per_session" ? "<agent_id>/<session_id>/" : ""}`;

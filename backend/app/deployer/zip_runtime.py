@@ -920,7 +920,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 # that IS the JWT→IAM transition.
                 "authorizer_configuration": authorizer,
                 # session storage + BYO mounts — likewise reset when omitted on update
-                "filesystem_configurations": filesystem_configurations(spec) or None,
+                "filesystem_configurations": filesystem_configurations(spec, row.id) or None,
                 "vpc": vpc,
                 # cost-tags §1.2: the full set (agent id, workspace) on create and update
                 "tags": cost_tags.agent_tags(row, row.workspace_id),
@@ -937,7 +937,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 **_kwargs(),
                 **runtime_config_kwargs(spec, updating=True, live=live),
                 "filesystem_configurations": runtime_update_mounts(
-                    client, runtime_id, spec, live_runtime=live,
+                    client, runtime_id, spec, live_runtime=live, agent_id=row.id,
                     managed_paths=published_mount_paths(db, row.id), vpc=vpc, log=ctx.log),
             }
             updated = agent_iam.retry_iam_propagation(

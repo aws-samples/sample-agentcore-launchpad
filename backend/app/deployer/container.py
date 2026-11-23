@@ -284,7 +284,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "role_arn": ctx.scratch.get("execution_role_arn")
                 or workspace.resources.get("execution_role_arn", ""),
                 "environment": environment,
-                "filesystem_configurations": filesystem_configurations(spec) or None,
+                "filesystem_configurations": filesystem_configurations(spec, row.id) or None,
                 "vpc": vpc,
                 # Echoed on every update; omitting (None = IAM) resets a JWT
                 # runtime back to SigV4 — that IS the JWT→IAM transition.
@@ -304,7 +304,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 **_kwargs(),
                 **runtime_config_kwargs(spec, updating=True, live=live),
                 "filesystem_configurations": runtime_update_mounts(
-                    client, runtime_id, spec, live_runtime=live,
+                    client, runtime_id, spec, live_runtime=live, agent_id=row.id,
                     managed_paths=published_mount_paths(db, row.id), vpc=vpc, log=ctx.log),
             }
             updated = agent_iam.retry_iam_propagation(

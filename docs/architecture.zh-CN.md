@@ -282,7 +282,7 @@ for S3；botocore ≥ 1.44.6），PUBLIC 和 VPC 网络都可用。所有挂载�
 `s3FilesAccessPoint` / `efsAccessPoint` 需要 VPC。因此创建校验允许 PUBLIC 运行时带 S3 桶挂载；
 PUBLIC 重新发布（以及 PUBLIC 的 canary 候选版本）保留在外部添加的 S3 桶挂载，同时仍卸掉外部的
 S3 Files / EFS 挂载；Agent 的存储卡片把它显示为 `s3bucket` 类型（桶、前缀、归属账号、Region）。
-控制台暂时还不能设置这种挂载；在 AWS 控制台添加的 S3 桶挂载与其他外部挂载一样，重新发布后保留。
+在 AWS 控制台添加的 S3 桶挂载与其他外部挂载一样，重新发布后保留；控制台自己只通过存储目录（`s3bucket` 类型，见下文）添加。
 线上实测（`backend/scripts/probe_s3_bucket_mount.py`，2026-11-23，us-west-2）：
 
 - **只支持 V2**，V1 在创建时即被拒绝（`s3BucketMount can only be used when platformVersion is V2`）。
@@ -333,7 +333,7 @@ V3 存储页（`/v3/storage`）提供「新建 S3 Files」对话框，逐阶段�
 `WorkshopInstanceStoragePolicy` 获得同一组权限。
 
 **存储目录**（storage-mounts §4、SM-2，`services/storage_mounts.py`，[api.zh-CN.md](api.zh-CN.md)
-「控制台存储目录 API」）。管理员按工作区把 S3 Files 或 EFS 接入点登记为目录条目（`storage_mounts`：id、种类、
+「控制台存储目录 API」）。管理员按工作区把 S3 Files 或 EFS 接入点、或 S3 桶前缀（见下文）登记为目录条目（`storage_mounts`：id、种类、
 接入点、`max_mode` `ro` / `rw`、`data_class`、可选的默认网络配置档），并像网络配置档一样按项目放行
 （`project_storage_mounts`）；不在项目允许集合中的条目视同不存在。spec 随后按 id 挂载：
 `filesystem.mounts[{storage_id, mount_path, mode}]`（默认只读，最高为 `max_mode`），成员在向导中选择存储，
@@ -343,8 +343,40 @@ V3 存储页（`/v3/storage`）提供「新建 S3 Files」对话框，逐阶段�
 Agent 安全组出站与挂载目标安全组入站放行 NFS（TCP 2049）。**IAM 按模式授予**：`storage_iam_statements`
 对每个挂载授予 `ClientMount`，只有 `rw` 挂载另加 `ClientWrite`（内联挂载仍为读写）。**晋级**时目录挂载是种类为
 `storage` 的资源映射引用：目录 id 即逻辑名，目标工作区的同名条目（或映射行指定的条目）必须在用且允许该项目使用，
-否则拒绝发布（`storage.unmapped`），解析后的 spec 以目标的接入点重新盖章。内联接入点带有源账户，不能晋级
-（`storage.inline_not_promotable`）。
+否则拒绝发布（`storage.unmapped`），解析后的 spec 以目标的接入点（或桶字段）重新盖章；目标条目与源条目种类不同时同样视为未映射。
+内联接入点带有源账户，不能晋级（`storage.inline_not_promotable`）。
+
+**S3 桶条目**（`s3bucket` 类型，AgentCore Runtime V2 的 `s3BucketMount`）。管理员登记一个**已有的**通用型桶前缀
+（平台从不创建或修改桶），并选定 `scope`：
+
+- `per_session`（默认）：平台挂载 `<条目前缀><agent_id>/{runtimeSessionId}/`，每个 Agent 的每次会话只看到自己的文件夹
+  （私有的工作 / 产出文件）；
+- `shared`：原样使用条目前缀，所有会话和 Agent 共用。
+
+条目保存 `bucket`、`prefix`（`""` 或 `x/y/`，不能含通配符或占位符）、`scope`、可选的 `bucket_owner`（其他账户）与
+`bucket_region`（桶不在工作区 Region 时必填，否则 AgentCore 拒绝挂载），这些字段与接入点一样不可修改；
+`access_point_arn` 列保持 `""`，所有按接入点取值的路径都跳过该类型。服务端把桶字段（以及检查发现的 KMS 密钥）写入保存的
+spec 的 `filesystem.mounts[]`；`filesystem_entries(spec, agent_id)` 把它们映射为 `s3BucketMount`——Agent id 是必需输入，
+所有部署方式、重新发布合并、canary 候选版本和会话 ID 校验都会传入。
+
+- **门槛。** 挂载它的 spec 必须使用 Runtime 方式且**平台版本为 V2**（`422 storage.requires_v2`；新 Agent 默认 V2，
+  已有 Agent 必须明确选择 V2），托管 Harness 会被拒绝（`422 storage.method_unsupported`，数据来自
+  `BUCKET_MOUNT_UNSUPPORTED`：探测 P3 显示后台运行时 `CREATE_FAILED`；复测通过后删除该行即可解除）。架构助手只提议
+  Harness Agent，因此不会列出这些条目。S3 桶挂载不需要 VPC，S3 Files / EFS 仍需要。每个 `filesystemConfigurations`
+  条目（含会话存储）都计入 AgentCore 的五个上限。
+- **IAM**（`storage_iam_statements` → `launchpad-fs-<agent>`，形状来自探测 P4）：对桶授予 `s3:ListBucket`，
+  `s3:prefix` ∈ [`<P>*`、去掉末尾斜杠的 `<P>`]，对象操作作用于 `<P>*`（`GetObject`；读写另加 `PutObject`、
+  `AbortMultipartUpload`、`DeleteObject`），SSE-KMS 的桶再加该密钥的 `kms:Decrypt`（读写另加 `kms:GenerateDataKey`）。
+  按会话挂载的 `P` 在会话 ID 的位置带 `${aws:AgentCoreRuntimeSourceSid}`，因此会话内部直接调用 S3 也只能到达自己的
+  文件夹。隔离项目的**权限边界**对允许给该项目的条目授予同样的操作（`storage_mounts.boundary_statements`，登记在
+  `project_iam.EXTRA_BOUNDARY_STATEMENT_BUILDERS`；按整个前缀授予，由角色策略再收窄），因为挂载是在边界之下进行的（探测 P9）。
+- **检查与预检。** 检查用工作区凭证读取桶（带 `ExpectedBucketOwner` 的 `HeadBucket`、Region、默认加密、Block Public
+  Access、版本控制；只读）：桶不存在 / 不可达 / Region 不符会阻断，Block Public Access 未开启给出警告，KMS 桶给出提示。
+  预检不做 NFS 检查；在 VPC 网络中，若既没有 S3 网关端点也没有 NAT 网关覆盖这些子网，或桶在其他 Region，会给出警告。
+  条目详情页以可复制的 JSON 展示 Agent 获得的角色语句，以及推荐的**桶策略**（跨账户桶所需的内容，外加探测 P4b 验证过的
+  按会话限制）；是否应用由管理员决定。多账户工作区需要 spoke 角色模板 **v3**（`S3CatalogRead`）。
+- **Agent 如何得知。** 清单条目带有 `scope`；提示词说明“只能整文件写入——不能追加、重命名或原地修改”（Mountpoint for S3：
+  追加 `EPERM`、原地修改 `EBADF`、重命名 `ENOSYS`），按会话挂载的还会标注“仅限本次会话”。
 
 **会写入生产存储的运行**（storage-mounts §8.2）。在 `gated` 工作区中，若 Agent 以读写方式挂载了 `shared_state` 存储，
 评估回放或金丝雀都会写入该存储，后端因此返回 `409 storage.write_confirm_required` 并附上这些挂载。控制台无法事先判断，

@@ -21,7 +21,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from app.services import aws_clients
 from app.services.workspace import WorkspaceContext
 
-EXPECTED_VERSION = 2
+EXPECTED_VERSION = 3
 VERSION_TAG = "launchpad:template-version"
 VARIANT_TAG = "launchpad:role"
 # launchpad:role tag value → the template that deploys it.
@@ -48,11 +48,16 @@ def stack_command(variant: str | None) -> str:
     `deploy` reuses a stack's existing values for every parameter not overridden,
     which keeps the ExternalId out of anything the console displays."""
     template = TEMPLATES.get(variant or "", TEMPLATES["workspace"])
+    # the standard template is over CloudFormation's 51,200-byte inline limit: `deploy`
+    # must stage it in S3 (the prod template is smaller and goes inline)
+    staged = (" --s3-bucket <a bucket in the stack's region>"
+              if template == TEMPLATES["workspace"] else "")
     return (
         "aws cloudformation deploy"
         f" --template-file {template}"
         f" --stack-name {DEFAULT_STACK_NAME}"
         " --capabilities CAPABILITY_NAMED_IAM"
+        f"{staged}"
         " --profile <spoke-admin> --region <the stack's region>"
     )
 

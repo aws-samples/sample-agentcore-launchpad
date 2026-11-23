@@ -2694,6 +2694,10 @@
     "storage.not_found": "该存储不在此工作区的目录中。",
     "storage.id_exists": "此工作区已登记过该 ID 的存储。",
     "storage.invalid_access_point": "这不是 S3 Files 或 EFS 访问点的 ARN。",
+    "storage.invalid_bucket": "这不是可用的 S3 存储桶条目——请检查存储桶名称、前缀（仅限字母、数字和 ! _ . ' ( ) / -，不能含通配符或占位符）、所属账户和 Region。不支持目录存储桶。",
+    "storage.requires_v2": "S3 存储桶存储需要 Runtime 平台版本 V2——请在 Runtime 设置中把此 Agent 切换到 V2。",
+    "storage.method_unsupported": "这种 Agent 无法挂载 S3 存储桶存储——托管 Harness 不会把它传给后端 Runtime。请改用 Runtime 方式（zip、容器或自带代码）。",
+    "storage.policy_too_large": "这些 S3 存储桶挂载所需的 IAM 策略超出单个角色的上限——请减少挂载的存储桶数量。",
     "storage.mode_exceeds_max": "该存储不允许以此模式挂载，只允许更窄的模式（请先把读写挂载改为只读）。",
     "storage.in_use": "仍有智能体挂载该存储，请先从这些智能体移除挂载。",
     "storage.check_failed": "无法读取该访问点，请确认其存在，且工作区角色有权查询它。",
@@ -16139,10 +16143,10 @@
       "nav": "存储",
       "eyebrow": "配置",
       "title": "存储",
-      "sub": "{{workspace}}（{{region}}）中 Agent 可挂载的 S3 Files 与 EFS 访问点",
+      "sub": "{{workspace}}（{{region}}）中 Agent 可挂载的 S3 Files / EFS 访问点与 S3 存储桶前缀",
       "create": "登记存储",
       "empty": "尚未登记存储",
-      "emptyBody": "登记一个 S3 Files 或 EFS 访问点，Agent 即可按 ID 挂载。",
+      "emptyBody": "登记一个 S3 Files / EFS 访问点或 S3 存储桶前缀，Agent 即可按 ID 挂载。",
       "created": "已登记 {{name}}",
       "saved": "已保存 {{name}}",
       "archived": "已归档 {{name}}",
@@ -16158,14 +16162,15 @@
       "col": {
         "name": "名称",
         "kind": "类型",
-        "azs": "挂载目标可用区",
+        "azs": "挂载目标 · 存储桶",
         "mode": "模式上限 · 数据",
         "check": "校验",
         "users": "使用方"
       },
       "kind": {
         "s3files": "S3 Files",
-        "efs": "EFS"
+        "efs": "EFS",
+        "s3bucket": "S3 存储桶"
       },
       "mode": {
         "ro": "只读",
@@ -16200,7 +16205,28 @@
         "rwHint": "Agent 可以读写方式挂载该存储。共享它的多个 Agent 需要自行加锁或分目录写入。",
         "errId": "2–32 位小写字母、数字或“-”",
         "errArn": "不是 S3 Files 或 EFS 访问点 ARN",
-        "errName": "最多 64 个字符"
+        "errName": "最多 64 个字符",
+        "kind": "类型",
+        "kindAccessPoint": "S3 Files / EFS 访问点",
+        "kindBucket": "S3 存储桶",
+        "bucket": "存储桶",
+        "bucketHint": "已有的通用型存储桶（不支持目录存储桶）。平台不会创建或修改它。",
+        "prefix": "前缀",
+        "prefixHint": "存储桶内的可选文件夹，如 team/data。留空表示整个存储桶。不能含通配符或占位符。",
+        "scope": "布局",
+        "scopePerSession": "按会话——只属于某个 Agent 的某一次会话",
+        "scopeShared": "共享——原样使用该前缀，所有会话和 Agent 共用",
+        "scopePerSessionHint": "每个 Agent 会话挂载 {{path}}。一次会话的文件对下一次会话不可见，适合放工作文件和产出文件。",
+        "scopeSharedHint": "所有挂载它的 Agent 看到的都是 {{path}}。适合共享数据集；多个写入方需要自行加锁或分文件夹。",
+        "owner": "存储桶所属账户",
+        "ownerHint": "仅用于其他账户的存储桶（12 位数字）。该账户的存储桶策略必须允许本 Workspace 的 Agent 角色。",
+        "region": "存储桶 Region",
+        "regionHint": "仅当存储桶不在本 Workspace 的 Region 时填写，否则 AgentCore 会拒绝该挂载。",
+        "errBucket": "不是通用型 S3 存储桶名称",
+        "errPrefix": "只能用字母、数字和 ! _ . ' ( ) / -，不能含通配符、占位符或连续斜杠",
+        "errOwner": "需要 12 位账户 ID",
+        "errRegion": "不是形如 us-east-1 的 Region",
+        "profileHintBucket": "校验时同时检查该网络能否访问 S3（网关端点或 NAT 网关）。"
       },
       "detail": {
         "basic": "存储",
@@ -16220,7 +16246,19 @@
         "version": "版本",
         "endpoint": "端点",
         "path": "路径",
-        "mode": "模式"
+        "mode": "模式",
+        "bucketUri": "存储桶前缀",
+        "scope": "布局",
+        "mountedAs": "挂载的前缀",
+        "encryption": "加密",
+        "owner": "存储桶所属账户",
+        "region": "存储桶 Region",
+        "iam": "Agent 获得的角色语句",
+        "iamHint": "写入每个挂载它的 Agent 自己的执行角色（<agent_id> 即该 Agent）。按会话的挂载通过 aws:AgentCoreRuntimeSourceSid 限制在本次会话自己的文件夹内。",
+        "bucketPolicy": "推荐的存储桶策略",
+        "bucketPolicyHint": "平台不会修改你的存储桶，请自行应用这份策略——其他账户的存储桶必须应用；按会话的文件夹还会借此把每次会话限制在自己的文件夹内。这一限制会让工作区账户内所有 Launchpad Agent 角色在会话运行期间无法访问该存储桶的其他路径，因此不要把它应用到还有其他条目或 Agent 挂载的存储桶。",
+        "copy": "复制",
+        "copied": "已复制"
       },
       "access": {
         "title": "项目访问",
@@ -16246,12 +16284,14 @@
       },
       "picker": {
         "title": "从存储目录挂载",
-        "hint": "S3 Files / EFS 挂载合计最多 {{max}} 个。除非存储允许读写，否则为只读。",
+        "hint": "S3 Files / EFS / S3 存储桶挂载合计最多 {{max}} 个。除非存储允许读写，否则为只读。",
         "choose": "选择存储…",
         "add": "添加挂载",
         "none": "本项目没有可用的存储，请联系管理员登记。",
         "modeTooWide": "该存储只能以只读方式挂载",
-        "preflightOk": "存储预检通过"
+        "preflightOk": "存储预检通过",
+        "needsV2": "S3 存储桶存储需要 Runtime 平台 V2——请在 Runtime 设置中切换到 V2。",
+        "noHarness": "托管 Harness 无法挂载 S3 存储桶——请改用 Runtime 方式（zip、容器或自带代码）。"
       },
       "provision": {
         "open": "新建 S3 Files",
@@ -16333,6 +16373,10 @@
         "typeId": "输入 {{id}} 确认",
         "confirm": "删除",
         "queued": "正在删除 {{name}}，进度见下方"
+      },
+      "scope": {
+        "per_session": "按会话",
+        "shared": "共享"
       }
     },
     "menuSettings": {

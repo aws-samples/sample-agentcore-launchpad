@@ -8,6 +8,8 @@
  * rows an administrator set, read-only, and may still re-publish with them.
  */
 import type { AgentMethod } from "./agent-spec";
+import type { StorageKind } from "./api/storage";
+import { runtimeConfigSupported } from "./runtime-config";
 
 /** The wizard's methods plus Studio (published from the canvas, not the wizard). */
 export type MountMethod = AgentMethod | "studio";
@@ -29,7 +31,8 @@ export function byoRowsMode(method: MountMethod, isAdmin: boolean, hasRows: bool
 }
 
 /**
- * The network a BYO mount needs (§3.2): a network profile. Only a container agent may
+ * The network an NFS-backed (S3 Files / EFS) mount needs (§3.2): a network profile. An S3
+ * bucket mount needs none, so callers pass `hasByo` for NFS mounts only. Only a container agent may
  * still carry the legacy inline subnets / security groups instead (they predate
  * profiles); every other method is told to pick a profile in the network step.
  */
@@ -39,4 +42,20 @@ export function mountNeedsProfile(form: {
   hasByo: boolean;
 }): boolean {
   return form.hasByo && !form.networkProfileId && form.method !== "container";
+}
+
+/** Why an S3 bucket mount cannot go on this agent, as the i18n key suffix of
+ *  `v3.storage.picker.*`: the managed Harness drops the member (probe 2026-11-23), and a
+ *  Runtime needs platform V2 — an agent whose settings are unset ("keep existing") may
+ *  be on V1, and the server refuses unless V2 is chosen explicitly. Null for any other
+ *  kind of storage, or when nothing stands in the way. */
+export function bucketMountIssue(
+  kind: StorageKind | undefined,
+  method: MountMethod,
+  runtimeConfig: { platform_version?: string } | null | undefined,
+): "noHarness" | "needsV2" | null {
+  if (kind !== "s3bucket") return null;
+  if (method === "harness") return "noHarness";
+  if (runtimeConfigSupported(method) && runtimeConfig?.platform_version !== "V2") return "needsV2";
+  return null;
 }

@@ -23,7 +23,8 @@ carries; a reference the platform does not model cannot be found here):
   `datasets` without a mapping row; a row maps it elsewhere. Either way the target entry
   must be live and allowed for the project, or the release is refused with
   `storage.unmapped` (`assert_storage_mapped`); the resolved spec's mounts are re-stamped
-  with the target entry's access point. Inline access points (`filesystem.s3_files` /
+  with the target entry's access point (or bucket fields); an entry of another kind than
+  the source's reads as unmapped. Inline access points (`filesystem.s3_files` /
   `efs`) carry the source account in their ARN and are always refused
   (`storage.inline_not_promotable`).
 
@@ -483,7 +484,23 @@ def resolve_spec(
         # the mapped ids name the target's entries: their access points replace the source's
         from app.services import storage_mounts
 
-        storage_mounts.restamp_spec(db, target_workspace_id, out, project_id)
+        mismatched: list[str] = []
+        storage_mounts.restamp_spec(db, target_workspace_id, out, project_id,
+                                    mismatched=mismatched)
+        # the target's entry of that id is another kind of storage (an S3 bucket where the
+        # source had an access point, or the reverse): its mount shape differs, so it is
+        # not the same storage — refused like an id with no entry
+        for entry in [e for e in resolved if e["kind"] == KIND_STORAGE
+                      and e.get("target_id") in mismatched]:
+            resolved.remove(entry)
+            unmapped.append({
+                **{k: entry[k] for k in ("kind", "logical", "path", "source_id")},
+                "code": STORAGE_UNMAPPED,
+                "reason": (f"workspace '{target_workspace_id}' has a storage entry "
+                           f"'{entry['target_id']}' of another kind than the source's "
+                           f"(dev id {entry['source_id']}) — map it to an entry of the same "
+                           "kind, or register one"),
+            })
     return Resolution(out, resolved, unmapped)
 
 
@@ -643,5 +660,32 @@ def assert_storage_mapped(
                  "target_id": target_id, "target_workspace_id": target_workspace_id},
                 status_code=409,
             )
+        if ref.kind == KIND_STORAGE:
+            _assert_same_kind(db, spec, ref.source_id, target_workspace_id, target_id, name)
         out.append(target_id)
     return out
+
+
+def _assert_same_kind(
+    db: Session, spec: dict[str, Any], source_id: str, target_workspace_id: str,
+    target_id: str, name: str,
+) -> None:
+    """The target's entry must be the kind of storage the source mounted: an S3 bucket
+    mount and an access point mount are different things to stamp and to grant, so a
+    kind mismatch is refused like a missing entry (`storage.unmapped`)."""
+    from app.services import storage_mounts
+
+    source = next((m.get("kind") for m in storage_mounts.spec_mounts(spec)
+                   if m.get("storage_id") == source_id), None)
+    row = storage_mounts._row(db, target_workspace_id, target_id)
+    if source and row is not None and row.kind != source:
+        raise AppError(
+            STORAGE_UNMAPPED,
+            f"the agent mounts {source} storage '{source_id}', and workspace "
+            f"'{target_workspace_id}' has a {row.kind} entry '{target_id}' for "
+            f"{key_of(KIND_STORAGE, name)} — register or map an entry of the same kind",
+            {"logical": key_of(KIND_STORAGE, name), "source_id": source_id,
+             "target_id": target_id, "target_workspace_id": target_workspace_id,
+             "source_kind": source, "target_kind": row.kind},
+            status_code=409,
+        )

@@ -1,14 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  bucketUri,
   type CatalogMountRow,
   catalogMountsSpec,
   catalogRowsFromSpec,
   countChecks,
   emptyStorageForm,
+  maxMounts,
   modeAllowed,
+  mountedPrefixHint,
   newCatalogRow,
+  normalizePrefix,
   pickable,
+  rowNeedsVpc,
   type StorageEntry,
   storageApi,
   storageFormToBody,
@@ -121,5 +126,59 @@ describe("the console's S3 Files creation (storage-mounts §7)", () => {
       job({ job_id: "d", storage_id: "x", status: "failed", done: true }),
     ]);
     expect(shown.map((j) => j.job_id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("S3 bucket entries", () => {
+  const bucketForm = () => ({ ...emptyStorageForm(), id: "reports", kind: "s3bucket" as const, bucket: "acme-data" });
+
+  it("validate the bucket, prefix, owner and Region when creating", () => {
+    expect(validateStorage(bucketForm(), true)).toEqual({});
+    expect(validateStorage({ ...bucketForm(), bucket: "Bad_Bucket" }, true).bucket).toBe("v3.storage.form.errBucket");
+    expect(validateStorage({ ...bucketForm(), bucket: "acme--use1-az4--x-s3" }, true).bucket).toBe("v3.storage.form.errBucket");
+    for (const prefix of ["a/*", "a/{runtimeSessionId}/", "/lead", "a//b"]) {
+      expect(validateStorage({ ...bucketForm(), prefix }, true).prefix).toBe("v3.storage.form.errPrefix");
+    }
+    expect(validateStorage({ ...bucketForm(), prefix: "team/out" }, true)).toEqual({});
+    expect(validateStorage({ ...bucketForm(), bucket_owner: "12" }, true).bucket_owner).toBe("v3.storage.form.errOwner");
+    expect(validateStorage({ ...bucketForm(), bucket_region: "mars" }, true).bucket_region).toBe("v3.storage.form.errRegion");
+    // an access point ARN is not asked of a bucket entry, nor a bucket of an access point
+    expect(validateStorage({ ...bucketForm(), access_point_arn: "" }, true).access_point_arn).toBeUndefined();
+    expect(validateStorage({ ...emptyStorageForm(), id: "datasets", access_point_arn: S3_AP }, true)).toEqual({});
+    expect(validateStorage({ ...bucketForm(), bucket: "" }, false)).toEqual({});
+  });
+
+  it("send the bucket fields, a normalized prefix and no access point", () => {
+    expect(storageFormToBody({ ...bucketForm(), prefix: " team/out ", scope: "shared", bucket_owner: "444455556666", max_mode: "rw" })).toEqual({
+      id: "reports", name: undefined, kind: "s3bucket", bucket: "acme-data", prefix: "team/out/", scope: "shared",
+      bucket_owner: "444455556666", bucket_region: undefined, max_mode: "rw", data_class: "reference", network_profile_id: null,
+    });
+    expect(normalizePrefix("")).toBe("");
+    expect(normalizePrefix("a/")).toBe("a/");
+  });
+
+  it("show where an agent's files land", () => {
+    const e = { bucket: "acme-data", prefix: "team/", scope: "per_session" as const };
+    expect(bucketUri(e)).toBe("s3://acme-data/team/");
+    expect(mountedPrefixHint(e)).toBe("s3://acme-data/team/<agent_id>/<session_id>/");
+    expect(mountedPrefixHint({ ...e, scope: "shared" })).toBe("s3://acme-data/team/");
+    expect(bucketUri({ bucket: "acme-data", prefix: "" })).toBe("s3://acme-data/");
+  });
+
+  it("carry their kind through a pick and a stored spec, and need no VPC", () => {
+    const row = newCatalogRow("reports", "s3bucket");
+    expect(row).toEqual({ storageId: "reports", path: "/mnt/reports", mode: "ro", kind: "s3bucket" });
+    expect(rowNeedsVpc(row)).toBe(false);
+    expect(rowNeedsVpc(newCatalogRow("lake", "s3files"))).toBe(true);
+    expect(rowNeedsVpc(newCatalogRow("lake"))).toBe(true); // unknown kind: the safe side
+    expect(catalogRowsFromSpec({ mounts: [{ storage_id: "reports", mount_path: "/mnt/reports", mode: "rw", kind: "s3bucket" }] }))
+      .toEqual([{ storageId: "reports", path: "/mnt/reports", mode: "rw", kind: "s3bucket" }]);
+    // the kind is the server's stamp: it is not sent back
+    expect(catalogMountsSpec([row])).toEqual([{ storage_id: "reports", mount_path: "/mnt/reports", mode: "ro" }]);
+  });
+
+  it("count every filesystem entry against AgentCore's five", () => {
+    expect(maxMounts(true)).toBe(4);
+    expect(maxMounts(false)).toBe(5);
   });
 });

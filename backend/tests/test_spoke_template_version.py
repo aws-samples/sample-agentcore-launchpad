@@ -27,9 +27,9 @@ SPOKE = Path(__file__).resolve().parents[2] / "infra" / "spoke"
 # templates, then paste the new values printed by the failing assertion.
 FINGERPRINTS = {
     "launchpad-workspace-role.yaml":
-        "cc9dd60f3f3f6e91a3d2144a7df149f28878edbe55b78aac433490660bae15ea",
+        "eadefebfdc2f71898fc3ca43f4153414d2bd4823acc6b47f3c7a163b4871cf2c",
     "launchpad-workspace-role-prod.yaml":
-        "8599300bd86ee80549692aba708aef0437f97f999254d6aa09e3d24ae794d415",
+        "2a209ef53e5ec50e9dd3565f6ea1011f20e323c341256e5c454dce03946973d5",
 }
 ROLE_ARN = "arn:aws:iam::444455556666:role/LaunchpadWorkspaceRole"
 
@@ -223,3 +223,11 @@ def test_validate_access_survives_a_failing_check(monkeypatch):
     workspace_bootstrap._log_role_template(
         _bootstrap_ctx(monkeypatch, _Iam(error=_error("AccessDenied", "AssumeRole")), logs))
     assert logs == ["spoke role template check skipped: ClientError"]
+
+
+def test_the_standard_template_command_stages_it_in_s3_the_prod_one_does_not():
+    """The standard template is over CloudFormation's 51,200-byte inline limit."""
+    assert (SPOKE / "launchpad-workspace-role.yaml").stat().st_size > 51_200
+    assert "--s3-bucket" in spoke_template.stack_command("workspace")
+    assert (SPOKE / "launchpad-workspace-role-prod.yaml").stat().st_size < 51_200
+    assert "--s3-bucket" not in spoke_template.stack_command("workspace-prod")

@@ -25,20 +25,28 @@ from app.schemas.agent import AgentSpec
 
 ENV_MOUNTS = "LAUNCHPAD_MOUNTS"
 
-_KIND_LABEL = {"s3files": "S3 Files", "efs": "EFS"}
+_KIND_LABEL = {"s3files": "S3 Files", "efs": "EFS", "s3bucket": "S3 bucket"}
+# Mountpoint for S3 (probe P7, 2026-11-23): sequential writes of whole files only — an
+# append fails EPERM, an in-place edit EBADF, a rename ENOSYS
+_WHOLE_FILES = ("whole-file writes only — no append, rename or in-place edit; write a new "
+                "file or replace it")
 
 
 def mount_manifest(spec: AgentSpec) -> list[dict[str, str]]:
-    """``[{name, path, kind, mode}]`` for the spec's BYO mounts (``[]`` when none)."""
+    """``[{name, path, kind, mode}]`` for the spec's BYO mounts (``[]`` when none). An S3
+    bucket mount also carries its ``scope`` (``per_session`` | ``shared``)."""
     out: list[dict[str, str]] = []
     for kind, mount in [*spec.filesystem.byo_mounts(), *spec.filesystem.catalog_mounts()]:
         path = mount.mount_path.rstrip("/")
-        out.append({
+        entry = {
             "name": path.rsplit("/", 1)[-1],
             "path": path,
             "kind": kind,
             "mode": getattr(mount, "mode", None) or "rw",
-        })
+        }
+        if kind == "s3bucket":
+            entry["scope"] = getattr(mount, "scope", None) or "shared"
+        out.append(entry)
     return out
 
 
@@ -62,8 +70,14 @@ def prompt_note(spec: AgentSpec) -> str:
     lines = []
     for entry in manifest:
         access = "read-only — do not write here" if entry["mode"] == "ro" else "read-write"
+        notes = ""
+        if entry["kind"] == "s3bucket":
+            if entry["scope"] == "per_session":
+                notes += ", this session only"
+            if entry["mode"] != "ro":
+                notes += f"; {_WHOLE_FILES}"
         lines.append(f"- {entry['path']} ({_KIND_LABEL.get(entry['kind'], entry['kind'])}, "
-                     f"{access})")
+                     f"{access}{notes})")
     return (
         "\n\n## Shared directories\n"
         "These directories are mounted into your environment and shared across "

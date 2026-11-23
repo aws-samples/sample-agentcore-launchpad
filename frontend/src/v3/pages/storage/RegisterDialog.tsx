@@ -4,8 +4,11 @@ import { useTranslation } from "react-i18next";
 import { errorMessage } from "../../../lib/api";
 import type { NetworkProfile } from "../../../lib/api/networkProfiles";
 import {
+  mountedPrefixHint,
+  normalizePrefix,
   STORAGE_DATA_CLASSES,
   STORAGE_MODES,
+  STORAGE_SCOPES,
   type StorageForm,
   validateStorage,
 } from "../../../lib/api/storage";
@@ -14,9 +17,11 @@ import { Btn, Dialog, Notice } from "../../ui";
 import { Select } from "../../select";
 
 /**
- * Register / edit a storage entry (storage-mounts §4.4): only the access point ARN and
- * an id are needed — the check fills in the rest. The id and the access point are fixed
- * once registered (agents name the id; a stamped reference keeps the ARN).
+ * Register / edit a storage entry (storage-mounts §4.4): an S3 Files / EFS access point
+ * (only its ARN and an id are needed — the check fills in the rest) or an S3 bucket
+ * prefix (bucket, prefix, layout, and — for another account or Region — owner and
+ * Region). The id and what it points at are fixed once registered (agents name the id;
+ * a stamped reference keeps the ARN or the bucket fields).
  */
 export function RegisterDialog({
   initial,
@@ -83,7 +88,64 @@ export function RegisterDialog({
           t("v3.storage.form.idHint"))}
         {field("name", t("v3.storage.form.name"),
           <input className="v3-input" value={form.name} aria-invalid={errors.name ? true : undefined} onChange={(e) => set("name", e.target.value)} />)}
-        {field("access_point_arn", t("v3.storage.form.arn"),
+        {creating && (
+          <label className="v3-field">
+            <span>{t("v3.storage.form.kind")}</span>
+            <Select className="v3-select" value={form.kind === "s3bucket" ? "s3bucket" : "accessPoint"}
+              onChange={(e) => set("kind", e.target.value === "s3bucket" ? "s3bucket" : "s3files")} data-testid="v3-storage-kind">
+              <option value="accessPoint">{t("v3.storage.form.kindAccessPoint")}</option>
+              <option value="s3bucket">{t("v3.storage.form.kindBucket")}</option>
+            </Select>
+          </label>
+        )}
+        {form.kind === "s3bucket" ? (
+          <>
+            {field("bucket", t("v3.storage.form.bucket"),
+              <Reasoned disabledReason={t("story.reason.fixedOnceCreated")}>
+                <input className="v3-input mono" disabled={!creating} value={form.bucket} placeholder="acme-agent-data"
+                  aria-invalid={errors.bucket ? true : undefined} onChange={(e) => set("bucket", e.target.value)} />
+              </Reasoned>,
+              t("v3.storage.form.bucketHint"))}
+            {field("prefix", t("v3.storage.form.prefix"),
+              <Reasoned disabledReason={t("story.reason.fixedOnceCreated")}>
+                <input className="v3-input mono" disabled={!creating} value={form.prefix} placeholder="team/data"
+                  aria-invalid={errors.prefix ? true : undefined} onChange={(e) => set("prefix", e.target.value)} />
+              </Reasoned>,
+              t("v3.storage.form.prefixHint"))}
+            <fieldset className="v3-field" style={{ border: 0, padding: 0, margin: 0 }}>
+              <span>{t("v3.storage.form.scope")}</span>
+              {/* fixed once registered (a stamped reference keeps it): shown, not editable */}
+              {(creating ? STORAGE_SCOPES : [form.scope]).map((scope) => (
+                <label key={scope} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                  {creating && (
+                    <input type="radio" name="v3-storage-scope" value={scope} checked={form.scope === scope}
+                      onChange={() => set("scope", scope)} data-testid={`v3-storage-scope-${scope}`} />
+                  )}
+                  <span>{t(scope === "per_session" ? "v3.storage.form.scopePerSession" : "v3.storage.form.scopeShared")}</span>
+                </label>
+              ))}
+              <small className="v3-hint" data-testid="v3-storage-scope-hint">
+                {t(form.scope === "per_session" ? "v3.storage.form.scopePerSessionHint" : "v3.storage.form.scopeSharedHint", {
+                  path: mountedPrefixHint({ bucket: form.bucket.trim() || "<bucket>", prefix: normalizePrefix(form.prefix), scope: form.scope }),
+                })}
+              </small>
+            </fieldset>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              {field("bucket_owner", t("v3.storage.form.owner"),
+                <Reasoned disabledReason={t("story.reason.fixedOnceCreated")}>
+                  <input className="v3-input mono" disabled={!creating} value={form.bucket_owner} placeholder="111122223333"
+                    aria-invalid={errors.bucket_owner ? true : undefined} onChange={(e) => set("bucket_owner", e.target.value)} />
+                </Reasoned>,
+                t("v3.storage.form.ownerHint"))}
+              {field("bucket_region", t("v3.storage.form.region"),
+                <Reasoned disabledReason={t("story.reason.fixedOnceCreated")}>
+                  <input className="v3-input mono" disabled={!creating} value={form.bucket_region} placeholder="us-east-1"
+                    aria-invalid={errors.bucket_region ? true : undefined} onChange={(e) => set("bucket_region", e.target.value)} />
+                </Reasoned>,
+                t("v3.storage.form.regionHint"))}
+            </div>
+          </>
+        ) : field("access_point_arn", t("v3.storage.form.arn"),
           <Reasoned disabledReason={t("story.reason.fixedOnceCreated")}>
             <input className="v3-input mono" disabled={!creating} value={form.access_point_arn}
               placeholder="arn:aws:s3files:us-west-2:111122223333:file-system/fs-…/access-point/fsap-…"
@@ -110,7 +172,7 @@ export function RegisterDialog({
             <option value="">{t("v3.storage.form.noProfile")}</option>
             {profiles.filter((p) => !p.archived_at).map((p) => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}
           </Select>
-          <small className="v3-hint">{t("v3.storage.form.profileHint")}</small>
+          <small className="v3-hint">{t(form.kind === "s3bucket" ? "v3.storage.form.profileHintBucket" : "v3.storage.form.profileHint")}</small>
         </label>
         {form.max_mode === "rw" && <Notice s="info">{t("v3.storage.form.rwHint")}</Notice>}
         {error && <Notice s="act">{error}</Notice>}

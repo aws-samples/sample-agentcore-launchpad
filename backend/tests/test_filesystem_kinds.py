@@ -120,7 +120,8 @@ class LiveRuntime:
 
 @pytest.fixture
 def platform_session_only(monkeypatch):
-    monkeypatch.setattr(filesystem, "filesystem_configurations", lambda _spec: [SESSION])
+    monkeypatch.setattr(filesystem, "filesystem_configurations",
+                        lambda _spec, _agent_id=None: [SESSION])
     return object()
 
 
@@ -154,9 +155,10 @@ def test_a_bucket_mount_the_platform_set_is_dropped_when_the_spec_dropped_it(
 def test_a_canary_candidate_on_public_keeps_a_bucket_mount_only(monkeypatch):
     from app.optimization import canary_infra
 
-    monkeypatch.setattr(canary_infra, "filesystem_configurations", lambda _spec: [SESSION])
+    monkeypatch.setattr(canary_infra, "filesystem_configurations",
+                        lambda _spec, _agent_id=None: [SESSION])
     monkeypatch.setattr(canary_infra, "spec_vpc", lambda *_a, **_kw: None)
-    agent = type("A", (), {"spec": {}, "workspace_id": "default"})()
+    agent = type("A", (), {"id": "a1", "spec": {}, "workspace_id": "default"})()
     logs: list[str] = []
     merged = canary_infra._candidate_mounts(
         {"filesystemConfigurations": [SESSION, BUCKET, S3_FILES]}, object(), agent, logs.append)
@@ -201,7 +203,8 @@ def test_session_id_rule():
 
 
 def _agent(monkeypatch, entries):
-    monkeypatch.setattr(filesystem, "filesystem_configurations", lambda _spec: entries)
+    monkeypatch.setattr(filesystem, "filesystem_configurations",
+                        lambda _spec, _agent_id=None: entries)
     from app.schemas.agent import AgentSpec
 
     spec = AgentSpec(name="plain", method="zip_runtime", system_prompt="x").model_dump()
