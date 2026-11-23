@@ -417,6 +417,45 @@ refused (422), and `runtime.py` refuses the combination again before any
 Create/Update call. The mount rides the same `spec_vpc` placement every method
 already uses; there is no container-only VPC path any more.
 
+**S3 bucket mounts (`s3BucketMount`) are not NFS.** AgentCore Runtime V2 mounts an S3
+bucket prefix itself (Mountpoint for S3; botocore ≥ 1.44.6), on PUBLIC and VPC networks.
+One leaf module classifies every union member (`app/services/agentcore/filesystem_kinds.py`,
+re-exported by `deployer/filesystem.py`): only `s3FilesAccessPoint` / `efsAccessPoint` need
+a VPC. So the create guard admits a PUBLIC runtime with an S3 bucket mount, a PUBLIC
+re-publish (and a PUBLIC canary candidate) keeps an externally added one while still
+detaching external S3 Files / EFS mounts, and the agent's storage card lists it as kind
+`s3bucket` (`bucket`, `prefix`, owner, Region). The console cannot set one yet; an S3 bucket
+mount made in the AWS console survives re-publishes like any other external mount. Live
+facts (`backend/scripts/probe_s3_bucket_mount.py`, 2026-11-23, us-west-2):
+
+- **V2 only**, refused at create on V1 (`s3BucketMount can only be used when
+  platformVersion is V2`).
+- **Harness: not supported today.** CreateHarness accepts the entry, but the backing
+  runtime ends `CREATE_FAILED` ("Each filesystemConfigurations entry must specify exactly
+  one of …"): the harness service drops the member when it forwards the list.
+- **Per-session prefixes** (`sessions/{runtimeSessionId}/`) isolate sessions through the
+  mount, and IAM enforces it too: a role policy whose resources use
+  `${aws:AgentCoreRuntimeSourceSid}` (ListBucket `s3:prefix` `sessions/${sid}/*` and
+  `sessions/${sid}`, objects `sessions/${sid}/*`) denies another session's prefix to direct
+  S3 calls from inside the session. A bucket-policy Deny conditioned on
+  `Null aws:AgentCoreRuntimeSourceSid = false` confines even a whole-bucket role, while
+  requests without the key (the backend) are unaffected.
+- **Session ids:** with a `{runtimeSessionId}` prefix AWS refuses an id outside
+  `[A-Za-z0-9][A-Za-z0-9_-]{32,255}` (`ValidationException`). The invoke chain refuses such
+  an id first (`400 invoke.session_id_incompatible`, `services/invoke_session.py`) when the
+  agent's spec carries such a mount; console ids (64 hex) always fit.
+- **Mount failures** answer `InvokeAgentRuntime` with `RuntimeClientError` (HTTP 424) and a
+  message starting `S3 mount failed:` ("access denied", "the S3 bucket was not found", "the
+  mount configuration was rejected"). `services/mount_failure.py` turns only that text into
+  `424 agent.mount_failed` with AWS's reason: HTTP 424 alone is the generic error of any
+  failing agent container and keeps its old handling.
+- **Permissions boundaries apply:** the mount uses the execution role's session, so a
+  boundary without the S3 actions fails it (`S3 mount failed: access denied`).
+- **File semantics:** whole-file writes and overwrites work; append (`EPERM`), in-place
+  edit (`EBADF`) and rename (`ENOSYS`) fail.
+- UpdateAgentRuntime without `filesystemConfigurations` clears the mount, like every other
+  member.
+
 **Who may set them.** Inline mounts (the form that predates the storage catalog
 below) are access point ARNs, and — as inline subnets / security groups —
 only administrators may add or change one (`services/mount_policy.py`,

@@ -117,6 +117,31 @@ def test_the_card_marks_a_console_mount_external_and_names_its_catalog_entry(cli
     assert (console["storage_id"], console["storage_name"]) == ("shared", "Shared")
 
 
+def test_the_card_classifies_s3files_efs_and_bucket_mounts(client, monkeypatch):
+    agent_id = _agent()
+    bucket = {"s3BucketMount": {"bucket": "acme-lake", "mountPath": "/mnt/lake",
+                                "prefix": "curated/", "s3BucketOwner": "111122223333",
+                                "s3BucketRegion": "us-east-1"}}
+    whole = {"s3BucketMount": {"bucket": "acme-all", "mountPath": "/mnt/all"}}
+    control = StubRuntime([{"sessionStorage": {"mountPath": "/mnt/workspace"}},
+                           _s3(1, "/mnt/data"), bucket, whole,
+                           {"efsAccessPoint": {"accessPointArn": EFS, "mountPath": "/mnt/efs"}},
+                           {"capacityProviderVolume": {"volumeName": "v", "mountPath": "/mnt/v"}}])
+    monkeypatch.setattr(storage_router, "control_client", lambda _ctx: control)
+    live = client.get(f"/api/storage-mounts/agents/{agent_id}").json()["live"]
+    by_path = {e["mount_path"]: e for e in live["entries"]}
+    # session storage and a member the card does not model are not listed
+    assert set(by_path) == {"/mnt/data", "/mnt/lake", "/mnt/all", "/mnt/efs"}
+    assert by_path["/mnt/data"]["kind"] == "s3files" and by_path["/mnt/efs"]["kind"] == "efs"
+    assert by_path["/mnt/data"]["bucket"] is None and by_path["/mnt/efs"]["prefix"] is None
+    lake = by_path["/mnt/lake"]
+    assert lake["kind"] == "s3bucket" and lake["origin"] == "external"
+    assert (lake["bucket"], lake["prefix"], lake["bucket_owner"], lake["bucket_region"]) == (
+        "acme-lake", "curated/", "111122223333", "us-east-1")
+    assert lake["access_point_arn"] is None and lake["storage_id"] is None
+    assert by_path["/mnt/all"]["prefix"] is None and by_path["/mnt/all"]["bucket_owner"] is None
+
+
 def test_an_aws_failure_only_blanks_the_live_part(client, monkeypatch):
     from tests.conftest import client_error
 

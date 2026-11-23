@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 
 from app.core.errors import AppError
+from app.services.agentcore.filesystem_kinds import needs_vpc
 from app.services.agentcore.harness import new_session_id
 
 logger = logging.getLogger("launchpad.agentcore.runtime")
@@ -168,7 +169,9 @@ def _tag_updated_runtime(
 
 
 def _byo_entries(filesystem_configurations: list[dict[str, Any]] | None) -> bool:
-    return any("sessionStorage" not in fs for fs in filesystem_configurations or [])
+    """Any entry that mounts over NFS (S3 Files / EFS). An ``s3BucketMount`` and the
+    managed session storage work on PUBLIC."""
+    return any(needs_vpc(fs) for fs in filesystem_configurations or [])
 
 
 def _check_mounts_network(

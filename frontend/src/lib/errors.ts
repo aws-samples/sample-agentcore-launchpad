@@ -13,6 +13,7 @@ import { ApiError, errorMessage, localizedMessage, messageWithRaw } from "./api"
  */
 export const DETAIL_CODES: ReadonlySet<string> = new Set([
   "agent.convert_failed",
+  "agent.mount_failed",
   "assistant.preparation_invalid",
   "cost_tags.invalid",
   "custom_tool.invalid",

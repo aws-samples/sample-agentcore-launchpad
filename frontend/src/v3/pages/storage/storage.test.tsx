@@ -202,6 +202,25 @@ describe("agent storage card", () => {
     expect(down).toContain("Could not read the mounts on AWS (AccessDenied)");
   });
 
+  it("lists an S3 bucket mount by bucket and prefix, without an access point", () => {
+    const html = render(<StorageCardView agent={agent} loading={false} error={null} data={{
+      ...data, mounts: [], inline: [],
+      live: { status: "ok", kind: "runtime", entries: [
+        { kind: "s3bucket", mount_path: "/mnt/lake", access_point_arn: null, bucket: "acme-lake", prefix: "curated/",
+          bucket_owner: "111122223333", bucket_region: "us-east-1", origin: "external", storage_id: null, storage_name: null },
+        { kind: "s3bucket", mount_path: "/mnt/all", access_point_arn: null, bucket: "acme-all", prefix: null,
+          bucket_owner: null, bucket_region: null, origin: "external", storage_id: null, storage_name: null },
+      ] },
+    }} />);
+    expect(html).toContain("/mnt/lake");
+    expect(html).toContain("s3://acme-lake/curated/");
+    expect(html).toContain("111122223333");
+    expect(html).toContain("s3://acme-all/");
+    expect(html).toContain("S3 bucket");
+    expect(html).toContain("added outside Launchpad");
+    expect(html).toContain("works on the PUBLIC network");
+  });
+
   it("renders nothing when only session storage is mounted", () => {
     expect(render(<StorageCardView agent={agent} loading={false} error={null} data={{ ...data, mounts: [], inline: [] }} />)).toBe("");
   });

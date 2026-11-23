@@ -276,6 +276,36 @@ P4 Harness 由 PUBLIC 重新发布到 VPC、P5 BYOC 镜像、P8 只读）。探�
 `runtime.py` 在任何 Create / Update 调用之前再拒绝一次。挂载沿用各方式已有的 `spec_vpc` 网络放置，
 不再有只属于 container 的 VPC 路径。
 
+**S3 存储桶挂载（`s3BucketMount`）不是 NFS。** AgentCore Runtime V2 自己挂载 S3 桶前缀（Mountpoint
+for S3；botocore ≥ 1.44.6），PUBLIC 和 VPC 网络都可用。所有挂载类型由同一个叶子模块分类
+（`app/services/agentcore/filesystem_kinds.py`，由 `deployer/filesystem.py` 再导出）：只有
+`s3FilesAccessPoint` / `efsAccessPoint` 需要 VPC。因此创建校验允许 PUBLIC 运行时带 S3 桶挂载；
+PUBLIC 重新发布（以及 PUBLIC 的 canary 候选版本）保留在外部添加的 S3 桶挂载，同时仍卸掉外部的
+S3 Files / EFS 挂载；Agent 的存储卡片把它显示为 `s3bucket` 类型（桶、前缀、归属账号、Region）。
+控制台暂时还不能设置这种挂载；在 AWS 控制台添加的 S3 桶挂载与其他外部挂载一样，重新发布后保留。
+线上实测（`backend/scripts/probe_s3_bucket_mount.py`，2026-11-23，us-west-2）：
+
+- **只支持 V2**，V1 在创建时即被拒绝（`s3BucketMount can only be used when platformVersion is V2`）。
+- **Harness 目前不支持。** CreateHarness 接受该条目，但后台运行时以 `CREATE_FAILED` 结束（“Each
+  filesystemConfigurations entry must specify exactly one of …”）：Harness 服务转发列表时丢掉了该成员。
+- **每会话前缀**（`sessions/{runtimeSessionId}/`）通过挂载隔离会话，IAM 也能强制隔离：角色策略的资源
+  使用 `${aws:AgentCoreRuntimeSourceSid}`（ListBucket 的 `s3:prefix` 为 `sessions/${sid}/*` 与
+  `sessions/${sid}`，对象为 `sessions/${sid}/*`）时，会话内直接调用 S3 访问其他会话的前缀会被拒绝。
+  以 `Null aws:AgentCoreRuntimeSourceSid = false` 为条件的桶策略 Deny 甚至能限制拥有整桶权限的角色，
+  而不带该键的请求（后端）不受影响。
+- **会话 id：** 前缀含 `{runtimeSessionId}` 时，AWS 拒绝不符合 `[A-Za-z0-9][A-Za-z0-9_-]{32,255}` 的
+  id（`ValidationException`）。当 Agent 的 spec 带有这种挂载时，调用链会先行拒绝这类 id
+  （`400 invoke.session_id_incompatible`，`services/invoke_session.py`）；控制台的 id（64 位十六进制）
+  总是符合。
+- **挂载失败** 时 `InvokeAgentRuntime` 返回 `RuntimeClientError`（HTTP 424），消息以 `S3 mount failed:`
+  开头（“access denied”“the S3 bucket was not found”“the mount configuration was rejected”）。
+  `services/mount_failure.py` 只把这段文字映射为带 AWS 原因的 `424 agent.mount_failed`：单独的
+  HTTP 424 是任何 Agent 容器出错时的通用错误，保持原有处理。
+- **权限边界同样生效：** 挂载使用执行角色的会话，边界里没有 S3 操作时挂载失败
+  （`S3 mount failed: access denied`）。
+- **文件语义：** 整文件写入和覆盖可用；追加（`EPERM`）、原地修改（`EBADF`）和重命名（`ENOSYS`）失败。
+- 不带 `filesystemConfigurations` 的 UpdateAgentRuntime 会清空该挂载，与其他类型一致。
+
 **谁可以设置。** 内联挂载（早于下文存储目录的形式）是 Access Point ARN；与内联子网 /
 安全组一样，只有管理员可以新增或修改（`services/mount_policy.py`，`storage.inline_not_allowed`，400）。
 成员可以在管理员设置的挂载保持不变时重新发布，也可以删除挂载。每种方式的执行角色都会得到

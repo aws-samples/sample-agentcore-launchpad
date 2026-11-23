@@ -2844,6 +2844,8 @@
     "agent.tool_approval_requires_console": "A tool in this agent needs a person's approval, which only the Launchpad console chat can give.",
     "agent.upstream_error": "The agent's model or runtime failed before answering — usually temporary. Send the turn again; if it keeps failing, open the agent's traces.",
     "agent.model_access_denied": "The agent is not allowed to call its model: its execution role does not grant the model, or this account has no access to it. Sending the turn again will not help. Redeploy the agent so its role is regenerated, enable access to the model in Amazon Bedrock, or pick another model.",
+    "agent.mount_failed": "The agent's runtime could not mount its storage, so the turn did not run. Sending it again will not help: fix the bucket or file system, its policy, the agent's execution role, or the mount's Region first.",
+    "invoke.session_id_incompatible": "This agent's storage is mounted per session, so the session ID must be 33 to 256 characters, start with a letter or digit, and contain only letters, digits, \"_\" and \"-\". Pick another session ID or leave it out.",
     "agent_tools.jwt_inbound": "This agent cannot be offered as a tool: its Runtime accepts JWT bearer tokens only, and the calling agent signs with IAM.",
     "agent_tools.not_deployed": "This agent cannot be offered as a tool: it is not deployed.",
     "agent_tools.not_found": "The agent picked as a tool was not found.",
@@ -16239,6 +16241,7 @@
         "inlineHint": "Inline access points are read-write and cannot be promoted. Register them in the storage catalog and mount them by id.",
         "external": "added outside Launchpad",
         "externalHint": "Read back from AWS: these mounts were added outside Launchpad (in the AWS console, or before the agent was imported). A re-publish from Launchpad keeps them; to manage one here, register its access point in Storage and mount it through the edit wizard.",
+        "externalBucketHint": "An S3 bucket mount works on the PUBLIC network as well as in a VPC. A re-publish from Launchpad keeps it; manage the bucket and its permissions in AWS.",
         "liveUnavailable": "Could not read the mounts on AWS ({{error}}): mounts added outside Launchpad are not listed."
       },
       "picker": {
