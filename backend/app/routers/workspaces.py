@@ -884,6 +884,40 @@ def repair_workspace_observability(
     return {"workspace_id": row.id, **out}
 
 
+@router.post("/{workspace_id}/agent-files/repair")
+def repair_workspace_agent_files(
+    workspace_id: str,
+    db: Session = Depends(get_db),
+    _: Identity = Depends(access.require_structure),
+) -> dict[str, Any]:
+    """Create the session-output bucket of a ready workspace that has none.
+
+    The bucket belongs to bootstrap's `storage` stage, which never re-runs on a ready
+    workspace — so one bootstrapped before session output folders existed could not
+    get it. This runs just that step, idempotently, and records `agent_files_bucket`.
+    The `default` workspace is the hub: its bucket comes from the CDK stack.
+    """
+    row = _requested_row(db, workspace_id)
+    if row.id == DEFAULT_WORKSPACE_ID:
+        raise AppError(
+            "workspace.default_not_bootstrappable",
+            "the default workspace's agent-files bucket is created by the CDK stack "
+            "(`cdk deploy`, or `make bootstrap` once the stack outputs it) and mirrored "
+            "from config/launchpad.yaml on every startup",
+            status_code=400,
+        )
+    if row.bootstrap_status != READY:
+        raise AppError(
+            "workspace.not_ready",
+            "repair a workspace once its bootstrap has finished; until then the "
+            "bootstrap job itself creates the bucket",
+            status_code=409,
+        )
+    out = workspace_bootstrap.repair_agent_files(workspace_context(row),
+                                                 workspace_id=row.id)
+    return {"workspace_id": row.id, **out}
+
+
 @router.get("/{workspace_id}/role-template")
 def role_template(
     workspace_id: str,

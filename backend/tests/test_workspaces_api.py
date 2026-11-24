@@ -1329,6 +1329,45 @@ class TestObservabilityRepair:
             assert res.status_code == 403
 
 
+class TestAgentFilesRepair:
+    """`POST /api/workspaces/{id}/agent-files/repair` — the session-output bucket of a
+    workspace that is already ready (a re-bootstrap is refused there)."""
+
+    _ready = TestObservabilityRepair._ready
+
+    def test_it_creates_the_bucket_of_a_ready_workspace(self, admin, monkeypatch):
+        from app.services import workspace_bootstrap
+
+        self._ready(admin)
+        calls = []
+        monkeypatch.setattr(workspace_bootstrap, "repair_agent_files",
+                            lambda ctx, workspace_id, **_k: calls.append(workspace_id)
+                            or {"bucket": "launchpad-agent-files-x", "created": True})
+        res = admin.post(f"/api/workspaces/{NEW['id']}/agent-files/repair")
+        assert res.status_code == 200, res.text
+        assert res.json() == {"workspace_id": NEW["id"],
+                              "bucket": "launchpad-agent-files-x", "created": True}
+        assert calls == [NEW["id"]]
+
+    def test_the_hub_workspace_is_refused_because_cdk_owns_its_bucket(self, admin):
+        res = admin.post("/api/workspaces/default/agent-files/repair")
+        assert res.status_code == 400
+        assert res.json()["code"] == "workspace.default_not_bootstrappable"
+
+    def test_it_waits_for_the_bootstrap_to_finish(self, admin):
+        self._ready(admin, status="bootstrapping")
+        res = admin.post(f"/api/workspaces/{NEW['id']}/agent-files/repair")
+        assert res.status_code == 409 and res.json()["code"] == "workspace.not_ready"
+
+    def test_only_an_administrator_may_repair(self, admin, member_id, gated_app):
+        self._ready(admin)
+        admin.patch(f"/api/users/{member_id}", json={"workspaces": [NEW["id"]]})
+        with TestClient(gated_app, client=("127.0.0.1", 4321)) as member:
+            assert member.post("/api/auth/login", json=MEMBER_CREDS).status_code == 200
+            res = member.post(f"/api/workspaces/{NEW['id']}/agent-files/repair")
+            assert res.status_code == 403
+
+
 class TestRoleTemplate:
     """`GET /api/workspaces/{id}/role-template` — is the spoke stack current?"""
 

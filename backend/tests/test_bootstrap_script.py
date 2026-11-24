@@ -178,3 +178,16 @@ def test_bootstrap_summary_omits_policy_resources(monkeypatch, capsys):
     assert "policy engine" not in output
     assert "gateway policy" not in output
     assert "gateway traces" not in output
+
+
+def test_an_existing_stack_without_the_agent_files_output_is_outdated(monkeypatch):
+    """`make bootstrap` only runs `cdk deploy` on an existing stack when one of
+    REQUIRED_OUTPUTS is missing — the session-output bucket must be one of them, or a
+    stack made before it never gets the bucket."""
+    assert "AgentFilesBucketName" in bootstrap_script.REQUIRED_OUTPUTS
+    monkeypatch.setattr(bootstrap_script.bs, "get_stack_outputs",
+                        lambda _region: {"S3FilesSyncRoleArn": "arn:aws:iam::1:role/x"})
+    assert bootstrap_script.stack_outdated("us-west-2") == ["AgentFilesBucketName"]
+    monkeypatch.setattr(bootstrap_script.bs, "get_stack_outputs",
+                        lambda _region: {"S3FilesSyncRoleArn": "r", "AgentFilesBucketName": "b"})
+    assert bootstrap_script.stack_outdated("us-west-2") == []

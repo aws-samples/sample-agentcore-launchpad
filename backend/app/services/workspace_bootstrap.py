@@ -47,6 +47,7 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
+from app.core.errors import AppError
 from app.core.regions import partition_for_region
 from app.models.ledger import Job, Workspace
 from app.services import (
@@ -1260,6 +1261,37 @@ def repair_observability(workspace: WorkspaceContext, *, workspace_id: str,
                            workspace=workspace, log=log)
     detail = _stage_observability(ctx)
     return {"detail": detail, "active": detail.startswith("transaction search active")}
+
+
+def repair_agent_files(workspace: WorkspaceContext, *, workspace_id: str,
+                       log: Callable[[str], None] = lambda _msg: None) -> dict[str, Any]:
+    """Give an already-ready, non-default workspace its session-output bucket.
+
+    The bucket is made by the `storage` stage, which a full re-bootstrap would re-run —
+    but that is refused on a ready workspace, so a workspace bootstrapped before the
+    session output folder existed had no way to get one. This runs just the bucket
+    step (idempotent: create-or-adopt, then the same posture puts) and records
+    `agent_files_bucket`. A spoke role older than template v3 cannot set the bucket's
+    lifecycle rule; that is reported as an actionable `workspace.agent_files_denied`.
+    """
+    ctx = BootstrapContext(workspace_id=workspace_id, job_id="repair-agent-files",
+                           workspace=workspace, log=log)
+    bucket = _agent_files_bucket_name(ctx)
+    try:
+        created = _ensure_agent_files_bucket(ctx, workspace.client("s3"), bucket)
+    except ClientError as exc:
+        if _error_code(exc) not in _ACCESS_DENIED_CODES:
+            raise
+        raise AppError(
+            "workspace.agent_files_denied",
+            f"the workspace role may not set up {bucket}: update the spoke stack to the "
+            "current infra/spoke/ template (version 3 adds s3:PutLifecycleConfiguration), "
+            "then repair again",
+            status_code=502,
+            detail={"bucket": bucket, "error": _error_code(exc)},
+        ) from exc
+    ctx.record({"agent_files_bucket": bucket})
+    return {"bucket": bucket, "created": created}
 
 
 # ── stage: finalize ────────────────────────────────────────────────────────
