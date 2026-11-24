@@ -30,6 +30,11 @@ work can never accidentally sign with the hub's own credentials.
 > the caller). Re-deploy the stack from the current template to pick them up, then run
 > `POST /api/workspaces/{id}/observability/repair` for any workspace already marked
 > `ready` with observability unavailable.
+>
+> Template v3 also grants `s3:PutLifecycleConfiguration` on `launchpad-*` for the session
+> output bucket. A workspace that was already `ready` before session output folders existed
+> has no such bucket (a re-bootstrap is refused): after updating the stack, run
+> `POST /api/workspaces/{id}/agent-files/repair` once.
 
 ## Setup
 

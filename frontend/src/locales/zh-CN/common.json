@@ -2432,6 +2432,7 @@
     "workspace.not_found": "该工作区不存在。",
     "workspace.not_ready": "该工作区尚未完成初始化——请先运行其 bootstrap，然后再向其中创建资源。",
     "workspace.unresolved": "该路由无法解析工作区——它的授权配置与处理函数不一致。",
+    "workspace.agent_files_denied": "工作空间角色无权创建 Agent 文件存储桶——请把 spoke 栈更新到当前模板（版本 3），然后再次修复。",
     "workspace.default_not_bootstrappable": "Hub 自身的工作区由 `make bootstrap`（CDK）预置，不能从控制台初始化。",
     "workspace.bootstrap_conflict": "该工作区已在初始化中或已就绪。",
     "workspace.in_use": "该工作区仍有账本记录引用它——请先清理后再解除注册。",
@@ -3517,7 +3518,7 @@
     "agent.prompt_drift_unsupported": "这个 Agent 的提示词无法从 AWS 回读。",
     "agent.prompt_in_sync": "Launchpad 里的提示词已经和 AWS 一致，没有需要导回的内容。",
     "costs.bad_period": "请选择 1 到 92 天、且不从未来开始的自定义区间（日期格式 YYYY-MM-DD）。",
-    "storage.agent_files_unavailable": "该工作空间还没有 Agent 文件存储桶——请管理员运行其引导流程（storage 阶段）来创建，之后才能开启会话输出文件。",
+    "storage.agent_files_unavailable": "该工作空间还没有 Agent 文件存储桶——请管理员创建（default 工作空间：`cdk deploy`；其他工作空间：`POST /api/workspaces/{id}/agent-files/repair`），之后才能开启会话输出文件。",
     "chat.invalid_file_path": "该文件路径不在本会话的输出文件夹内。",
     "chat.files_unavailable": "该 Agent 没有会话输出文件夹。"
   },

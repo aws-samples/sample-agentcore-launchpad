@@ -591,8 +591,11 @@ own prefix), the files API and the delete hooks.
 - **Gate.** Runtime methods on platform V2 only (`422 storage.requires_v2`; the Harness is refused
   by the same `BUCKET_MOUNT_UNSUPPORTED` row as catalog buckets — the `AgentSpec` validator
   rejects it); a workspace without the bucket answers `422 storage.agent_files_unavailable` until
-  its bootstrap (hub: `make bootstrap` updates the CDK stack; spoke: the `storage` stage, spoke
-  template v3 for `s3:PutLifecycleConfiguration`) creates it. The folder counts as one of
+  the bucket exists: hub — `make bootstrap` runs `cdk deploy` when the stack lacks the
+  `AgentFilesBucketName` output (`REQUIRED_OUTPUTS`); a new spoke — its bootstrap `storage`
+  stage (spoke template v3 for `s3:PutLifecycleConfiguration`); a spoke that is already `ready`
+  (a re-bootstrap is refused) — `POST /api/workspaces/{id}/agent-files/repair`, which runs just
+  that step. The folder counts as one of
   AgentCore's five `filesystemConfigurations`.
 - **Bucket.** Unversioned (the expiry must really delete), SSE-S3, Block Public Access, objects
   expire 30 days after creation and incomplete multipart uploads after a day, `RETAIN` in CDK

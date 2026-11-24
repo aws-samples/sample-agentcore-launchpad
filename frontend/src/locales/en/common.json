@@ -2432,6 +2432,7 @@
     "workspace.not_found": "That workspace does not exist.",
     "workspace.not_ready": "This workspace is not bootstrapped yet — run its bootstrap before provisioning into it.",
     "workspace.unresolved": "This route could not resolve a workspace — its authorization entry and its handler disagree.",
+    "workspace.agent_files_denied": "The workspace role may not set up the agent-files bucket — update the spoke stack to the current template (version 3), then repair again.",
     "workspace.default_not_bootstrappable": "The hub's own workspace is provisioned by `make bootstrap` (CDK) and cannot be bootstrapped from the console.",
     "workspace.bootstrap_conflict": "This workspace is already bootstrapping or ready.",
     "workspace.in_use": "This workspace still owns ledger rows — clear them before detaching it.",
@@ -3517,7 +3518,7 @@
     "agent.prompt_drift_unsupported": "This agent's prompt cannot be read back from AWS.",
     "agent.prompt_in_sync": "The prompt in Launchpad already matches AWS; there is nothing to adopt.",
     "costs.bad_period": "Pick a custom period of 1 to 92 days that does not start in the future (dates as YYYY-MM-DD).",
-    "storage.agent_files_unavailable": "This workspace has no agent-files bucket yet — an administrator runs its bootstrap (storage stage) to create it, then session output files can be turned on.",
+    "storage.agent_files_unavailable": "This workspace has no agent-files bucket yet — an administrator creates it (the default workspace: `cdk deploy`; any other: `POST /api/workspaces/{id}/agent-files/repair`), then session output files can be turned on.",
     "chat.invalid_file_path": "That file path is not inside this session's output folder.",
     "chat.files_unavailable": "This agent has no session output folder."
   },

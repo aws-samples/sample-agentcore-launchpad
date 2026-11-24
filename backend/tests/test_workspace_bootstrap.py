@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
+from app.core.errors import AppError
 from app.deployer import pipeline
 from app.main import create_app
 from app.models.ledger import Job, Workspace
@@ -687,6 +688,47 @@ class TestStages:
         wb.STAGES["storage"](_ctx())
         assert len([c for c in aws.s3.created if c["bucket"] == bucket]) == 1
         assert aws.s3.settings[bucket]["lifecycle"] == agent_files.lifecycle_configuration()
+
+    def test_repair_makes_just_the_agent_files_bucket_of_a_ready_workspace(self, aws):
+        """A ready workspace cannot be re-bootstrapped, so one made before session output
+        folders existed gets its bucket from this single step — nothing else is touched."""
+        _register(bootstrap_status="ready")
+        bucket = f"launchpad-agent-files-{ACCOUNT}-{REGION}"
+
+        out = wb.repair_agent_files(context_for_workspace(WS_ID), workspace_id=WS_ID)
+
+        assert out == {"bucket": bucket, "created": True}
+        assert [c["bucket"] for c in aws.s3.created] == [bucket]  # no artifacts bucket, no ECR
+        assert aws.ecr.created == []
+        assert _row().resources["agent_files_bucket"] == bucket
+        again = wb.repair_agent_files(context_for_workspace(WS_ID), workspace_id=WS_ID)
+        assert again == {"bucket": bucket, "created": False}
+        assert len(aws.s3.created) == 1
+
+    def test_repair_names_the_spoke_template_when_the_role_is_too_old(self, aws, monkeypatch):
+        """Template v2 has no s3:PutLifecycleConfiguration: say so, record nothing."""
+        _register(bootstrap_status="ready")
+
+        def denied(**_kw):
+            raise _client_error("AccessDenied", "PutBucketLifecycleConfiguration")
+
+        monkeypatch.setattr(aws.s3, "put_bucket_lifecycle_configuration", denied)
+        with pytest.raises(AppError) as caught:
+            wb.repair_agent_files(context_for_workspace(WS_ID), workspace_id=WS_ID)
+        assert caught.value.code == "workspace.agent_files_denied"
+        assert caught.value.status_code == 502
+        assert "version 3" in str(caught.value)
+        assert "agent_files_bucket" not in (_row().resources or {})
+
+    def test_repair_lets_other_aws_errors_through(self, aws, monkeypatch):
+        _register(bootstrap_status="ready")
+
+        def boom(**_kw):
+            raise _client_error("InternalError", "PutBucketPolicy")
+
+        monkeypatch.setattr(aws.s3, "put_bucket_policy", boom)
+        with pytest.raises(ClientError):
+            wb.repair_agent_files(context_for_workspace(WS_ID), workspace_id=WS_ID)
 
     def test_us_east_1_gets_no_location_constraint(self, aws):
         """create_bucket rejects a LocationConstraint naming us-east-1."""

@@ -388,8 +388,9 @@ spec 的 `filesystem.mounts[]`；`filesystem_entries(spec, agent_id)` 把它们�
 （与目录桶共用同一个构建器，对 Agent 自己的前缀读写）、文件 API 和删除钩子。
 
 - **门槛。** 仅限平台版本 V2 的 Runtime 方式（`422 storage.requires_v2`；Harness 与目录桶一样由 `BUCKET_MOUNT_UNSUPPORTED`
-  拒绝——`AgentSpec` 校验器直接拒绝）；工作区没有该桶时返回 `422 storage.agent_files_unavailable`，直到其引导流程创建它
-  （hub：`make bootstrap` 更新 CDK 栈；spoke：`storage` 阶段，spoke 模板 v3 提供 `s3:PutLifecycleConfiguration`）。
+  拒绝——`AgentSpec` 校验器直接拒绝）；工作区没有该桶时返回 `422 storage.agent_files_unavailable`，直到桶存在：hub——栈缺少 `AgentFilesBucketName`
+  输出时 `make bootstrap` 会执行 `cdk deploy`（`REQUIRED_OUTPUTS`）；新的 spoke——其引导的 `storage` 阶段（spoke 模板 v3 提供
+  `s3:PutLifecycleConfiguration`）；已经 `ready` 的 spoke（不允许重新引导）——`POST /api/workspaces/{id}/agent-files/repair`，只重跑这一步。
   该文件夹占 AgentCore 五个 `filesystemConfigurations` 中的一个。
 - **存储桶。** 不开版本控制（过期必须真正删除）、SSE-S3、Block Public Access，对象创建 30 天后过期，未完成的分片上传一天后清理，
   CDK 中为 `RETAIN`（客户文件在栈拆除后仍保留；`teardown.py` 不会删它）。桶策略（`agent_files.bucket_policy`，由 spoke

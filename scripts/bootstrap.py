@@ -85,7 +85,7 @@ def stack_exists(region: str) -> bool:
 
 # outputs a stack made by an older checkout lacks: their presence is the cue that the
 # stack needs a `cdk deploy` update, not only a creation
-REQUIRED_OUTPUTS = ("S3FilesSyncRoleArn",)
+REQUIRED_OUTPUTS = ("S3FilesSyncRoleArn", "AgentFilesBucketName")
 
 
 def stack_outdated(region: str) -> list[str]:

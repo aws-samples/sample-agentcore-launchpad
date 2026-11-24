@@ -806,6 +806,7 @@ ROUTE_POLICY: dict[tuple[str, str], str] = {
     ("POST", "/api/workspaces/{workspace_id}/purge"): ADMIN,
     ("POST", "/api/workspaces/{workspace_id}/bootstrap"): ADMIN,
     ("POST", "/api/workspaces/{workspace_id}/observability/repair"): ADMIN,
+    ("POST", "/api/workspaces/{workspace_id}/agent-files/repair"): ADMIN,
     ("GET", "/api/workspaces/{workspace_id}/bootstrap"): ADMIN,
     # Reads the spoke role's own template-version tag (cached); writes nothing.
     ("GET", "/api/workspaces/{workspace_id}/role-template"): ADMIN,
@@ -915,6 +916,7 @@ WORKSPACE_EXEMPT: frozenset[tuple[str, str]] = frozenset(
         # parameter, not the caller's X-Workspace header.
         ("POST", "/api/workspaces/{workspace_id}/bootstrap"),
         ("POST", "/api/workspaces/{workspace_id}/observability/repair"),
+        ("POST", "/api/workspaces/{workspace_id}/agent-files/repair"),
         ("GET", "/api/workspaces/{workspace_id}/bootstrap"),
         ("GET", "/api/workspaces/{workspace_id}/role-template"),
         ("GET", "/api/workspaces/{workspace_id}/grants"),
@@ -1946,6 +1948,7 @@ _STRUCTURE_ROUTES = (
     ("GET", "/api/workspaces/{workspace_id}/grants"),
     ("PUT", "/api/workspaces/{workspace_id}/grants"),
     ("POST", "/api/workspaces/{workspace_id}/observability/repair"),
+    ("POST", "/api/workspaces/{workspace_id}/agent-files/repair"),
     ("POST", "/api/workspaces/{workspace_id}/purge"),
     ("GET", "/api/workspaces/{workspace_id}/role-template"),
     ("GET", "/api/workspaces/{workspace_id}/settings/visibility"),

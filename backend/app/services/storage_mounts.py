@@ -1412,7 +1412,8 @@ def normalize_outputs(spec: dict[str, Any], resources: dict[str, Any] | None,
     if not bucket:
         raise AppError("storage.agent_files_unavailable",
                        "this workspace has no agent-files bucket yet — an administrator "
-                       "runs its bootstrap (storage stage) to create it",
+                       "creates it (default workspace: `cdk deploy`; any other: "
+                       "POST /api/workspaces/{id}/agent-files/repair)",
                        status_code=422)
     fs["outputs"] = {"mount_path": outputs.get("mount_path") or OUTPUTS_DEFAULT_PATH,
                      "bucket": bucket, "project_key": project_id or OUTPUTS_SHARED_KEY}

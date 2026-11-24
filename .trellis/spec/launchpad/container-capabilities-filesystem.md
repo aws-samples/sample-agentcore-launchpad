@@ -380,6 +380,16 @@ list_files / presign / clean_relative_path / delete_prefix / delete_agent_files
 > `<bucket>.s3.<region>.amazonaws.com` with no such window — it matters for a freshly
 > bootstrapped spoke. The older `knowledge.py` / `coding/s3urls.py` presigns (`s3v4` only) run
 > on long-lived CDK buckets and work. Unit test: `test_presign_asks_for_a_sigv4_regional_host_client`.
+Bucket provisioning per kind of workspace — every one needs a path, a `ready` workspace is the trap:
+hub = CDK `AgentFilesBucketName` (listed in `scripts/bootstrap.py` `REQUIRED_OUTPUTS`, otherwise `make bootstrap`
+skips `cdk deploy` on an existing stack); new spoke = bootstrap `storage` stage; **ready spoke** = `POST
+/api/workspaces/{id}/agent-files/repair` → `workspace_bootstrap.repair_agent_files` (a re-bootstrap 409s on
+READY; `default` → 400 `workspace.default_not_bootstrappable`; spoke role < template v3 → 502
+`workspace.agent_files_denied`). Tests: `test_workspace_bootstrap.py::test_repair_*`,
+`test_workspaces_api.py::TestAgentFilesRepair`, `test_bootstrap_script.py::test_an_existing_stack_without_*`.
+> Common mistake (found at the 2026-11-24 rollout): a new per-workspace resource added to a one-shot bootstrap
+> stage reaches only NEW workspaces; ship the repair path and the stack-output cue in the same change.
+
 HTTP: `GET /api/chat/{agent_id}/sessions/{session_id}/files`,
 `GET …/files/download?path=` (both `MEMBER` in `ROUTE_POLICY`; the service checks owner/admin).
 
