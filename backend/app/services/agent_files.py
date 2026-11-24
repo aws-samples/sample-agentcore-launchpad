@@ -47,10 +47,13 @@ DELETE_BATCH = 1000
 # the session-id alphabet AgentCore accepts under a `{runtimeSessionId}` prefix — also
 # what keeps a stored id from widening the prefix the console reads
 # SigV4 on the *regional* virtual-hosted host. The default presign is SigV2 on the global
-# endpoint (S3 answers 307 to the regional one); `signature_version="s3v4"` alone still
-# signs `<bucket>.s3.amazonaws.com`, which S3 rejects with 400 "the region 'us-west-2' is
-# wrong; expecting 'us-east-1'" (live 2026-11-23) — `addressing_style="virtual"` is what
-# puts the Region in the host.
+# endpoint (S3 answers 307 to the regional one). `signature_version="s3v4"` alone still
+# signs `<bucket>.s3.amazonaws.com`: fine for an established bucket, but for the first
+# hours after the bucket is created (a spoke bootstrap that is used straight away) the
+# global name still resolves to us-east-1 and S3 answers 400 "the region 'us-west-2' is
+# wrong; expecting 'us-east-1'" (live 2026-11-23, bucket 20 min old; the same bucket
+# served 200 a day later). `addressing_style="virtual"` puts the Region in the host, so
+# there is no such window.
 _SIGV4 = "agent-files-s3v4"
 _PRESIGN_CONFIG = Config(signature_version="s3v4", s3={"addressing_style": "virtual"})
 
