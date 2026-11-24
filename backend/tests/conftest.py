@@ -215,6 +215,15 @@ def no_agent_artifact_cleanup(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_agent_files_cleanup(monkeypatch):
+    # The same for the session output folder's objects (`services/agent_files`): a
+    # hermetic delete never reaches S3; test_agent_files.py restores the real function.
+    from app.services import agent_files
+
+    monkeypatch.setattr(agent_files, "delete_agent_files", lambda *a, **k: 0)
+
+
+@pytest.fixture(autouse=True)
 def no_traffic_history(monkeypatch):
     # Pricing a passive run or an online config (eval-cost §1.1) sizes it from the
     # agent's last 7 days — a Logs Insights scan. Hermetic tests see no traffic;

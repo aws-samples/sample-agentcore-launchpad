@@ -1,13 +1,14 @@
-import { ExternalLink, RefreshCw, X } from "lucide-react";
+import { Download, ExternalLink, RefreshCw, X } from "lucide-react";
 import { type Dispatch, type MutableRefObject, type SetStateAction, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import { chatApi, type ChatMemorySummary, type ChatTraceInfo, errorMessage } from "../../../lib/api";
+import { chatApi, type ChatMemorySummary, type ChatTraceInfo, errorMessage, type SessionFiles } from "../../../lib/api";
 import { MemoryRecordText } from "../../../components/MemoryRecordText";
 import type { AgentMemoryState } from "../../../lib/chat";
 import { Btn, Filters, Notice, Skeleton } from "../../ui";
-import { type InspectTab, spanBars } from "./inspect";
+import { when } from "../agent/format";
+import { fileSize, type InspectTab, spanBars } from "./inspect";
 
 const CATEGORIES = ["model", "tool", "memory", "policy", "runtime"] as const;
 
@@ -21,8 +22,8 @@ interface Read<T> {
 const idle = <T,>(): Read<T> => ({ data: null, error: null, busy: false });
 
 /**
- * The chat's right rail (V2's Inspector, rebuilt): the session's trace waterfall and
- * its memory. The open tab loads when the rail opens, when the session changes and
+ * The chat's right rail (V2's Inspector, rebuilt): the session's trace waterfall, its
+ * memory and the files the agent saved to its session output folder. The open tab loads when the rail opens, when the session changes and
  * once after every finished turn (`busy` falling) — never while a turn runs. The
  * parent keys it on agent + session, so another conversation starts empty.
  */
@@ -46,8 +47,10 @@ export function Inspector({
   const { t } = useTranslation();
   const [trace, setTrace] = useState<Read<ChatTraceInfo>>(idle);
   const [memory, setMemory] = useState<Read<ChatMemorySummary>>(idle);
+  const [files, setFiles] = useState<Read<SessionFiles>>(idle);
   const traceSeq = useRef(0);
   const memorySeq = useRef(0);
+  const filesSeq = useRef(0);
 
   // one read per tab; a newer read of the same tab supersedes an older one
   const read = async <T,>(set: Dispatch<SetStateAction<Read<T>>>, seq: MutableRefObject<number>, fetch: () => Promise<T>) => {
@@ -64,6 +67,7 @@ export function Inspector({
   const load = (which: InspectTab) => {
     if (!sessionId) return;
     if (which === "trace") void read(setTrace, traceSeq, () => chatApi.trace(sessionId));
+    else if (which === "files") void read(setFiles, filesSeq, () => chatApi.files(agentId, sessionId));
     else if (memoryState !== "off") void read(setMemory, memorySeq, () => chatApi.memory(agentId, sessionId));
   };
 
@@ -72,7 +76,7 @@ export function Inspector({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, busy, sessionId]);
 
-  const active = tab === "trace" ? trace : memory;
+  const active = tab === "trace" ? trace : tab === "files" ? files : memory;
   return (
     <aside className="v3-chat-inspect" data-testid="v3-chat-inspector" aria-label={t("v3.chat.inspect.title")}>
       <header className="v3-chat-inspect-head">
@@ -82,6 +86,7 @@ export function Inspector({
           options={[
             { value: "trace", label: t("v2.chat.tabTrace") },
             { value: "memory", label: t("v2.chat.tabMemory") },
+            { value: "files", label: t("v3.chat.inspect.tabFiles") },
           ]}
         />
         <button type="button" className="v3-btn ghost sm" onClick={onClose} aria-label={t("v3.chat.inspect.close")}
@@ -92,7 +97,7 @@ export function Inspector({
       <div className="v3-chat-inspect-body">
         {!sessionId ? (
           <p className="v3-chat-inspect-empty">
-            {tab === "trace" ? t("v2.chat.tracePlaceholder") : t("v2.chat.memoryPlaceholder")}
+            {tab === "trace" ? t("v2.chat.tracePlaceholder") : tab === "files" ? t("v3.chat.files.placeholder") : t("v2.chat.memoryPlaceholder")}
           </p>
         ) : (
           <>
@@ -114,7 +119,7 @@ export function Inspector({
                     </a>
                   )}
                 </>
-              ) : (
+              ) : tab === "files" ? null : (
                 memory.data?.actor_id && (
                   <Link className="v3-chat-inspect-link" target="_blank" rel="noreferrer" data-testid="v3-chat-open-memory"
                     to={`/v3/memory?tab=short-term&actor=${encodeURIComponent(memory.data.actor_id)}&session=${encodeURIComponent(sessionId)}`}>
@@ -125,7 +130,9 @@ export function Inspector({
             </div>
             <div className="v3-chat-inspect-sid mono" title={sessionId}>session {sessionId}</div>
             {active.error && <Notice s="act">{t("v3.chat.inspect.failed", { msg: active.error })}</Notice>}
-            {tab === "trace" ? <TraceBody read={trace} /> : <MemoryBody read={memory} memoryState={memoryState} />}
+            {tab === "trace" ? <TraceBody read={trace} /> : tab === "files" ? (
+              <FilesBody read={files} agentId={agentId} sessionId={sessionId} />
+            ) : <MemoryBody read={memory} memoryState={memoryState} />}
           </>
         )}
       </div>
@@ -183,6 +190,76 @@ function MemoryBody({ read, memoryState }: { read: Read<ChatMemorySummary>; memo
           <MemoryRecordText text={r.text} />
         </div>
       ))}
+    </div>
+  );
+}
+
+/** The session output folder: what the agent saved, newest first, with a download per
+ *  file (a presigned URL fetched on click — it lives five minutes). */
+export function FilesBody({ read, agentId, sessionId }: { read: Read<SessionFiles>; agentId: string; sessionId: string }) {
+  const { t } = useTranslation();
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const data = read.data;
+  if (!data) return read.busy ? <Skeleton rows={3} /> : null;
+  if (!data.enabled) {
+    return (
+      <div className="v3-chat-inspect-empty" data-testid="v3-chat-files-disabled">
+        <p>{t("v3.chat.files.disabled")}</p>
+        <Link className="v3-chat-inspect-link" to={`/v2/agents?view=edit&id=${encodeURIComponent(agentId)}`}>
+          {t("v3.chat.files.enable")}
+        </Link>
+      </div>
+    );
+  }
+  const download = async (path: string) => {
+    setDownloading(path);
+    setFailure(null);
+    try {
+      const { url } = await chatApi.fileUrl(agentId, sessionId, path);
+      window.location.assign(url);
+    } catch (err) {
+      setFailure(errorMessage(err));
+    } finally {
+      setDownloading(null);
+    }
+  };
+  return (
+    <div className="v3-chat-files" data-testid="v3-chat-files">
+      {failure && <Notice s="act">{t("v3.chat.files.downloadFailed", { msg: failure })}</Notice>}
+      {data.files.length === 0 ? (
+        <p className="v3-chat-inspect-empty" data-testid="v3-chat-files-empty">
+          {t("v3.chat.files.empty", { path: data.mount_path ?? "/mnt/outputs" })}
+        </p>
+      ) : (
+        <table className="v3-table">
+          <thead>
+            <tr>
+              <th>{t("v3.chat.files.colName")}</th>
+              <th>{t("v3.chat.files.colSize")}</th>
+              <th>{t("v3.chat.files.colTime")}</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {data.files.map((f) => (
+              <tr key={f.key_rel} data-testid="v3-chat-file">
+                <td className="mono" title={f.key_rel}>{f.key_rel}</td>
+                <td>{fileSize(f.size)}</td>
+                <td><small>{when(f.last_modified)}</small></td>
+                <td>
+                  <Btn size="sm" busy={downloading === f.key_rel} onClick={() => void download(f.key_rel)}
+                    aria-label={`${t("v3.chat.files.download")} ${f.key_rel}`} data-testid="v3-chat-file-download">
+                    <Download size={13} /> {t("v3.chat.files.download")}
+                  </Btn>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {data.truncated && <small className="v3-hint">{t("v3.chat.files.truncated", { count: data.files.length })}</small>}
+      <small className="v3-hint">{t("v3.chat.files.retention", { days: data.retention_days })}</small>
     </div>
   );
 }

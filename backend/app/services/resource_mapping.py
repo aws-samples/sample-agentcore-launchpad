@@ -90,6 +90,7 @@ _STORAGE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
 NETWORK_UNMAPPED = "network_profile.unmapped"
 STORAGE_UNMAPPED = "storage.unmapped"
 INLINE_NOT_PROMOTABLE = "storage.inline_not_promotable"
+AGENT_FILES_UNAVAILABLE = "storage.agent_files_unavailable"
 
 # resources-map keys whose value is the workspace's own default for a kind
 _IMPLICIT_RESOURCE_KEY = {KIND_GATEWAY: "gateway_id", KIND_MEMORY: "memory_id"}
@@ -391,6 +392,14 @@ def _defaults_first(rows: list[ResourceMapping]) -> list[ResourceMapping]:
     return sorted(rows, key=lambda row: row.project_id is not None)
 
 
+def storage_mounts_restamp_outputs(
+    spec: dict[str, Any], resources: dict[str, Any] | None, project_id: str | None
+) -> bool:
+    from app.services import storage_mounts
+
+    return storage_mounts.restamp_outputs(spec, resources, project_id)
+
+
 def resolve_spec(
     db: Session,
     spec: dict[str, Any],
@@ -409,8 +418,20 @@ def resolve_spec(
     """
     refs = extract_references(spec)
     out = copy.deepcopy(spec)
+    # the session output folder names the SOURCE workspace's agent-files bucket: the
+    # target's own replaces it (a target without one cannot receive the agent)
+    files_missing: list[dict[str, Any]] = []
+    if not storage_mounts_restamp_outputs(out, target_resources, project_id):
+        files_missing.append({
+            "kind": KIND_STORAGE, "logical": "storage:session-outputs",
+            "path": "filesystem.outputs", "source_id": "session-outputs",
+            "code": AGENT_FILES_UNAVAILABLE,
+            "reason": (f"workspace '{target_workspace_id}' has no agent-files bucket — "
+                       "run its bootstrap (storage stage) before releasing an agent with "
+                       "a session output folder"),
+        })
     if not refs:
-        return Resolution(out, [], [])
+        return Resolution(out, [], files_missing)
     names = _profile_names(db, source_workspace_id,
                            {r.source_id for r in refs if r.kind == KIND_NETWORK_PROFILE})
     refs = [dataclasses.replace(r, hint=names.get(r.source_id, "")) if
@@ -501,7 +522,7 @@ def resolve_spec(
                            f"(dev id {entry['source_id']}) — map it to an entry of the same "
                            "kind, or register one"),
             })
-    return Resolution(out, resolved, unmapped)
+    return Resolution(out, resolved, [*unmapped, *files_missing])
 
 
 def resolve_gate(

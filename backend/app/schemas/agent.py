@@ -27,6 +27,7 @@ from app.schemas.strands_builder import (
     ToolHooks,
     check_builder_fields,
 )
+from app.services.agentcore.filesystem_kinds import OUTPUTS_DEFAULT_PATH
 from app.templates import context_layer_support
 
 # Latest Sonnet inference profile available in the target account (verified via
@@ -415,6 +416,42 @@ class StorageMountRef(BaseModel):
         return bool(self.kind and self.access_point_arn)
 
 
+_PROJECT_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+class OutputsFs(BaseModel):
+    """The session output folder (task 11-23-s3mount-p2): a per-session, always
+    read-write ``s3BucketMount`` on the workspace's agent-files bucket at
+    ``projects/<project>/agents/<agent id>/sessions/{runtimeSessionId}/``. The person
+    who chatted downloads what the agent wrote there from the chat's Files tab, for 30
+    days (a lifecycle rule on the bucket).
+
+    Not a catalog entry: every member may turn it on. ``bucket`` and ``project_key``
+    are server-stamped when the spec is stored
+    (`services/storage_mounts.normalize_outputs`) — whatever a client sends is
+    replaced — so the deployers map and grant it without a workspace read."""
+
+    model_config = {"extra": "forbid"}
+
+    mount_path: str = Field(
+        default=OUTPUTS_DEFAULT_PATH, pattern=MOUNT_PATH_RE, min_length=6, max_length=200
+    )
+    bucket: str | None = Field(default=None, max_length=63)
+    project_key: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def _stamped(self) -> "OutputsFs":
+        if self.bucket and not BUCKET_NAME_RE.match(self.bucket):
+            raise ValueError(f"'{self.bucket}' is not an S3 bucket name")
+        if self.project_key and not _PROJECT_KEY_RE.match(self.project_key):
+            raise ValueError("project_key is a project id (or 'shared')")
+        return self
+
+    @property
+    def resolved(self) -> bool:
+        return bool(self.bucket and self.project_key)
+
+
 class VpcNetwork(BaseModel):
     """Inline networkModeConfig for networkMode=VPC — the legacy shape (design §12.3).
 
@@ -484,6 +521,8 @@ class FilesystemConfig(BaseModel):
     # legacy shape, still accepted
     mounts: list[StorageMountRef] = Field(default_factory=list,
                                           max_length=MAX_FILESYSTEM_ENTRIES)
+    # the per-session output folder (null = off, the default); counts as one entry
+    outputs: OutputsFs | None = None
 
     @property
     def byo(self) -> bool:
@@ -514,16 +553,20 @@ class FilesystemConfig(BaseModel):
     def _check(self) -> "FilesystemConfig":
         # every filesystemConfigurations entry counts against AgentCore's limit of five
         limit = MAX_FILESYSTEM_ENTRIES - (1 if self.session_storage else 0)
-        if len(self.s3_files) + len(self.efs) + len(self.mounts) > limit:
+        outputs = 1 if self.outputs else 0
+        if len(self.s3_files) + len(self.efs) + len(self.mounts) + outputs > limit:
             raise ValueError(
                 f"at most {limit} S3 Files / EFS / S3 bucket mounts per agent"
                 + (" (plus session storage)" if self.session_storage else "")
+                + (" including the session output folder" if outputs else "")
             )
         if len({m.storage_id for m in self.mounts}) != len(self.mounts):
             raise ValueError("a storage entry is mounted once per agent")
         paths = [m.mount_path.rstrip("/") for m in (*self.s3_files, *self.efs, *self.mounts)]
         if self.session_storage:
             paths.append(self.session_storage.mount_path.rstrip("/"))
+        if self.outputs:
+            paths.append(self.outputs.mount_path.rstrip("/"))
         if len(paths) != len(set(paths)):
             raise ValueError("filesystem mount paths must be unique")
         for mount in self.s3_files:
@@ -1298,6 +1341,11 @@ class AgentSpec(BaseModel):
         # mount targets are reached from the runtime's ENIs, so a PUBLIC agent cannot
         # mount them. Refused, not dropped, so a spec never shows a mount its runtime
         # does not have.
+        if self.filesystem.outputs is not None and self.method in BUCKET_MOUNT_UNSUPPORTED:
+            raise ValueError(
+                f"the session output folder is not supported by the {self.method} "
+                f"method: {BUCKET_MOUNT_UNSUPPORTED[self.method]}"
+            )
         if not self.filesystem.byo:
             return self
         if self.method not in BYO_MOUNT_METHODS:

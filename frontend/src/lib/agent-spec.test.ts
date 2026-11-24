@@ -341,6 +341,38 @@ describe("BYO mounts on every method (storage-mounts §3)", () => {
   });
 });
 
+describe("session output files (task 11-23-s3mount-p2)", () => {
+  const on = { ...emptyAgentForm("zip_runtime"), name: "out-a", systemPrompt: "hi", outputsFs: true };
+
+  it("is off by default and omitted from the spec when off", () => {
+    expect(emptyAgentForm("zip_runtime").outputsFs).toBe(false);
+    expect(buildAgentSpec({ ...on, outputsFs: false }, CATALOGS).filesystem).not.toHaveProperty("outputs");
+  });
+
+  it("sends the folder's mount path on a Runtime method, never on the Harness", () => {
+    expect(buildAgentSpec({ ...on, outputsMount: "/mnt/out" }, CATALOGS).filesystem?.outputs).toEqual({ mount_path: "/mnt/out" });
+    expect(buildAgentSpec({ ...on, method: "harness" }, CATALOGS).filesystem).not.toHaveProperty("outputs");
+  });
+
+  it("round-trips a stored spec (the server's stamp is not echoed back)", () => {
+    const stored = { filesystem: { outputs: { mount_path: "/mnt/out", bucket: "b", project_key: "p" } } };
+    const form = formFromStoredSpec("zip_runtime", "out-b", stored).form;
+    expect(form.outputsFs).toBe(true);
+    expect(form.outputsMount).toBe("/mnt/out");
+    expect(buildAgentSpec(form, CATALOGS).filesystem?.outputs).toEqual({ mount_path: "/mnt/out" });
+  });
+
+  it("checks the path, the unique paths and the five-entry limit", () => {
+    expect(filesystemIssues({ ...on, outputsMount: "/data" }).outputsMount).toBe(true);
+    expect(filesystemIssues({ ...on, outputsMount: "/mnt/workspace" }).duplicatePaths).toBe(true);
+    expect(filesystemIssues(on)).toMatchObject({ outputsMount: false, duplicatePaths: false, tooMany: false });
+    // session storage + the folder leave three of the five entries for mounts
+    const rows = ["a", "b", "c", "d"].map((x) => ({ storageId: `cat-${x}`, kind: "s3bucket" as const, mountPath: `/mnt/${x}`, mode: "ro" as const }));
+    expect(filesystemIssues({ ...on, catalogMounts: rows.slice(0, 3) as never }).tooMany).toBe(false);
+    expect(filesystemIssues({ ...on, catalogMounts: rows as never }).tooMany).toBe(true);
+  });
+});
+
 describe("storage catalog mounts in the wizard (storage-mounts SM-2)", () => {
   const picks = [
     { storageId: "datasets", path: "/mnt/datasets", mode: "ro" as const },

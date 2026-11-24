@@ -12,6 +12,7 @@ import {
   type AgentForm,
   type ByocBuiltin,
   byoMountsAllowed,
+  DEFAULT_OUTPUTS_MOUNT,
   DEFAULT_SESSION_MOUNT,
   DISPLAY_NAME_MAX,
   filesystemIssues,
@@ -644,6 +645,32 @@ export function FilesystemCard({
             </Field>
           )}
         </div>
+        {form.method !== "harness" && (
+          <div className="v2-form cols-2" data-testid="v2-agent-fs-outputs-block">
+            <Field label={t("v2.agents.wizard.fsOutputs")} hint={t("v2.agents.wizard.fsOutputsHint", { days: 30 })}>
+              <label className="v2-check">
+                <input type="checkbox" checked={form.outputsFs} onChange={(e) => set({ outputsFs: e.target.checked })} data-testid="v2-agent-fs-outputs" />
+                {t("v2.agents.wizard.fsOutputsOn")}
+              </label>
+            </Field>
+            {form.outputsFs && (
+              <Field label={t("v2.agents.wizard.fsOutputsMount")} error={show(issues.outputsMount, "v2.agents.wizard.errMount")}>
+                <input
+                  className="v2-input mono"
+                  value={form.outputsMount}
+                  onChange={(e) => set({ outputsMount: e.target.value })}
+                  placeholder={DEFAULT_OUTPUTS_MOUNT}
+                  data-testid="v2-agent-fs-outputs-mount"
+                />
+              </Field>
+            )}
+          </div>
+        )}
+        {form.method !== "harness" && form.outputsFs && form.runtimeConfig?.platform_version === "V1" && (
+          <div data-testid="v2-agent-fs-outputs-v2">
+            <Alert tone="warn">{t("v2.agents.wizard.fsOutputsNeedsV2")}</Alert>
+          </div>
+        )}
         {rowsMode !== "hidden" && kinds.map(({ kind, field, label, ph }) => (
           <Field key={kind} label={t("v2.agents.wizard.fsMounts", { kind: label })} hint={t("v2.agents.wizard.fsMountsHint", { max: MAX_MOUNTS_PER_KIND })}>
             {form[field].length > 0 && (

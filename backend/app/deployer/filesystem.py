@@ -20,6 +20,7 @@ from app.services.agentcore.filesystem_kinds import (  # noqa: F401 — re-expor
     S3_BUCKET_KIND,
     member_kind,
     needs_vpc,
+    outputs_prefix,
     per_session_prefix,
 )
 
@@ -46,7 +47,29 @@ def filesystem_configurations(spec: AgentSpec, agent_id: str | None = None) -> l
     from app.services.storage_mounts import filesystem_entries
 
     out.extend(filesystem_entries(spec, agent_id))  # catalog mounts (storage-mounts §4.2)
+    outputs = outputs_entry(spec, agent_id)
+    if outputs is not None:
+        out.append(outputs)
     return out
+
+
+def outputs_entry(spec: AgentSpec, agent_id: str | None) -> dict | None:
+    """The ``s3BucketMount`` of the session output folder (``filesystem.outputs``), or
+    ``None`` when the agent has none. The bucket and project segment are stamped on the
+    spec when it is stored; an unstamped one raises ``ValueError`` rather than send a
+    mount the platform cannot grant (like a per-session mount without its agent)."""
+    outputs = spec.filesystem.outputs
+    if outputs is None:
+        return None
+    if not outputs.resolved:
+        raise ValueError("the session output folder was not stamped with its bucket — "
+                         "re-save the agent")
+    if not agent_id:
+        raise ValueError("the session output folder needs its agent id")
+    return {S3_BUCKET_KIND: {
+        "bucket": outputs.bucket, "mountPath": outputs.mount_path,
+        "prefix": outputs_prefix(outputs.project_key, agent_id),
+    }}
 
 
 def mount_path(entry: dict) -> str:

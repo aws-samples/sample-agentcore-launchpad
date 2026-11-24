@@ -69,7 +69,11 @@ Notes:
   registry records before the registry, and everything before the CDK stack.
   A failed target prints a warning and the loop continues.
 - The CDK stack deletion runs `cdk destroy --force`; the S3 artifacts bucket
-  auto-empties and the ECR repo force-deletes as part of the stack.
+  auto-empties and the ECR repo force-deletes as part of the stack. The agent-files bucket
+  (`launchpad-agent-files-<account>-<region>`, the agents' session output folders) is
+  **retained** on purpose — customer files outlive the stack; empty and delete it by hand
+  when nobody needs them (an agent delete already removes that agent's folder, and objects
+  expire 30 days after creation).
 - Teardown targets are discovered by exact name or name prefix — gateways
   `launchpad-gw` / `launchpad-kb-gw` / `launchpad-coa-gw` (the COA context layer's
   managed gateway) (by gateway **name**, never by the ids in

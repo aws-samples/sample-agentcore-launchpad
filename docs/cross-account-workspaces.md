@@ -173,6 +173,7 @@ whether the account can **build**.
 | ECR | create/describe, plus both halves of an artifact copy | create/describe, plus the **receiving** half only (`PutImage`, layer upload); no read-out of layers, no `GetAuthorizationToken` |
 | BYOC image from any repo in the account | yes | no: images arrive by promotion into `launchpad-agents` |
 | Artifact deletion (`s3:DeleteObject`) | yes | no: released artifacts are the rollback and audit record |
+| Session output files cleanup (`s3:DeleteObject` on `launchpad-agent-files-*`) | yes | no: an agent delete cannot remove its output folder here (logged, best-effort); the bucket's 30-day expiry removes it |
 
 Rule of thumb: if a human could reasonably ask this account to build something, use the
 standard template; if the only way an agent gets here is a promotion, use the prod

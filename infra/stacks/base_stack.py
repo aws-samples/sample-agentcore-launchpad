@@ -69,6 +69,65 @@ class LaunchpadBaseStack(Stack):
             auto_delete_objects=True,
         )
 
+        # ---- agent-files bucket (session output folders, `filesystem.outputs`) ----
+        # Mounted per session by AgentCore (s3BucketMount, Mountpoint for S3) at
+        # projects/<project>/agents/<agent id>/sessions/<session id>/ and read back by
+        # the console's chat Files tab. Unversioned on purpose: the 30-day expiry must
+        # really delete. RETAIN, unlike the artifacts bucket: customer files outlive a
+        # stack teardown (teardown.py leaves it; empty and delete it by hand). The
+        # policy is the probe-verified one of `app/services/agent_files.bucket_policy`
+        # (the spoke bootstrap applies that function to its own bucket): a request made
+        # from inside a runtime session carries aws:AgentCoreRuntimeSourceSid and reaches
+        # only its own session folder; the backend's requests carry no such key.
+        agent_files = s3.Bucket(
+            self,
+            "AgentFilesBucket",
+            bucket_name=f"launchpad-agent-files-{self.account}-{self.region}",
+            versioned=False,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            enforce_ssl=True,
+            removal_policy=RemovalPolicy.RETAIN,
+            lifecycle_rules=[
+                s3.LifecycleRule(
+                    id="expire-agent-files",
+                    expiration=Duration.days(30),
+                    abort_incomplete_multipart_upload_after=Duration.days(1),
+                )
+            ],
+        )
+        source_sid = "${aws:AgentCoreRuntimeSourceSid}"
+        in_session = {"Null": {"aws:AgentCoreRuntimeSourceSid": "false"}}
+        sessions = f"projects/*/agents/*/sessions/{source_sid}"
+        agent_files.add_to_resource_policy(
+            iam.PolicyStatement(
+                sid="DenyOtherSessionsObjects",
+                effect=iam.Effect.DENY,
+                principals=[iam.AnyPrincipal()],
+                actions=[
+                    "s3:GetObject",
+                    "s3:PutObject",
+                    "s3:DeleteObject",
+                    "s3:AbortMultipartUpload",
+                ],
+                not_resources=[agent_files.arn_for_objects(f"{sessions}/*")],
+                conditions=in_session,
+            )
+        )
+        agent_files.add_to_resource_policy(
+            iam.PolicyStatement(
+                sid="DenyListOutsideOwnSession",
+                effect=iam.Effect.DENY,
+                principals=[iam.AnyPrincipal()],
+                actions=["s3:ListBucket"],
+                resources=[agent_files.bucket_arn],
+                conditions={
+                    **in_session,
+                    "StringNotLike": {"s3:prefix": [f"{sessions}/*", sessions]},
+                },
+            )
+        )
+
         # ---- ECR repo for Claude-SDK container images ----
         # image_tag_mutability is deliberately left MUTABLE. The container path
         # tags images `{agent}-v{version}`, and _stage_package runs BEFORE
@@ -700,6 +759,7 @@ class LaunchpadBaseStack(Stack):
         CfnOutput(self, "GatewayRoleArn", value=gateway_role.role_arn)
         CfnOutput(self, "KbRoleArn", value=kb_role.role_arn)
         CfnOutput(self, "ArtifactsBucketName", value=artifacts.bucket_name)
+        CfnOutput(self, "AgentFilesBucketName", value=agent_files.bucket_name)
         CfnOutput(self, "EcrRepoName", value=repo.repository_name)
         CfnOutput(self, "EcrRepoUri", value=repo.repository_uri)
         CfnOutput(self, "CodeBuildProjectName", value=build_project.project_name)

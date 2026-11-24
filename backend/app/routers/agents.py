@@ -44,6 +44,7 @@ from app.schemas.inbound_auth import JWT_CAPABLE_METHODS, InboundAuth
 from app.services import (
     agent_access,
     agent_artifacts,
+    agent_files,
     agent_iam,
     agent_identity,
     agent_names,
@@ -189,6 +190,9 @@ def _delete_agent_resources(agent: Agent, workspace: WorkspaceContext) -> bool:
     delete_agent_registry_record(agent, workspace)
     # the packages / build contexts the deploy wrote under the agent's own keys
     agent_artifacts.delete_agent_artifacts(agent, workspace)
+    # the session output folder's objects (best-effort; the bucket's 30-day lifecycle
+    # rule is the backstop)
+    agent_files.delete_agent_files(agent, workspace)
     return True
 
 
@@ -357,14 +361,17 @@ def _stored_network(
 def _stored_storage(
     db: Session, ws: WorkspaceScope, request: Request, spec: AgentSpec, *,
     creating: bool = False, previous_spec: dict[str, Any] | None = None,
+    agent: Agent | None = None,
 ) -> AgentSpec:
     """Catalog mounts in stored form (storage-mounts §4.2, §5): each entry in the
     project's allowed set and within its max mode, its kind and access point stamped by
     the server, and the storage × network preflight passed. ``previous_spec`` is the
     stored spec of the agent being re-published: a spec that names no ``runtime_config``
     keeps the stored one (as `_start_redeploy` carries it), which is the platform the
-    S3 bucket gate must judge."""
-    if not spec.filesystem.mounts:
+    S3 bucket gate must judge. The session output folder (``filesystem.outputs``) is
+    stamped here too, with the workspace's agent-files bucket and the agent's project
+    (``agent`` when re-publishing, else the request's)."""
+    if not spec.filesystem.mounts and spec.filesystem.outputs is None:
         return spec
     from app.services import storage_mounts
 
@@ -373,8 +380,14 @@ def _stored_storage(
     raw = spec.model_dump(mode="json")
     if previous_spec is not None:
         raw = carry_runtime_config(raw, previous_spec)
-    stored = storage_mounts.normalize_spec_storage(db, ws.id, pid, raw, creating=creating)
-    storage_mounts.assert_preflight(db, ws.context, stored, pid)
+    stored = raw
+    if spec.filesystem.mounts:
+        stored = storage_mounts.normalize_spec_storage(db, ws.id, pid, stored, creating=creating)
+        storage_mounts.assert_preflight(db, ws.context, stored, pid)
+    if spec.filesystem.outputs is not None:
+        stored = storage_mounts.normalize_outputs(
+            stored, ws.context.resources, agent.project_id if agent is not None else pid,
+            creating=creating)
     return AgentSpec.model_validate(stored)
 
 
@@ -1022,7 +1035,8 @@ def redeploy_agent(
     mount_policy.assert_inline_mounts_allowed(
         spec, agent.spec, is_admin=require_identity(request).is_admin,
     )
-    spec = _stored_storage(db, ws, request, spec, previous_spec=agent.spec or {})
+    spec = _stored_storage(db, ws, request, spec, previous_spec=agent.spec or {},
+                           agent=agent)
     return republish_agent(
         db, agent, spec, ws, actor=require_identity(request).username, viewer=viewer
     )

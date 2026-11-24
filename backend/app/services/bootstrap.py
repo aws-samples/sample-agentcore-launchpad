@@ -386,6 +386,10 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
             "region": region,
             "resources": {
                 "artifacts_bucket": outputs["ArtifactsBucketName"],
+                # the session output folder's bucket (agent-files); absent on stacks
+                # predating it — `make bootstrap` then updates the stack, and until it
+                # does the toggle is refused (`storage.agent_files_unavailable`)
+                "agent_files_bucket": outputs.get("AgentFilesBucketName", ""),
                 "ecr_repo": outputs["EcrRepoName"],
                 "ecr_repo_uri": outputs["EcrRepoUri"],
                 "codebuild_project": outputs["CodeBuildProjectName"],

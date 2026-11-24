@@ -151,6 +151,7 @@ def main() -> int:
             ),
         ),
         ("artifacts bucket", summary["stack_outputs"]["ArtifactsBucketName"]),
+        ("agent-files bucket", summary["stack_outputs"].get("AgentFilesBucketName", "-")),
         ("ecr repo", summary["stack_outputs"]["EcrRepoUri"]),
         ("codebuild", summary["stack_outputs"]["CodeBuildProjectName"]),
         ("user pool", summary["stack_outputs"]["UserPoolId"]),

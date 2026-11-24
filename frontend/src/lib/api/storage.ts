@@ -177,6 +177,8 @@ export interface AgentStorage {
   agent_id: string;
   version: string | null;
   session_storage: string | null;
+  /** the session output folder (null/absent = off) */
+  outputs?: { mount_path: string; bucket: string | null } | null;
   /** read back from AWS; absent on an older backend */
   live?: { status: "ok" | "no_resource" | "unavailable"; kind?: "runtime" | "harness"; error?: string; entries: LiveMount[] };
   mounts: {

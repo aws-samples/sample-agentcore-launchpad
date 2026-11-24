@@ -22,6 +22,7 @@ from app.routers.workspaces import WorkspaceScope, require_workspace
 from app.schemas.attachments import AttachmentRequest, SessionIdField
 from app.services import (
     agent_access,
+    agent_files,
     chat_turns,
     context_layer_gateway,
     memory_ownership,
@@ -590,6 +591,61 @@ def list_sessions(
             for r in rows
         ]
     }
+
+
+def _own_session(
+    db: Session, ws: WorkspaceScope, agent: Agent, session_id: str, request: Request,
+) -> ChatSession:
+    """The ledger row of a session the caller may read the files of: the session's own
+    user or an administrator. Anyone else — and another agent's or workspace's session —
+    gets the missing-session 404, indistinguishable from a session that does not exist
+    (stricter than the transcript list, which every viewer of the agent sees)."""
+    row = (
+        db.query(ChatSession)
+        .filter(
+            ChatSession.workspace_id == ws.id,
+            ChatSession.agent_id == agent.id,
+            ChatSession.session_id == session_id,
+        )
+        .first()
+    )
+    identity = require_identity(request)
+    caller = identity.username if auth_enabled() else "river"
+    if row is None or not (identity.is_admin or row.actor_id == caller):
+        raise NotFoundError("chat.session_not_found", "chat session not found")
+    return row
+
+
+@router.get("/chat/{agent_id}/sessions/{session_id}/files")
+def session_files(
+    agent_id: str,
+    session_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """The files the agent wrote to its session output folder (``/mnt/outputs``),
+    newest first, at most 1000. ``enabled: false`` for an agent without the folder."""
+    agent = _agent_in(db, ws, agent_id, viewer)
+    _own_session(db, ws, agent, session_id, request)
+    return agent_files.list_files(agent, session_id, ws.context)
+
+
+@router.get("/chat/{agent_id}/sessions/{session_id}/files/download")
+def session_file_download(
+    agent_id: str,
+    session_id: str,
+    request: Request,
+    path: str = Query(..., min_length=1, max_length=agent_files.MAX_PATH_CHARS),
+    db: Session = Depends(get_db),
+    ws: WorkspaceScope = Depends(require_workspace),
+    viewer: Viewer = Depends(require_viewer),
+) -> dict[str, Any]:
+    """A five-minute presigned download URL for one file of the session folder."""
+    agent = _agent_in(db, ws, agent_id, viewer)
+    _own_session(db, ws, agent, session_id, request)
+    return agent_files.presign(agent, session_id, path, ws.context)
 
 
 @router.post("/chat/{agent_id}/sessions/{session_id}/stop")

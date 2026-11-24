@@ -311,7 +311,10 @@ Resources:
 
               # ── S3 ─────────────────────────────────────────────────────────
               # The artifacts bucket is launchpad-artifacts-<account>-<region>:
-              # agent source zips, skill bundles, canary payloads. Bucket- and
+              # agent source zips, skill bundles, canary payloads; the agent-files
+              # bucket (launchpad-agent-files-<account>-<region>) holds the session
+              # output folders agents write and the console serves, and needs
+              # PutLifecycleConfiguration for its 30-day expiry. Bucket- and
               # object-level actions share one statement (the bucket ARN and the
               # /* ARN); an action that does not apply to one of the two is
               # simply never authorized against it.
@@ -329,6 +332,7 @@ Resources:
                   - s3:PutBucketPublicAccessBlock
                   - s3:PutBucketVersioning
                   - s3:PutEncryptionConfiguration
+                  - s3:PutLifecycleConfiguration
                   - s3:PutObject
                 Resource:
                   - Fn::Sub: "arn:${AWS::Partition}:s3:::launchpad-*"

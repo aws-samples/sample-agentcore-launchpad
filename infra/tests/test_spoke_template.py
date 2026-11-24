@@ -179,6 +179,14 @@ def test_scopable_statements_are_scoped(statements: list[dict[str, Any]]):
             assert arn.startswith("arn:"), f"{sid}: {arn} is not an ARN"
 
 
+def test_the_hub_can_set_the_agent_files_bucket_lifecycle(statements: list[dict[str, Any]]):
+    """The session output folders' bucket (launchpad-agent-files-<account>-<region>) expires
+    objects after 30 days: the workspace bootstrap's `storage` stage puts that rule, so the
+    S3 statement on `launchpad-*` buckets carries PutLifecycleConfiguration."""
+    (s3,) = [s for s in statements if s.get("Sid") == "S3Launchpad"]
+    assert "s3:PutLifecycleConfiguration" in s3["Action"]
+
+
 def test_pass_role_names_the_services_it_may_pass_to(statements: list[dict[str, Any]]):
     """Without the condition this is "hand any launchpad-* role to anything",
     which is the whole privilege-escalation path a PassRole grant opens."""

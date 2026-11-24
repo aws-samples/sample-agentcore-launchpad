@@ -342,3 +342,91 @@ by_arn = {r.access_point_arn: r for r in rows}
 # CORRECT: skip kind == "s3bucket"; match a live bucket entry by (bucket, mounted prefix)
 ```
 
+## Scenario: session output files (`filesystem.outputs`, P2)
+
+### 1. Scope / Trigger
+- Trigger: any change to the per-session output folder — the spec field, its stamp, the
+  agent-files bucket (CDK + spoke bootstrap), the mapping/IAM/boundary, the files API,
+  the delete hooks, or the chat Files tab. Code: `services/agent_files.py`,
+  `services/storage_mounts.py` (`normalize_outputs`, `restamp_outputs`,
+  `storage_iam_statements`), `deployer/filesystem.outputs_entry`, `deployer/mounts.py`,
+  `services/agentcore/filesystem_kinds.py` (`outputs_*`), `services/project_iam.py`,
+  `routers/chat.py`, `infra/stacks/base_stack.py`, `services/workspace_bootstrap.py`.
+
+### 2. Signatures
+```python
+# schemas/agent.py
+class OutputsFs: mount_path="/mnt/outputs"; bucket; project_key   # last two server-stamped
+FilesystemConfig.outputs: OutputsFs | None = None                 # counts as 1 of the 5 entries
+# services/agentcore/filesystem_kinds.py  (the ONE prefix formula)
+outputs_bucket_name(account, region) -> "launchpad-agent-files-<a>-<r>"
+outputs_agent_prefix(project_key, agent_id) -> "projects/<project|shared>/agents/<agent>/"
+outputs_prefix(project_key, agent_id, session=SESSION_TOKEN) -> ".../sessions/<session>/"
+# services/storage_mounts.py
+normalize_outputs(spec, resources, project_id, *, creating) -> spec   # stamp + V2/method/bucket gate
+restamp_outputs(spec, resources, project_id) -> bool                  # promotion; False = target has no bucket
+# services/agent_files.py
+bucket_policy(bucket, partition) / lifecycle_configuration()          # spoke bootstrap applies; CDK twin
+list_files / presign / clean_relative_path / delete_prefix / delete_agent_files
+```
+
+> **Gotcha — presign host (live 2026-11-23/24):** `presign` must use
+> `Config(signature_version="s3v4", s3={"addressing_style": "virtual"})`. The default client
+> signs SigV2 on the global host (S3 answers `307`). `signature_version="s3v4"` alone signs
+> `<bucket>.s3.amazonaws.com`, which works for an established bucket but fails for the first
+> hours after the bucket is created (global DNS not yet propagated → `400
+> AuthorizationQueryParametersError`, "the region 'us-west-2' is wrong; expecting
+> 'us-east-1'"); the same bucket served 200 a day later. `addressing_style="virtual"` yields
+> `<bucket>.s3.<region>.amazonaws.com` with no such window — it matters for a freshly
+> bootstrapped spoke. The older `knowledge.py` / `coding/s3urls.py` presigns (`s3v4` only) run
+> on long-lived CDK buckets and work. Unit test: `test_presign_asks_for_a_sigv4_regional_host_client`.
+HTTP: `GET /api/chat/{agent_id}/sessions/{session_id}/files`,
+`GET …/files/download?path=` (both `MEMBER` in `ROUTE_POLICY`; the service checks owner/admin).
+
+### 3. Contracts
+- Wire: `s3BucketMount {bucket, mountPath, prefix: projects/<project|shared>/agents/<agent_id>/sessions/{runtimeSessionId}/}`,
+  always read-write, `{runtimeSessionId}` substituted by AgentCore (probe P1/P4). IAM is the
+  catalog builder (`bucket_iam_statements`) with that prefix — never a second shape.
+- The stamp is server-side: whatever a client sends in `bucket` / `project_key` is replaced. A re-publish
+  files the prefix under the agent's own project (`agent.project_id`), a create under the request's.
+  `outputs: {}` means "on, default path" — test `is None`, never truthiness.
+- Bucket policy = TLS-only + the probe-verified (P4b) confinement: object-action Deny with
+  `NotResource …/projects/*/agents/*/sessions/${aws:AgentCoreRuntimeSourceSid}/*` AND a ListBucket Deny with
+  `StringNotLike s3:prefix`, both `Null aws:AgentCoreRuntimeSourceSid=false`. Unversioned, 30-day expiry,
+  CDK `RETAIN`. CDK and `agent_files.bucket_policy` are twins: change both (tests pin each).
+- Boundary: `BoundaryInputs.agent_files_bucket` is set only when a project agent has the folder
+  (`_Needs.outputs`); it allows `projects/<pid>/*` of that bucket.
+- Files API authorization order: agent visibility (`_agent_in`) → ledger `ChatSession` row of
+  (workspace, agent, session) → `actor_id == caller` (or `river` with auth off) or admin → else
+  `404 chat.session_not_found`. The prefix comes from the agent row + session id, never the client.
+- Delete hooks (`_delete_agent_resources`, conversation purge, deferred sweep) call
+  `agent_files.delete_agent_files`: only `projects/<project|shared>/agents/<agent_id>/` (project from the
+  agent row and its stamped spec), best-effort, never raises. A workspace purge touches no AWS.
+
+### 4. Validation & Error Matrix
+| Condition | Result |
+|---|---|
+| Harness + outputs | `AgentSpec` validation error (same `BUCKET_MOUNT_UNSUPPORTED` row as catalog buckets) |
+| Runtime not on V2 (or existing agent without explicit V2) | 422 `storage.requires_v2` |
+| Workspace has no `agent_files_bucket` | 422 `storage.agent_files_unavailable` (promotion: unmapped, same code) |
+| Caller is neither the session's user nor admin / unknown session / other agent | 404 `chat.session_not_found` |
+| `path` empty, absolute, `.`/`..`/empty segment, backslash, control char, > 1024 chars | 422 `chat.invalid_file_path` |
+| Agent without the folder: list / download | `{enabled:false, files:[]}` / 404 `chat.files_unavailable` |
+
+### 5. Tests Required
+`backend/tests/test_agent_files.py` (stamp, gates, mapping, IAM golden, boundary, policy + lifecycle golden,
+manifest/prompt, promotion, list/presign/path matrix, owner/admin/other-member API, delete prefix/paging/never-raises),
+`test_workspace_bootstrap.py` (storage stage: bucket posture, idempotent), `infra/tests/test_stack.py`
+(bucket + policy twin), `infra/tests/test_spoke_template.py` (`s3:PutLifecycleConfiguration`),
+`frontend/src/v3/pages/chat/files.test.tsx`, `inspect.test.ts`, `storage.test.tsx` (StorageCard row).
+
+### 6. Wrong vs Correct
+```python
+# WRONG: a delete prefix assembled from a loose id (agent "abc" would also match "abcd…")
+prefix = f"projects/{p}/agents/{agent_id}"
+# CORRECT: the trailing slash is part of the formula
+prefix = outputs_agent_prefix(p, agent_id)   # ".../agents/<id>/"
+
+# WRONG: if not outputs: return spec      ({} = on with defaults is falsy)
+# CORRECT: if outputs is None: return spec
+```

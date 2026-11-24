@@ -63,7 +63,8 @@ uv run python ../scripts/teardown.py --yes        # 删除（网关层 → 凭�
   时间内等待 target 消失，并在 API 不再报冲突后重试），注册记录先于注册表删除，一切
   都先于 CDK 栈移除。某个目标失败只打印警告，循环继续。
 - CDK 栈删除执行 `cdk destroy --force`；S3 产物桶自动清空，ECR 仓库作为栈的一部分
-  强制删除。
+  强制删除。Agent 文件桶（`launchpad-agent-files-<account>-<region>`，Agent 的会话输出文件夹）**有意保留**——
+  客户文件在栈之后仍然存在；确认没人需要后请手动清空并删除（删除 Agent 已会移除该 Agent 的文件夹，对象在创建 30 天后也会过期）。
 - teardown 目标按精确名称或名称前缀发现——网关 `launchpad-gw` / `launchpad-kb-gw` /
   `launchpad-coa-gw`（COA 上下文层的托管网关）
   （按网关**名称**匹配，绝不使用 `config/launchpad.yaml` 里可能过期的 id）、凭据提供方

@@ -312,6 +312,7 @@ Resources:
                   - s3:PutBucketPublicAccessBlock
                   - s3:PutBucketVersioning
                   - s3:PutEncryptionConfiguration
+                  - s3:PutLifecycleConfiguration
                   - s3:PutObject
                 Resource:
                   - Fn::Sub: "arn:${AWS::Partition}:s3:::launchpad-*"

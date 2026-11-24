@@ -3516,7 +3516,10 @@
     "agent.prompt_drift_stale": "AWS has published a newer Harness version since you reviewed the prompt. Review it again before adopting.",
     "agent.prompt_drift_unsupported": "This agent's prompt cannot be read back from AWS.",
     "agent.prompt_in_sync": "The prompt in Launchpad already matches AWS; there is nothing to adopt.",
-    "costs.bad_period": "Pick a custom period of 1 to 92 days that does not start in the future (dates as YYYY-MM-DD)."
+    "costs.bad_period": "Pick a custom period of 1 to 92 days that does not start in the future (dates as YYYY-MM-DD).",
+    "storage.agent_files_unavailable": "This workspace has no agent-files bucket yet — an administrator runs its bootstrap (storage stage) to create it, then session output files can be turned on.",
+    "chat.invalid_file_path": "That file path is not inside this session's output folder.",
+    "chat.files_unavailable": "This agent has no session output folder."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -6949,7 +6952,12 @@
           "kindValue": "MCP server (tool, not an agent)",
           "reviewSub": "Deploying creates the runtime, a Cognito client, an OAuth2 provider and the Gateway target, then lists the server's tools."
         },
-        "networkProfile": "Network profile: {{id}}"
+        "networkProfile": "Network profile: {{id}}",
+        "fsOutputs": "Session output files",
+        "fsOutputsOn": "Give the agent a folder for files the user can download",
+        "fsOutputsMount": "Output folder path",
+        "fsOutputsHint": "Read-write and private to each session; whole files only (no append, rename or in-place edit). Downloadable from the chat's Files tab for {{days}} days, then deleted. Runtime methods on platform V2 only — not the Harness.",
+        "fsOutputsNeedsV2": "Session output files need Runtime platform version V2 — switch this agent to V2 in its Runtime settings."
       },
       "identity": {
         "open": "Identity",
@@ -13216,11 +13224,25 @@
         "reconnecting": "Connection lost — the agent is still answering; reconnecting ({{n}}/{{total}})…"
       },
       "inspect": {
-        "title": "Session trace and memory",
-        "toggle": "Trace & memory",
+        "title": "Session trace, memory and files",
+        "toggle": "Trace, memory & files",
         "close": "Close the panel",
         "refresh": "Refresh",
-        "failed": "Could not load: {{msg}}"
+        "failed": "Could not load: {{msg}}",
+        "tabFiles": "Files"
+      },
+      "files": {
+        "placeholder": "Send a message first — files the agent saves for this session appear here.",
+        "disabled": "This agent has no session output folder.",
+        "enable": "Turn it on in the agent's storage settings",
+        "empty": "No files yet. Ask the agent to save a file to {{path}}.",
+        "retention": "Files are kept for {{days}} days after they are written, then deleted.",
+        "truncated": "Showing the newest {{count}} files.",
+        "download": "Download",
+        "colName": "File",
+        "colSize": "Size",
+        "colTime": "Written",
+        "downloadFailed": "Could not download: {{msg}}"
       }
     },
     "gate": {
@@ -16280,7 +16302,9 @@
         "external": "added outside Launchpad",
         "externalHint": "Read back from AWS: these mounts were added outside Launchpad (in the AWS console, or before the agent was imported). A re-publish from Launchpad keeps them; to manage one here, register its access point in Storage and mount it through the edit wizard.",
         "externalBucketHint": "An S3 bucket mount works on the PUBLIC network as well as in a VPC. A re-publish from Launchpad keeps it; manage the bucket and its permissions in AWS.",
-        "liveUnavailable": "Could not read the mounts on AWS ({{error}}): mounts added outside Launchpad are not listed."
+        "liveUnavailable": "Could not read the mounts on AWS ({{error}}): mounts added outside Launchpad are not listed.",
+        "outputs": "Session output files",
+        "outputsHint": "The agent saves files for the user here; they are downloadable from the chat for 30 days."
       },
       "picker": {
         "title": "Storage from the catalog",

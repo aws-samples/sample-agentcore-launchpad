@@ -3516,7 +3516,10 @@
     "agent.prompt_drift_stale": "你审阅提示词之后，AWS 又发布了新的 Harness 版本。请重新审阅后再导回。",
     "agent.prompt_drift_unsupported": "这个 Agent 的提示词无法从 AWS 回读。",
     "agent.prompt_in_sync": "Launchpad 里的提示词已经和 AWS 一致，没有需要导回的内容。",
-    "costs.bad_period": "请选择 1 到 92 天、且不从未来开始的自定义区间（日期格式 YYYY-MM-DD）。"
+    "costs.bad_period": "请选择 1 到 92 天、且不从未来开始的自定义区间（日期格式 YYYY-MM-DD）。",
+    "storage.agent_files_unavailable": "该工作空间还没有 Agent 文件存储桶——请管理员运行其引导流程（storage 阶段）来创建，之后才能开启会话输出文件。",
+    "chat.invalid_file_path": "该文件路径不在本会话的输出文件夹内。",
+    "chat.files_unavailable": "该 Agent 没有会话输出文件夹。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -6949,7 +6952,12 @@
           "kindValue": "MCP 服务器（工具，不是智能体）",
           "reviewSub": "部署会创建 Runtime、Cognito 客户端、OAuth2 提供方和网关目标，然后列出服务器的工具。"
         },
-        "networkProfile": "网络配置：{{id}}"
+        "networkProfile": "网络配置：{{id}}",
+        "fsOutputs": "会话输出文件",
+        "fsOutputsOn": "为 Agent 提供一个文件夹，存放用户可下载的文件",
+        "fsOutputsMount": "输出文件夹路径",
+        "fsOutputsHint": "每个会话私有且可读写，只能整文件写入（不能追加、重命名或原地编辑）。可在对话的「文件」标签页下载，保留 {{days}} 天后删除。仅支持平台版本 V2 的 Runtime 方式，不支持 Harness。",
+        "fsOutputsNeedsV2": "会话输出文件需要 Runtime 平台版本 V2，请在该 Agent 的 Runtime 设置中切换到 V2。"
       },
       "identity": {
         "open": "身份",
@@ -13216,11 +13224,25 @@
         "reconnecting": "连接中断，智能体仍在回答；正在重新连接（{{n}}/{{total}}）……"
       },
       "inspect": {
-        "title": "会话链路与记忆",
-        "toggle": "链路与记忆",
+        "title": "会话链路、记忆与文件",
+        "toggle": "链路、记忆与文件",
         "close": "收起面板",
         "refresh": "刷新",
-        "failed": "加载失败：{{msg}}"
+        "failed": "加载失败：{{msg}}",
+        "tabFiles": "文件"
+      },
+      "files": {
+        "placeholder": "请先发送一条消息，Agent 为本会话保存的文件会显示在这里。",
+        "disabled": "该 Agent 没有会话输出文件夹。",
+        "enable": "在 Agent 的存储设置中开启",
+        "empty": "还没有文件。可以让 Agent 把文件保存到 {{path}}。",
+        "retention": "文件写入后保留 {{days}} 天，之后自动删除。",
+        "truncated": "仅显示最新的 {{count}} 个文件。",
+        "download": "下载",
+        "colName": "文件",
+        "colSize": "大小",
+        "colTime": "写入时间",
+        "downloadFailed": "下载失败：{{msg}}"
       }
     },
     "gate": {
@@ -16280,7 +16302,9 @@
         "external": "在 Launchpad 之外挂载",
         "externalHint": "从 AWS 回读：这些挂载是在 Launchpad 之外添加的（在 AWS 控制台里，或在导入 Agent 之前）。在 Launchpad 里重新发布会保留它们；如果要在这里管理，请先在存储页登记它的访问点，再通过编辑向导挂载。",
         "externalBucketHint": "S3 存储桶挂载在 PUBLIC 网络和 VPC 中均可使用。在 Launchpad 里重新发布会保留它；存储桶及其权限请在 AWS 中管理。",
-        "liveUnavailable": "读取 AWS 上的挂载失败（{{error}}），在 Launchpad 之外添加的挂载没有列出。"
+        "liveUnavailable": "读取 AWS 上的挂载失败（{{error}}），在 Launchpad 之外添加的挂载没有列出。",
+        "outputs": "会话输出文件",
+        "outputsHint": "Agent 把要交给用户的文件保存在这里，可在对话中下载，保留 30 天。"
       },
       "picker": {
         "title": "从存储目录挂载",

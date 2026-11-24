@@ -58,12 +58,15 @@ from app.schemas.agent import (
 )
 from app.services.agentcore.filesystem_kinds import (
     LIVE_KIND,
+    OUTPUTS_DEFAULT_PATH,
+    OUTPUTS_SHARED_KEY,
     S3_BUCKET_KIND,
     SCOPE_PER_SESSION,
     SCOPE_SHARED,
     iam_prefix,
     member_kind,
     mounted_prefix,
+    outputs_prefix,
 )
 
 logger = logging.getLogger(__name__)
@@ -1391,6 +1394,48 @@ def normalize_spec_storage(db: Session, workspace_id: str, project_id: str | Non
     return {**spec, "filesystem": fs}
 
 
+def normalize_outputs(spec: dict[str, Any], resources: dict[str, Any] | None,
+                      project_id: str | None, *, creating: bool = False) -> dict[str, Any]:
+    """An incoming spec's session output folder (``filesystem.outputs``) in stored form:
+    the workspace's agent-files bucket and the project segment of its prefix stamped by
+    the server (whatever a client sent there is replaced). The same platform gate as an
+    S3 bucket catalog mount (`assert_bucket_platform`: Runtime methods on V2) plus the
+    bucket's presence — a workspace bootstrapped before the feature has none
+    (`422 storage.agent_files_unavailable`). Returns a new dict; a spec without an
+    output folder comes back unchanged."""
+    fs = dict(spec.get("filesystem") or {})
+    outputs = fs.get("outputs")
+    if outputs is None:
+        return spec
+    assert_bucket_platform(spec, creating=creating)
+    bucket = (resources or {}).get("agent_files_bucket")
+    if not bucket:
+        raise AppError("storage.agent_files_unavailable",
+                       "this workspace has no agent-files bucket yet — an administrator "
+                       "runs its bootstrap (storage stage) to create it",
+                       status_code=422)
+    fs["outputs"] = {"mount_path": outputs.get("mount_path") or OUTPUTS_DEFAULT_PATH,
+                     "bucket": bucket, "project_key": project_id or OUTPUTS_SHARED_KEY}
+    return {**spec, "filesystem": fs}
+
+
+def restamp_outputs(spec: dict[str, Any], resources: dict[str, Any] | None,
+                    project_id: str | None) -> bool:
+    """Re-stamp a promoted spec's output folder from the target workspace, in place:
+    its bucket, and the target's project segment. ``False`` when the target has no
+    agent-files bucket (the caller refuses the release); ``True`` otherwise, also for a
+    spec without an output folder."""
+    outputs = (spec.get("filesystem") or {}).get("outputs")
+    if outputs is None:
+        return True
+    bucket = (resources or {}).get("agent_files_bucket")
+    if not bucket:
+        return False
+    outputs["bucket"] = bucket
+    outputs["project_key"] = project_id or OUTPUTS_SHARED_KEY
+    return True
+
+
 def restamp_spec(db: Session, workspace_id: str, spec: dict[str, Any],
                  project_id: str | None = None, *,
                  mismatched: list[str] | None = None) -> list[str]:
@@ -1628,9 +1673,15 @@ def storage_iam_statements(spec: Any, resources: dict[str, dict[str, Any]] | Non
                 "Condition": {"ArnEquals": {"elasticfilesystem:AccessPointArn": arns}},
             })
     buckets = [m for kind, m in spec.filesystem.catalog_mounts() if kind == S3_BUCKET]
-    if buckets:
-        statements.extend(bucket_iam_statements(
-            bucket_grants([m.model_dump() for m in buckets], agent_id or ""), partition))
+    grants = bucket_grants([m.model_dump() for m in buckets], agent_id or "")
+    outputs = spec.filesystem.outputs
+    if outputs is not None and outputs.resolved:
+        # the session output folder: read-write, this agent's own sessions only
+        grants.append({"bucket": outputs.bucket,
+                       "prefix": outputs_prefix(outputs.project_key, agent_id or ""),
+                       "mode": "rw", "kms_key_arn": None})
+    if grants:
+        statements.extend(bucket_iam_statements(grants, partition))
     return statements
 
 
@@ -1726,9 +1777,13 @@ def agent_storage(db: Session, agent: Agent) -> dict[str, Any]:
             inline.append({"kind": kind, "access_point_arn": (m or {}).get("access_point_arn"),
                            "mount_path": (m or {}).get("mount_path"), "mode": "rw"})
     session = fs.get("session_storage", {"mount_path": "/mnt/workspace"})
+    outputs = fs.get("outputs")
     return {"agent_id": agent.id, "version": agent.version, "mounts": mounts,
             "inline": inline,
-            "session_storage": (session or {}).get("mount_path") if session else None}
+            "session_storage": (session or {}).get("mount_path") if session else None,
+            # the session output folder (null = off); its objects expire after 30 days
+            "outputs": ({"mount_path": outputs.get("mount_path") or OUTPUTS_DEFAULT_PATH,
+                         "bucket": outputs.get("bucket")} if outputs is not None else None)}
 
 
 # ── isolated projects' permissions boundary ───────────────────────────────────

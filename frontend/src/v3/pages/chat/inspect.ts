@@ -1,10 +1,19 @@
 import type { ChatTraceInfo, ChatTraceSpan } from "../../../lib/api";
 
 /** The chat inspector's tabs; `?inspect=` holds the open one (absent: the rail is closed). */
-export type InspectTab = "trace" | "memory";
+export type InspectTab = "trace" | "memory" | "files";
 
 export function inspectTab(raw: string | null): InspectTab | null {
-  return raw === "trace" || raw === "memory" ? raw : null;
+  return raw === "trace" || raw === "memory" || raw === "files" ? raw : null;
+}
+
+/** 0 → "0 B", 1536 → "1.5 KB" — the Files tab's sizes. */
+export function fileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 /** The spans the waterfall draws (V2 parity: the first 12). */

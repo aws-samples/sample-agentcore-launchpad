@@ -38,7 +38,8 @@
     },
     "s3_files": [],
     "efs": [],
-    "mounts": []
+    "mounts": [],
+    "outputs": null
   },
   "network": null,
   "knowledge_bases": [],

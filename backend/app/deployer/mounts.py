@@ -22,6 +22,7 @@ import json
 from typing import Any
 
 from app.schemas.agent import AgentSpec
+from app.services.agentcore.filesystem_kinds import OUTPUTS_RETENTION_DAYS
 
 ENV_MOUNTS = "LAUNCHPAD_MOUNTS"
 
@@ -47,6 +48,11 @@ def mount_manifest(spec: AgentSpec) -> list[dict[str, str]]:
         if kind == "s3bucket":
             entry["scope"] = getattr(mount, "scope", None) or "shared"
         out.append(entry)
+    outputs = spec.filesystem.outputs
+    if outputs is not None:
+        path = outputs.mount_path.rstrip("/")
+        out.append({"name": path.rsplit("/", 1)[-1], "path": path, "kind": "s3bucket",
+                    "mode": "rw", "scope": "per_session", "purpose": "outputs"})
     return out
 
 
@@ -76,6 +82,12 @@ def prompt_note(spec: AgentSpec) -> str:
                 notes += ", this session only"
             if entry["mode"] != "ro":
                 notes += f"; {_WHOLE_FILES}"
+        if entry.get("purpose") == "outputs":
+            lines.append(f"- {entry['path']} (session output folder, read-write; this "
+                         "session only): save the files the user should receive here — "
+                         "the user can download them from the chat for "
+                         f"{OUTPUTS_RETENTION_DAYS} days; {_WHOLE_FILES}")
+            continue
         lines.append(f"- {entry['path']} ({_KIND_LABEL.get(entry['kind'], entry['kind'])}, "
                      f"{access}{notes})")
     return (
@@ -111,6 +123,8 @@ def manifest_paths(spec: dict[str, Any] | None) -> set[str]:
             path = str((mount or {}).get("mount_path") or "").rstrip("/")
             if path:
                 paths.add(path)
+    if fs.get("outputs") is not None:  # the session output folder (default path when unset)
+        paths.add(str((fs["outputs"] or {}).get("mount_path") or "/mnt/outputs").rstrip("/"))
     for mount in fs.get("mounts") or []:  # catalog references
         sid = str((mount or {}).get("storage_id") or "")
         path = str((mount or {}).get("mount_path") or (f"/mnt/{sid}" if sid else "")).rstrip("/")

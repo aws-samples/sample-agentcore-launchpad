@@ -225,6 +225,11 @@ export function WizardReview({
       label: t("v2.agents.wizard.fsSession"),
       value: form.sessionFs ? mono(form.sessionMount) : none,
     };
+    // the per-session output folder (Runtime methods only; the Harness never carries it)
+    const outputsFs = {
+      label: t("v2.agents.wizard.fsOutputs"),
+      value: form.outputsFs ? mono(form.outputsMount) : none,
+    };
     if (method === "harness") {
       items = [
         ...head,
@@ -271,6 +276,7 @@ export function WizardReview({
           : [{ label: t("v2.agents.wizard.toolkits"), value: list(form.toolkits) }]),
         ...common,
         sessionFs,
+        outputsFs,
       ];
     } else {
       items = [
@@ -288,6 +294,7 @@ export function WizardReview({
             efs: form.efsMounts.length,
           }),
         },
+        outputsFs,
       ];
     }
   }
