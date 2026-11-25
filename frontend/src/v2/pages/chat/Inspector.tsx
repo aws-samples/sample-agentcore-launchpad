@@ -28,12 +28,36 @@ const SPAN_COLOR: Record<string, string> = {
   other: "#c9cdd4",
 };
 
-async function copy(text: string, toast: ReturnType<typeof useV2Toast>, done: string) {
-  try {
+/**
+ * `navigator.clipboard` is undefined on a plain-http origin other than localhost (a console
+ * reached by IP), so fall back to the legacy copy command there.
+ */
+async function writeClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);
+    return;
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.select();
+  try {
+    if (!document.execCommand("copy")) throw new Error("copy command rejected");
+  } finally {
+    area.remove();
+  }
+}
+
+async function copy(text: string, toast: ReturnType<typeof useV2Toast>, done: string, failed: string) {
+  try {
+    await writeClipboard(text);
     toast("success", done);
-  } catch (err) {
-    toast("error", errorMessage(err));
+  } catch {
+    // a clipboard failure is not a backend failure: never route it through errorMessage()
+    toast("error", failed);
   }
 }
 
@@ -230,6 +254,7 @@ function ApiPanel({ agentId, sessionId }: { agentId: string; sessionId: string |
   const snippet = `curl -N -X POST \\
   ${window.location.origin}/v1/agents/${agentId || "<id>"}/invoke-stream \\
   -H "x-api-key: lp_live_…" \\
+  -H "Content-Type: application/json" \\
   -d '{"prompt":"…","session_id":${sessionId ? `"${sessionId}"` : "null"}}'`;
 
   const create = async () => {
@@ -260,7 +285,7 @@ function ApiPanel({ agentId, sessionId }: { agentId: string; sessionId: string |
     <div className="v2-stack" data-testid="api-panel">
       <div className="v2-sub-title v2-chat-sub">
         {t("v2.chat.apiTitle")}
-        <LinkButton onClick={() => void copy(snippet, toast, t("v2.chat.copied"))}>
+        <LinkButton onClick={() => void copy(snippet, toast, t("v2.chat.copied"), t("v2.chat.copyFailed"))}>
           <Copy size={12} aria-hidden="true" /> {t("v2.chat.copy")}
         </LinkButton>
       </div>
@@ -278,7 +303,7 @@ function ApiPanel({ agentId, sessionId }: { agentId: string; sessionId: string |
         <Alert
           tone="success"
           action={
-            <LinkButton onClick={() => void copy(newKey.key ?? "", toast, t("v2.chat.copied"))}>
+            <LinkButton onClick={() => void copy(newKey.key ?? "", toast, t("v2.chat.copied"), t("v2.chat.copyFailed"))}>
               {t("v2.chat.copy")}
             </LinkButton>
           }

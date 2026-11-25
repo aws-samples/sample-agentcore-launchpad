@@ -137,6 +137,7 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST \
 curl -N -X POST \
   http://localhost:5173/v1/agents/<AGENT_ID>/invoke-stream \
   -H "x-api-key: lp_live_…" \
+  -H "Content-Type: application/json" \
   -d '{"prompt":"…","session_id":"<当前会话>"}'
 ```
 

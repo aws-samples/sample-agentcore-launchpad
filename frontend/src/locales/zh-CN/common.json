@@ -9355,6 +9355,7 @@
       "apiHint": "公开 /v1 API 使用同一条调用链，需使用 API 密钥认证。",
       "copy": "复制",
       "copied": "已复制到剪贴板",
+      "copyFailed": "复制失败，请手动选中文本后复制",
       "keysTitle": "API 密钥",
       "newKey": "新建密钥",
       "noKeys": "暂无 API 密钥",

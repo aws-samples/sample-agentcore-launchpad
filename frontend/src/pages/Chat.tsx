@@ -926,6 +926,7 @@ export function Chat() {
               {`curl -N -X POST \\
   ${window.location.origin}/v1/agents/${agentId || "<id>"}/invoke-stream \\
   -H "x-api-key: lp_live_…" \\
+  -H "Content-Type: application/json" \\
   -d '{"prompt":"…","session_id":${sessionId ? `"${sessionId.slice(0, 8)}…"` : "null"}}'`}
             </div>
           </Panel>
