@@ -15,7 +15,7 @@ from botocore.exceptions import ClientError
 from app.core.db import DEFAULT_WORKSPACE_ID, SessionLocal
 from app.evaluation import generation, pipeline_routers
 from app.evaluation import routers as eval_routers
-from app.evaluation.models import EvalDataset, EvalPipeline
+from app.evaluation.models import EvalDataset, EvalPipeline, EvalRun
 from app.evaluation.routers import _validate_items
 from app.models.ledger import Agent
 
@@ -110,6 +110,11 @@ class FakeAgentCore:
         return {"versions": []}
 
     # data plane
+    def get_batch_evaluation(self, batchEvaluationId):
+        return {"batchEvaluationId": batchEvaluationId, "status": "COMPLETED",
+                "batchEvaluationArn": f"arn:aws:bedrock-agentcore:us-west-2:1:batch-evaluate/"
+                                      f"{batchEvaluationId}"}
+
     def list_dataset_generations(self, datasetId, nextToken=None):
         return {"datasetGenerations": [{"generationId": "other", "status": "IN_PROGRESS"}]
                 if self.busy else []}
@@ -604,3 +609,94 @@ def test_select_sessions_refuses_unsupported_ids_and_expired():
         now=NOW, oldest=generation.retention_floor(NOW, 1))
     assert not picked
     assert [s["reason"] for s in skipped] == ["unsupported_session_id", "expired"]
+
+
+# ─── P3: sessions from an evaluation run (bad cases) ─────────────────────────
+RUN_RESULTS = {
+    "sess-bad-11111111": [{"evaluator_id": "Builtin.Correctness", "score": 0.2},
+                          {"evaluator_id": "Builtin.Helpfulness", "score": 0.9}],
+    "sess-ok-222222222": [{"evaluator_id": "Builtin.Correctness", "score": 0.95}],
+    # a lower-is-better evaluator: 0.8 refusal normalizes to 0.2 → a bad case
+    "sess-harm-3333333": [{"evaluator_id": "Builtin.Refusal", "score": 0.8}],
+    "sess-err-44444444": [{"evaluator_id": "Builtin.Correctness", "score": None}],
+}
+
+
+def _eval_run(agent_id, *, status="completed", mode="evaluators", batch="batch-1"):
+    db = SessionLocal()
+    run = EvalRun(workspace_id=DEFAULT_WORKSPACE_ID, agent_id=agent_id, agent_name="hr",
+                  mode=mode, evaluators=["Builtin.Correctness"], status=status,
+                  batch_eval_id=batch, session_ids=list(RUN_RESULTS))
+    db.add(run)
+    db.commit()
+    rid = run.id
+    db.close()
+    return rid
+
+
+@pytest.fixture
+def run_results(monkeypatch):
+    def fake(run, *, workspace):
+        return {"available": True, "sessions": [
+            {"session_id": sid, "results": res} for sid, res in RUN_RESULTS.items()]}
+    monkeypatch.setattr(pipeline_routers.service, "run_results", fake)
+
+
+def test_lowest_normalized_and_run_selection():
+    assert generation.lowest_normalized(RUN_RESULTS["sess-bad-11111111"]) == 0.2
+    assert generation.lowest_normalized(RUN_RESULTS["sess-harm-3333333"]) == pytest.approx(0.2)
+    assert generation.lowest_normalized(RUN_RESULTS["sess-err-44444444"]) is None
+    picked, skipped, matched = generation.select_run_sessions(
+        list(RUN_RESULTS), RUN_RESULTS, max_score=0.7,
+        visible=lambda sid: sid != "sess-harm-3333333", present=set(), limit=25)
+    assert [p["session_id"] for p in picked] == ["sess-bad-11111111"] and matched == 1
+    assert {(s["session_id"], s["reason"]) for s in skipped} == {
+        ("sess-ok-222222222", "above_threshold"), ("sess-err-44444444", "unscored")}
+    picked, _, _ = generation.select_run_sessions(
+        list(RUN_RESULTS), RUN_RESULTS, max_score=None, visible=lambda sid: True,
+        present={"sess-ok-222222222"}, limit=25)
+    assert [p["session_id"] for p in picked] == ["sess-bad-11111111", "sess-harm-3333333"]
+
+
+def test_run_source_validation(client, aws, agent_id):
+    other = Agent(workspace_id=DEFAULT_WORKSPACE_ID, name="other", method="zip_runtime",
+                  status="active", resource_id="o-1", spec={})
+    db = SessionLocal()
+    db.add(other)
+    db.commit()
+    other_id = other.id
+    db.close()
+    cases = [
+        ("nope", 404, "run.not_found"),
+        (_eval_run(agent_id, status="evaluating"), 400, "pipeline.run_not_generatable"),
+        (_eval_run(agent_id, mode="insights"), 400, "pipeline.run_not_generatable"),
+        (_eval_run(agent_id, batch=None), 400, "pipeline.run_not_generatable"),
+        (_eval_run(other_id), 400, "pipeline.run_agent_mismatch"),
+    ]
+    for run_id, status, code in cases:
+        res = client.post("/api/eval/pipelines", json=_body(
+            agent_id, {"dataset_name": "x"}, batch_run_id=run_id))
+        assert res.status_code == status and res.json()["code"] == code, (run_id, res.text)
+
+
+def test_bad_cases_of_a_run_generate_through_the_batch_source(client, aws, agent_id,
+                                                               run_results):
+    run_id = _eval_run(agent_id)
+    aws.generated = [_fixed("sess-bad-11111111", "wrong answer case"),
+                     _fixed("sess-harm-3333333", "harmful case")]
+    _, row = _create_and_run(client, _body(agent_id, {"dataset_name": "bad_cases"},
+                                           batch_run_id=run_id))
+    assert row["status"] == "succeeded", row["last_run"]
+    run = row["last_run"]
+    assert run["generation"]["batch_run_id"] == run_id
+    assert run["scanned"] == 4 and run["matched"] == 2 and run["added"] == 2
+    reasons = {(s["session_id"], s["reason"]) for s in run["skipped"]}
+    assert ("sess-ok-222222222", "above_threshold") in reasons
+    assert ("sess-err-44444444", "unscored") in reasons
+    start = next(kw for name, kw in aws.calls if name == "start_dataset_generation")
+    tg = start["source"]["traceGeneration"]
+    assert tg["sourceConfig"] == {"batchEvaluation": {
+        "batchEvaluationArn": "arn:aws:bedrock-agentcore:us-west-2:1:batch-evaluate/batch-1"}}
+    assert tg["selection"]["identifiers"]["sessionIds"] == ["sess-bad-11111111",
+                                                            "sess-harm-3333333"]
+    assert tg["groundTruth"]["fields"] == ["expected_response", "expected_trajectory"]

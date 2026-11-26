@@ -3524,7 +3524,9 @@
     "costs.bad_period": "Pick a custom period of 1 to 92 days that does not start in the future (dates as YYYY-MM-DD).",
     "storage.agent_files_unavailable": "This workspace has no agent-files bucket yet — an administrator creates it (the default workspace: `cdk deploy`; any other: `POST /api/workspaces/{id}/agent-files/repair`), then session output files can be turned on.",
     "chat.invalid_file_path": "That file path is not inside this session's output folder.",
-    "chat.files_unavailable": "This agent has no session output folder."
+    "chat.files_unavailable": "This agent has no session output folder.",
+    "pipeline.run_not_generatable": "Only a completed evaluator run (not an insights run) with an AgentCore batch evaluation can feed a dataset generation.",
+    "pipeline.run_agent_mismatch": "The evaluation run belongs to another agent. Pick a run of the pipeline's agent."
   },
   "chatPage": {
     "authRetryNote": "After authorizing, send your message again.",
@@ -7247,7 +7249,9 @@
       "invalid_example": "invalid example",
       "unexpected_session": "not a requested session",
       "unsupported_session_id": "session id AgentCore cannot take",
-      "expired": "older than the log retention"
+      "expired": "older than the log retention",
+      "unscored": "no score in the evaluation run",
+      "above_threshold": "score above the bad-case threshold"
     },
     "datasets": {
       "colName": "Name",
@@ -7610,7 +7614,46 @@
         "noFindings": "nothing found",
         "skipped": "Skipped ({{count}})",
         "skippedMore": "… and {{count}} more",
-        "lastRunShort": "{{requested}} sent · {{written}} generated · {{added}} kept"
+        "lastRunShort": "{{requested}} sent · {{written}} generated · {{added}} kept",
+        "sessionsFrom": "Sessions from",
+        "fromTraffic": "Recent traffic",
+        "fromRun": "An evaluation run",
+        "fromTrafficHint": "The agent's sessions in the chosen time range",
+        "fromRunHint": "The sessions one completed evaluation run judged, optionally only its bad cases; AgentCore reads them through the run's batch evaluation",
+        "run": "Evaluation run",
+        "runHint": "Completed evaluator runs of this agent, newest first",
+        "runsLoading": "Loading runs…",
+        "runsNone": "This agent has no completed evaluator run yet",
+        "runPickAgent": "Choose an agent first",
+        "runOption": "{{name}} · {{time}} · {{count}} session(s)",
+        "runGone": "{{id}} (no longer offered)",
+        "maxScore": "Bad-case threshold",
+        "maxScoreHint": "Keep sessions whose lowest normalized score is below this (0–1; 0.7 = the console's bad-case line)",
+        "allSessions": "All scored sessions",
+        "allSessionsHint": "Every session with at least one score is kept",
+        "dynamicRunHint": "A model writes a simulated-user persona from each multi-turn session; single-turn sessions yield a plain input. No ground truth.",
+        "errRun": "Choose an evaluation run",
+        "runNotGeneratable": {
+          "insights_run": "An insights run has no scores to pick bad cases from; choose an evaluator run.",
+          "not_completed": "The evaluation run hasn't completed yet.",
+          "no_batch": "The evaluation run has no AgentCore batch evaluation to read from."
+        },
+        "colLowest": "Lowest score",
+        "verdict": {
+          "send": "Will send",
+          "above": "Above threshold",
+          "unscored": "Unscored",
+          "unsupported": "Unsupported ID",
+          "overflow": "Over limit"
+        },
+        "runResultsUnavailable": "This run's results can't be read: {{reason}}",
+        "runResultsTruncated": "The results were truncated, so the preview may miss sessions.",
+        "runPreviewNote": "Scores are normalized so higher is better, and a session's lowest judgement decides. Sessions already in the target dataset and other members' private sessions are skipped when the run starts.",
+        "runPreviewEmpty": "This run has no sessions",
+        "runPickRun": "Choose a run to preview its sessions",
+        "sourceRun": "Source run",
+        "scannedRun": "Sessions in the run",
+        "fromRunShort": "from run {{id}}"
       }
     },
     "tasks": {

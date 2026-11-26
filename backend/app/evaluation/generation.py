@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.evaluation import pipelines
+from app.evaluation.agentcore_eval import evaluator_polarity
 from app.evaluation.scenarios import scenario_kind
 
 MAX_SESSIONS = 25  # StartDatasetGeneration identifiers.sessionIds cap
@@ -122,6 +123,54 @@ def select_sessions(
     return picked, skipped, len(candidates)
 
 
+def lowest_normalized(results: list[dict[str, Any]]) -> float | None:
+    """A session's worst judgement on the console's 0–1 scale (`v2/format.ts
+    normalizedScore`: lower-is-better evaluators inverted); failed judgements (no
+    score) do not count; None when nothing was scored."""
+    values = [
+        (1 - float(r["score"])) if evaluator_polarity(str(r.get("evaluator_id") or "")) < 0
+        else float(r["score"])
+        for r in results if r.get("score") is not None
+    ]
+    return min(values) if values else None
+
+
+def select_run_sessions(
+    session_ids: list[str],
+    results: dict[str, list[dict[str, Any]]],
+    *,
+    max_score: float | None,
+    visible: Any,
+    present: set[str],
+    limit: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], int]:
+    """(picked `{session_id}` rows in run order, skipped, matched) among an
+    evaluation run's sessions: the caller-visible ones with a scored judgement whose
+    lowest normalized score is below `max_score` (None = every scored session).
+    Skips: `unscored`, `above_threshold`, `already_in_dataset`, `unsupported_session_id`."""
+    picked: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    matched = 0
+    for sid in dict.fromkeys(str(s) for s in session_ids):
+        if not visible(sid):
+            continue  # another principal's private session: neither sent nor named
+        low = lowest_normalized(results.get(sid) or [])
+        if low is None:
+            skipped.append({"session_id": sid, "reason": "unscored"})
+            continue
+        if max_score is not None and low >= max_score:
+            skipped.append({"session_id": sid, "reason": "above_threshold"})
+            continue
+        matched += 1
+        if not SESSION_ID_RE.fullmatch(sid):
+            skipped.append({"session_id": sid, "reason": "unsupported_session_id"})
+        elif sid in present:
+            skipped.append({"session_id": sid, "reason": "already_in_dataset"})
+        elif len(picked) < limit:
+            picked.append({"session_id": sid})
+    return picked, skipped, matched
+
+
 def retention_floor(now: datetime, retention_days: int | None) -> datetime | None:
     """The oldest instant a generation window may start at (AWS rejects older)."""
     if not retention_days:
@@ -138,6 +187,7 @@ def build_source(
     keep_replies: bool,
     now: datetime,
     retention_days: int | None,
+    batch_arn: str | None = None,
 ) -> dict[str, Any]:
     """The `traceGeneration` source: the runtime log group + service, an explicit
     window around the picked sessions (never the 7-day default; never older than
@@ -150,13 +200,19 @@ def build_source(
     floor = retention_floor(now, retention_days)
     if floor is not None:
         start = max(start, floor)
-    source: dict[str, Any] = {
-        "sourceConfig": {"cloudWatchLogs": {
+    # an evaluation run's sessions come from its batch (no log group, no window:
+    # AWS reads the batch's own evaluated sessions and their results)
+    source_config: dict[str, Any] = (
+        {"batchEvaluation": {"batchEvaluationArn": batch_arn}} if batch_arn else
+        {"cloudWatchLogs": {
             "logGroupNames": [log_group],
             "serviceNames": [service_name],
             "startTime": start,
             "endTime": end,
-        }},
+        }}
+    )
+    source: dict[str, Any] = {
+        "sourceConfig": source_config,
         "selection": {"identifiers": {"sessionIds": [str(r["session_id"]) for r in sessions]}},
         "sampling": {"maxScenarios": max(1, len(sessions))},
     }

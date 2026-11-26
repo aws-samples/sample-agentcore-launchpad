@@ -3625,7 +3625,12 @@ through the same backend routes and permission checks as the classic pages.
   also deleted from the Draft, so the Draft equals the local items. The generation
   id is persisted before polling; a run a restart left `running` resumes on the
   next read. `last_run.generation` carries the AWS counts, per-code error details
-  and the redaction summary.
+  and the redaction summary. The sessions can instead come from one completed
+  evaluators run of the same agent (`batch_run_id`), optionally only its **bad
+  cases** (`max_score`, default 0.7: some judgement's normalized score below it —
+  the 评估总览 definition, lower-is-better evaluators inverted); AWS then reads them
+  through the `batchEvaluation` source (no log group, no window), and the run's
+  unscored / above-threshold sessions are skipped by name.
 - **日志 data source** (`v2/pages/tasks/LogStreamPicker.tsx`): the wizard lists the
   agent's runtime log streams in a window (default 7 days) through
   `GET /api/eval/agents/{id}/log-streams` and filters them by keyword — stream name

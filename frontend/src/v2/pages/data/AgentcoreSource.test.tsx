@@ -3,7 +3,8 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import i18n from "../../../i18n";
 import type { AgentInfo, ObsSessionRow, V2PipelineRun, V2PipelineSource } from "../../../lib/api";
-import { AgentcoreLogic, AgentcorePreviewCard, AgentcoreSourceFields, GenerationRunCard } from "./AgentcoreSource";
+import type { EvaluationRunInfo } from "../../../lib/evaluation";
+import { AgentcoreLogic, AgentcorePreviewCard, AgentcoreSourceFields, GenerationRunCard, RunPreviewCard } from "./AgentcoreSource";
 
 beforeAll(async () => {
   vi.stubGlobal("document", { documentElement: {} });
@@ -101,7 +102,7 @@ describe("AgentcoreLogic", () => {
 describe("AgentcoreSourceFields / AgentcorePreviewCard", () => {
   it("keeps a saved agent that is no longer offered visible, and hints DYNAMIC", () => {
     const html = renderToStaticMarkup(
-      <AgentcoreSourceFields source={src({ scenario_type: "DYNAMIC", agent_id: "gone", agent: "old-bot" })} agents={[{ id: "a1", name: "hr-bot", method: "harness", status: "active" } as AgentInfo]} agentsLoading={false} onChange={noop} />,
+      <AgentcoreSourceFields source={src({ scenario_type: "DYNAMIC", agent_id: "gone", agent: "old-bot" })} agents={[{ id: "a1", name: "hr-bot", method: "harness", status: "active" } as AgentInfo]} agentsLoading={false} runs={[]} runsLoading={false} onChange={noop} />,
     );
     expect(html).toContain("Only multi-turn sessions are used");
     expect(html).toContain("old-bot (unavailable)");
@@ -114,5 +115,56 @@ describe("AgentcoreSourceFields / AgentcorePreviewCard", () => {
     );
     expect(html).toContain("Too recent");
     expect(html).toContain("1 single-turn session(s) left out");
+  });
+});
+
+describe("run-sourced generation (P3)", () => {
+  const agents = [{ id: "a1", name: "hr-bot", method: "harness", status: "active" } as AgentInfo];
+  const runs = [{ id: "r1", name: "nightly", agent_id: "a1", mode: "evaluators", status: "completed", session_ids: ["s1", "s2"], created_at: "2026-11-20T00:00:00Z" } as EvaluationRunInfo];
+
+  it("run mode swaps range/status for the run picker and threshold", () => {
+    const traffic = renderToStaticMarkup(<AgentcoreSourceFields source={src()} agents={agents} agentsLoading={false} runs={[]} runsLoading={false} onChange={noop} />);
+    expect(traffic).not.toContain("v2-pipeline-ac-run");
+    const run = renderToStaticMarkup(
+      <AgentcoreSourceFields source={src({ batch_run_id: "r1", max_score: 0.7 })} agents={agents} agentsLoading={false} runs={runs} runsLoading={false} onChange={noop} />,
+    );
+    expect(run).toContain("v2-pipeline-ac-run");
+    expect(run).toContain("v2-pipeline-ac-max-score");
+    expect(run).toContain("nightly");
+    expect(run).not.toContain("Session status");
+  });
+
+  it("a DYNAMIC run source does not claim single-turn sessions are dropped", () => {
+    const html = renderToStaticMarkup(
+      <AgentcoreSourceFields source={src({ batch_run_id: "r1", scenario_type: "DYNAMIC" })} agents={agents} agentsLoading={false} runs={runs} runsLoading={false} onChange={noop} />,
+    );
+    expect(html).toContain("single-turn sessions yield a plain input");
+    expect(html).not.toContain("Only multi-turn sessions are used");
+  });
+
+  it("previews each session's lowest score and verdict", () => {
+    const html = renderToStaticMarkup(
+      <RunPreviewCard
+        rows={[
+          { session_id: "s1", lowest: 0.3, verdict: "send" },
+          { session_id: "s2", lowest: 0.9, verdict: "above" },
+          { session_id: "s3", lowest: null, verdict: "unscored" },
+        ]}
+        results={{ run_id: "r1", batch_eval_id: "b1", available: true, sessions: [], count: 3, truncated: false }}
+        pickedRun
+        loading={false}
+        error={null}
+      />,
+    );
+    expect(html).toContain("1 session(s) will be sent");
+    expect(html).toContain("0.30");
+    expect(html).toContain("Above threshold");
+    expect(html).toContain("Unscored");
+  });
+
+  it("names the source run in the last-run card", () => {
+    const html = renderToStaticMarkup(<GenerationRunCard run={{ ...run, generation: { ...run.generation!, batch_run_id: "r1" } }} />);
+    expect(html).toContain("Source run");
+    expect(html).toContain("Sessions in the run");
   });
 });

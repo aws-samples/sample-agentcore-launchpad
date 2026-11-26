@@ -77,6 +77,25 @@ skip reasons (selection): too_fresh, already_in_dataset, unsupported_session_id 
     SessionId `[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}`), expired (older than the log retention)
 ```
 
+### Evaluation-run source (P3)
+
+```python
+PipelineSource.batch_run_id   # EvalRun id: completed, mode evaluators, batch, same agent
+PipelineSource.max_score      # 0..1, default 0.7; None = every scored session
+generation.lowest_normalized(results)   # min over scored records; 1 - score when
+                                        # ac.evaluator_polarity(id) < 0 (== v2 normalizedScore)
+generation.select_run_sessions(session_ids, results, *, max_score, visible, present, limit)
+    # skips: unscored, above_threshold, already_in_dataset, unsupported_session_id;
+    # a private session of another principal is dropped silently (never named)
+build_source(..., batch_arn=)   # sourceConfig.batchEvaluation, no log group / window
+_generation_run(db, ws, source, viewer)  # 404 run.not_found | 400 pipeline.run_not_generatable
+                                         # {reason} | 400 pipeline.run_agent_mismatch
+```
+
+Results come from `service.run_results` (the batch results stream); live check 2026-11-26:
+`run_56c8b018` (energy harness) → 6 sessions, 4 below 0.9, 3 sent (cap) → 3 FIXED
+scenarios with ground truth, 13 custom-regex redaction findings.
+
 ## 4. Invariants
 
 - After a run the AWS Draft equals the local items: every generated example the local row
