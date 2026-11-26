@@ -275,26 +275,45 @@ def test_resync_changed_scenario_only_updates_that_example(client, monkeypatch):
     stub.add_dataset_examples.assert_not_called()
 
 
+GEN_META = {"generation_id": "g-1234567890", "source": {"session_id": "sess-1"},
+            "redaction": {"operation": "DEIDENTIFY", "identifiers": []}}
+
+
 def test_resync_ignores_agentcore_metadata_but_not_user_metadata(client, monkeypatch):
-    generated = _cloud_ex("a", "one", metadata={"generation_id": "g-1234567890"})
+    generated = _cloud_ex("a", "one", metadata=dict(GEN_META))
     stub, ds = _synced_row(
         client, monkeypatch,
         items=[_scn("a", "one"), _scn("b", "two", metadata={"tag": "x"})],
-        examples=[generated,
-                  _cloud_ex("b", "two", metadata={"tag": "x", "generation_id": "g-1"})],
+        examples=[generated, _cloud_ex("b", "two", metadata={"tag": "x", **GEN_META})],
     )
     res = _resync(client, ds["id"])
     assert res.status_code == 200, res.text
-    stub.update_dataset_examples.assert_not_called()  # generation_id is not a change
+    stub.update_dataset_examples.assert_not_called()  # AgentCore-added keys are not a change
     assert res.json()["cloud"]["last_sync"]["unchanged"] == 2
 
     stub.list_dataset_examples.return_value = {
-        "examples": [generated, _cloud_ex("b", "two", metadata={"tag": "y"})],
+        "examples": [generated, _cloud_ex("b", "two", metadata={"tag": "y", **GEN_META})],
     }
     res = _resync(client, ds["id"])
     assert res.json()["cloud"]["last_sync"] == {
         "added": 0, "updated": 1, "deleted": 0, "unchanged": 1,
     }
+    # the replacement keeps the provenance AgentCore dedupes on
+    assert stub.update_dataset_examples.call_args.kwargs["examples"] == [
+        {**_scn("b", "two", metadata={**GEN_META, "tag": "x"}), "exampleId": "b"}
+    ]
+
+
+def test_resync_edit_of_generated_example_keeps_its_agentcore_metadata(client, monkeypatch):
+    stub, ds = _synced_row(
+        client, monkeypatch,
+        items=[_scn("g1", "edited locally")],
+        examples=[_cloud_ex("g1", "as generated", metadata=dict(GEN_META))],
+    )
+    assert _resync(client, ds["id"]).status_code == 200
+    assert stub.update_dataset_examples.call_args.kwargs["examples"] == [
+        {**_scn("g1", "edited locally", metadata=dict(GEN_META)), "exampleId": "g1"}
+    ]
 
 
 def test_resync_legacy_prompt_items_match_positional_ids(client, monkeypatch):
@@ -360,9 +379,8 @@ def test_publish_keeps_last_sync(client, monkeypatch):
 
 
 # ─── diff helpers ────────────────────────────────────────────────────────────
-def test_example_signature_ignores_example_id_key_order_and_agentcore_metadata():
-    a = {"exampleId": "e1", "scenario_id": "s", "turns": [{"input": "x"}],
-         "metadata": {"generation_id": "g"}}
+def test_example_signature_ignores_example_id_and_key_order_only():
+    a = {"exampleId": "e1", "scenario_id": "s", "turns": [{"input": "x"}]}
     b = {"turns": [{"input": "x"}], "scenario_id": "s"}
     assert example_signature(a) == example_signature(b)
     assert example_signature({**b, "metadata": {"k": 1}}) != example_signature(b)
