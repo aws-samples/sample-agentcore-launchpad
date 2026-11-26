@@ -25,7 +25,6 @@ export interface CloudDatasetInfo {
   datasetId: string;
   name: string;
   status: string;
-  schemaType: string;
   exampleCount: number | null;
 }
 
@@ -440,7 +439,6 @@ export interface ExperimentReadiness {
 }
 
 export const CLOUD_VALUE_PREFIX = "cloud:";
-export const SIMULATED_SCHEMA = "AGENTCORE_EVALUATION_SIMULATED_V1";
 export const DEFAULT_EVALUATORS = ["Builtin.Correctness", "Builtin.Helpfulness"];
 
 /**

@@ -3358,7 +3358,6 @@
     "rule.pattern_too_short": "A “contains” rule needs a longer phrase, or it would match too much.",
     "rule.reorder_mismatch": "The new order must list every curated answer of the agent exactly once.",
     "run.actor_model_required": "This dataset contains simulated persona scenarios — pick an actor model (the Bedrock model that plays the user).",
-    "run.cloud_dataset_unsupported": "This cloud dataset's schema cannot be run here.",
     "run.cost_confirm_required": "Confirm the estimated cost of this run to submit it.",
     "run.cost_over_limit": "The estimated cost exceeds this workspace's limit — an administrator can raise it.",
     "run.dataset_version_scope": "A dataset version only applies to a cloud dataset.",
@@ -4091,7 +4090,7 @@
       },
       "detail": {
         "id": "DATASET ID",
-        "schema": "SCHEMA",
+        "schema": "KIND",
         "examples": "EXAMPLES",
         "status": "STATUS",
         "draft": "DRAFT",

@@ -168,7 +168,7 @@ def test_sync_to_aws_success(client, monkeypatch):
     res = client.post(f"/api/eval/datasets/{ds['id']}/sync-to-aws")
     assert res.status_code == 200, res.text
     kwargs = stub.create_dataset.call_args.kwargs
-    assert kwargs["schemaType"] == "AGENTCORE_EVALUATION_PREDEFINED_V1"
+    assert "schemaType" not in kwargs  # AWS datasets declare no schema type any more
     assert kwargs["datasetName"] == "sync_me"  # sanitized
     assert kwargs["source"]["inlineExamples"]["examples"] == normalize_scenarios(
         ds["items"]
@@ -180,7 +180,7 @@ def test_sync_to_aws_success(client, monkeypatch):
     assert cloud["failure_reason"] is None
 
 
-def test_sync_simulated_dataset_uses_simulated_schema(client, monkeypatch):
+def test_sync_simulated_dataset_sends_examples_without_schema_type(client, monkeypatch):
     stub = stub_cloud(monkeypatch)
     ds = client.post("/api/eval/datasets", json={
         "name": "personas", "items": [PERSONA],
@@ -189,7 +189,7 @@ def test_sync_simulated_dataset_uses_simulated_schema(client, monkeypatch):
     res = client.post(f"/api/eval/datasets/{ds['id']}/sync-to-aws")
     assert res.status_code == 200, res.text
     kwargs = stub.create_dataset.call_args.kwargs
-    assert kwargs["schemaType"] == "AGENTCORE_EVALUATION_SIMULATED_V1"
+    assert "schemaType" not in kwargs
     assert kwargs["source"]["inlineExamples"]["examples"] == [PERSONA]
 
 
@@ -217,9 +217,10 @@ def test_cloud_list_passthrough(client, monkeypatch):
     }]}
     res = client.get("/api/eval/datasets/cloud")
     assert res.status_code == 200
+    # an older response's schemaType is not passed through (AWS dropped it)
     assert res.json()["datasets"] == [{
         "datasetId": "cloudds-9", "name": "remote_only", "status": "ACTIVE",
-        "schemaType": "AGENTCORE_EVALUATION_PREDEFINED_V1", "exampleCount": 7,
+        "exampleCount": 7,
         "draftStatus": None, "updatedAt": "2026-07-10 00:00:00",
     }]
 
@@ -238,17 +239,16 @@ def test_cloud_delete_marks_local_copy(client, monkeypatch):
     assert row["cloud"]["status"] == "deleted"
 
 
-def stub_cloud_run(monkeypatch, *, schema_type="AGENTCORE_EVALUATION_PREDEFINED_V1",
-                   status="ACTIVE", examples=None):
-    """Control-plane stub for cloud-dataset-scoped runs and the detail endpoint."""
+def stub_cloud_run(monkeypatch, *, persona=False, status="ACTIVE", examples=None):
+    """Control-plane stub for cloud-dataset-scoped runs and the detail endpoint.
+    GetDataset carries no schemaType — AWS removed it (live 2026-11-26)."""
     stub = MagicMock()
     stub.get_dataset.return_value = {
         "datasetId": "cloudds-7", "datasetName": "remote_scenarios",
-        "status": status, "schemaType": schema_type, "exampleCount": 1,
+        "status": status, "exampleCount": 1,
     }
     if examples is None:
-        base = PERSONA if schema_type == "AGENTCORE_EVALUATION_SIMULATED_V1" else SCENARIO
-        examples = [{"exampleId": "ex-1", **base}]
+        examples = [{"exampleId": "ex-1", **(PERSONA if persona else SCENARIO)}]
     stub.list_dataset_examples.return_value = {"examples": examples}
     stub.list_dataset_versions.return_value = {"versions": []}
     monkeypatch.setattr("app.evaluation.routers.control_client", lambda _ws=None: stub)
@@ -266,13 +266,34 @@ def test_cloud_dataset_detail_reports_ground_truth(client, monkeypatch):
 
 
 def test_cloud_dataset_detail_simulated_runnable_with_gt(client, monkeypatch):
-    stub_cloud_run(monkeypatch, schema_type="AGENTCORE_EVALUATION_SIMULATED_V1")
+    stub_cloud_run(monkeypatch, persona=True)
     res = client.get("/api/eval/datasets/cloud/cloudds-7")
     assert res.status_code == 200
     body = res.json()
     assert body["runnable"] is True
     assert body["has_ground_truth"] is True  # persona assertions count
-    assert body["schemaType"] == "AGENTCORE_EVALUATION_SIMULATED_V1"
+    assert body["kind"] == "simulated" and body["has_personas"] is True
+    assert "schemaType" not in body
+
+
+def test_cloud_dataset_detail_kind_from_examples(client, monkeypatch):
+    """No schema type: the kind is read off the examples — fixed, mixed, or a
+    not-ACTIVE dataset whose examples are not read at all."""
+    stub_cloud_run(monkeypatch)
+    body = client.get("/api/eval/datasets/cloud/cloudds-7").json()
+    assert body["kind"] == "predefined" and body["has_personas"] is False
+
+    stub_cloud_run(monkeypatch, examples=[
+        {"exampleId": "ex-1", **SCENARIO}, {"exampleId": "ex-2", **PERSONA},
+    ])
+    body = client.get("/api/eval/datasets/cloud/cloudds-7").json()
+    assert body["kind"] == "mixed" and body["has_personas"] is True
+    assert body["runnable"] is True
+
+    stub = stub_cloud_run(monkeypatch, status="UPDATING")
+    body = client.get("/api/eval/datasets/cloud/cloudds-7").json()
+    assert body["runnable"] is False and body["kind"] is None
+    stub.list_dataset_examples.assert_not_called()
 
 
 def test_run_on_cloud_dataset(client, monkeypatch):
@@ -307,13 +328,40 @@ def test_run_on_simulated_dataset_requires_actor_model(client, monkeypatch):
     agent = make_agent(db, name="cloud-sim-agent")
     db.close()
     stub_environment(monkeypatch)
-    stub_cloud_run(monkeypatch, schema_type="AGENTCORE_EVALUATION_SIMULATED_V1")
+    stub_cloud_run(monkeypatch, persona=True)
 
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "cloud_dataset_id": "cloudds-7", "wait_seconds": 0,
     })
     assert res.status_code == 422
     assert res.json()["code"] == "run.actor_model_required"
+
+
+def test_run_on_mixed_cloud_dataset_requires_actor_model_only_for_personas(
+    client, monkeypatch
+):
+    """A schema-less cloud dataset may mix fixed and persona scenarios: the actor
+    model is required as soon as one scenario simulates, and not for a fixed
+    scenario that merely carries an actor_profile beside its turns."""
+    db = SessionLocal()
+    agent = make_agent(db, name="cloud-mixed-agent")
+    db.close()
+    stub_environment(monkeypatch)
+    stub_cloud_run(monkeypatch, examples=[
+        {"exampleId": "ex-1", **SCENARIO}, {"exampleId": "ex-2", **PERSONA},
+    ])
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "cloud_dataset_id": "cloudds-7", "wait_seconds": 0,
+    })
+    assert res.status_code == 422 and res.json()["code"] == "run.actor_model_required"
+
+    stub_cloud_run(monkeypatch, examples=[
+        {"exampleId": "ex-1", **SCENARIO, "actor_profile": PERSONA["actor_profile"]},
+    ])
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "cloud_dataset_id": "cloudds-7", "wait_seconds": 0,
+    })
+    assert res.status_code == 201, res.text
 
 
 def test_run_refuses_more_than_ten_evaluators_before_any_replay(client, monkeypatch):
@@ -340,7 +388,7 @@ def test_run_on_simulated_cloud_dataset_with_actor_model(client, monkeypatch):
     agent = make_agent(db, name="cloud-sim-ok-agent")
     db.close()
     data, _ = stub_environment(monkeypatch)
-    stub_cloud_run(monkeypatch, schema_type="AGENTCORE_EVALUATION_SIMULATED_V1")
+    stub_cloud_run(monkeypatch, persona=True)
 
     sim_calls: list[dict] = []
 

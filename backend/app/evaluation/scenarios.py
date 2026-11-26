@@ -19,24 +19,80 @@ INPUT_PREVIEW_CHARS = 200
 FINGERPRINT_CHARS = 16
 
 
+def scenario_kind(item: dict[str, Any]) -> str:
+    """AWS dataset schema: an item with ``turns`` is a *fixed* scenario (even when it
+    also carries ``input`` / ``actor_profile``); one without ``turns`` but with
+    ``input`` or ``actor_profile`` is *dynamic*; anything else is a legacy
+    ``{prompt, expected}`` item. Datasets declare no schema type any more, so this
+    per-item rule is the only classification."""
+    if "turns" in item:
+        return "fixed"
+    if "actor_profile" in item:
+        return "dynamic"
+    # a legacy prompt item that also carries a stray `input` (imported JSON)
+    # stays legacy: its `prompt` / `expected` are what it replays
+    if "input" in item and "prompt" not in item:
+        return "dynamic"
+    return "legacy"
+
+
+def simulates(item: dict[str, Any]) -> bool:
+    """A dynamic scenario with an actor: an LLM plays the user. A dynamic scenario
+    with ``input`` only runs as a single replayed turn instead."""
+    return scenario_kind(item) == "dynamic" and "actor_profile" in item
+
+
+def dataset_kind(items: list[dict[str, Any]]) -> str:
+    """``predefined`` (every scenario replays turns) · ``simulated`` (every scenario
+    simulates) · ``mixed`` · ``empty`` — derived from the examples, since AWS
+    datasets no longer carry a schema type and may mix both kinds."""
+    if not items:
+        return "empty"
+    personas = sum(1 for item in items if simulates(item))
+    if personas == 0:
+        return "predefined"
+    return "simulated" if personas == len(items) else "mixed"
+
+
 def normalize_scenarios(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return the dataset's items in devguide scenario schema.
 
     Legacy prompt items become single-turn predefined scenarios (a non-empty
     ``expected`` becomes the turn's ``expected_response``); items already in
-    scenario shape — predefined (``turns``) or simulated persona
-    (``actor_profile``) — pass through as stored.
+    scenario shape — fixed (``turns``) or simulated persona (``actor_profile``) —
+    pass through as stored. A dynamic scenario with ``input`` and no actor runs
+    as one turn (AWS: "a scenario with input and no actor_profile runs as a
+    single turn"), so it is replayed as a one-turn fixed scenario.
     """
     out: list[dict[str, Any]] = []
     for i, item in enumerate(items):
-        if "turns" in item or "actor_profile" in item:
+        kind = scenario_kind(item)
+        if kind == "fixed" or simulates(item):
             out.append(item)
+            continue
+        if kind == "dynamic":
+            rest = {k: v for k, v in item.items() if k not in ("input", "max_turns")}
+            out.append({**rest, "turns": [{"input": item["input"]}]})
             continue
         turn: dict[str, Any] = {"input": item["prompt"]}
         if item.get("expected"):
             turn["expected_response"] = item["expected"]
         out.append({"scenario_id": f"item_{i + 1}", "turns": [turn]})
     return out
+
+
+def aws_examples(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The dataset's items as AWS Dataset examples: legacy prompt items become
+    one-turn fixed scenarios (AWS has no prompt shape); every scenario-shaped item —
+    fixed, persona, or an ``input``-only dynamic one — is sent **verbatim**,
+    ``metadata`` included. Unlike ``normalize_scenarios`` (the replay view) it
+    does not rewrite dynamic items: AWS dedupes generated examples on their
+    content and ``metadata.source``, so a rewritten copy would no longer match."""
+    normalized = normalize_scenarios(items)
+    return [
+        item if scenario_kind(item) != "legacy" else normalized[i]
+        for i, item in enumerate(items)
+    ]
 
 
 def scenario_prompts(scenario: dict[str, Any]) -> list[str]:

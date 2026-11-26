@@ -20,7 +20,6 @@ import {
   defaultActorModel,
   CLOUD_VALUE_PREFIX,
   DEFAULT_EVALUATORS,
-  SIMULATED_SCHEMA,
   type CloudDatasetInfo as CloudDataset,
   type EvaluationDatasetInfo as Dataset,
   type EvaluationRunInfo as RunInfo,
@@ -46,6 +45,9 @@ interface CloudRunVersion {
 }
 interface CloudRunDetail {
   has_ground_truth: boolean;
+  // AWS datasets declare no schema type: whether any scenario simulates a user is
+  // read off the examples by the detail endpoint
+  has_personas: boolean;
   versions: CloudRunVersion[];
 }
 
@@ -265,12 +267,17 @@ export function Evaluation() {
   useEffect(() => {
     if (!selectedCloudId || selectedCloudId in cloudDetail) return;
     fetch(`/api/eval/datasets/cloud/${selectedCloudId}`)
-      .then((res) => res.json())
-      .then((d: { has_ground_truth?: boolean; versions?: CloudRunVersion[] }) =>
+      .then((res) => {
+        // an error body must not be cached as "no personas / no ground truth"
+        if (!res.ok) throw new Error(`http ${res.status}`);
+        return res.json();
+      })
+      .then((d: { has_ground_truth?: boolean; has_personas?: boolean; versions?: CloudRunVersion[] }) =>
         setCloudDetail((p) => ({
           ...p,
           [selectedCloudId]: {
             has_ground_truth: !!d.has_ground_truth,
+            has_personas: !!d.has_personas,
             versions: d.versions ?? [],
           },
         })),
@@ -289,11 +296,10 @@ export function Evaluation() {
       ? !!cloudDetail[selectedCloudId]?.has_ground_truth
       : !!selectedDataset?.has_ground_truth);
   // Simulated persona datasets need an actor model (an LLM plays the user).
-  const selectedCloud = cloudDatasets.find((d) => d.datasetId === selectedCloudId);
   const simulatedSelected =
     scope === "dataset" &&
-    (selectedCloud
-      ? selectedCloud.schemaType === SIMULATED_SCHEMA
+    (selectedCloudId
+      ? !!cloudDetail[selectedCloudId]?.has_personas
       : selectedDataset?.kind === "simulated");
   useEffect(() => {
     if (!trajectoryAllowed) {
@@ -632,7 +638,7 @@ export function Evaluation() {
                           style={{ background: "var(--panel)" }}
                         >
                           ☁ {d.name} · {d.exampleCount ?? "?"}
-                          {d.schemaType === SIMULATED_SCHEMA
+                          {cloudDetail[d.datasetId]?.has_personas
                             ? ` · ${t("evalPage.newRun.cloudSimulated")}`
                             : ""}
                           {d.status !== "ACTIVE" ? ` — ${d.status}` : ""}

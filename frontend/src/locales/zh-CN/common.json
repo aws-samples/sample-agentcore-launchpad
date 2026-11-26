@@ -3358,7 +3358,6 @@
     "rule.pattern_too_short": "“包含”规则需要更长的短语，否则会匹配过多。",
     "rule.reorder_mismatch": "新顺序必须恰好列出该 Agent 的每条精选回答一次。",
     "run.actor_model_required": "该数据集包含模拟用户场景——请选择扮演用户的模型（Bedrock 模型）。",
-    "run.cloud_dataset_unsupported": "该云端数据集的结构无法在此运行。",
     "run.cost_confirm_required": "请确认本次运行的预估费用后再提交。",
     "run.cost_over_limit": "预估费用超过该工作区的上限——管理员可以调高上限。",
     "run.dataset_version_scope": "数据集版本只适用于云端数据集。",
@@ -4091,7 +4090,7 @@
       },
       "detail": {
         "id": "数据集 ID",
-        "schema": "SCHEMA",
+        "schema": "类型",
         "examples": "样例数",
         "status": "状态",
         "draft": "草稿",

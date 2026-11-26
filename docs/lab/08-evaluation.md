@@ -97,7 +97,7 @@ for x in json.load(sys.stdin)['datasets']:
 ### 同步为 AWS 数据集（可选）
 
 选中数据集，点 `同步 AWS`。本地 SQLite 是**唯一数据源**，同步产生的是**不可变的云端快照**
-（`AGENTCORE_EVALUATION_PREDEFINED_V1`）。
+（AWS 数据集不再声明 schema type，固定场景与动态场景可混在同一数据集）。
 
 ![数据集详情与同步](images/08-dataset-detail.png)
 *图 8-2：数据集详情（scenario 编辑器）。同步后云端列显示 `ACTIVE`。*

@@ -21,7 +21,17 @@ personas added the same day via the SDK dataset runner pattern).
 - `ListDatasetExamples(datasetId)` (control plane, paginated via nextToken)
   returns examples verbatim in the schema they were created with, each with a
   service-assigned `exampleId` on top. Strip it → valid run items.
-- Simulated personas (`AGENTCORE_EVALUATION_SIMULATED_V1`: items carry
+- **Datasets are schema-less (live-probed 2026-11-26):** AWS removed the
+  dataset schema type — `GetDataset` / `ListDatasets` return no `schemaType`,
+  `CreateDataset` ignores one (we send none), and one dataset may mix fixed and
+  dynamic scenarios. Classification is per example (`scenarios.scenario_kind`):
+  `turns` → fixed (even beside `input` / `actor_profile`, which AWS then also
+  validates); no `turns` → dynamic, with `input`, `actor_profile` or both; an
+  `input`-only dynamic scenario runs as one turn (`normalize_scenarios` turns it
+  into a one-turn fixed scenario). Never gate on a schema string again — a
+  cloud dataset is runnable iff `ACTIVE`, and every cloud run was refused with
+  `run.cloud_dataset_unsupported` until this was fixed.
+- Simulated personas (dynamic scenarios with an actor: items carry
   `actor_profile{traits,context,goal}`, `input`, `max_turns`, no `turns`) run
   through the SDK's `SimulatedScenarioExecutor` (preview): an LLM actor plays
   the user until a goal-completion tool signals stop or max_turns. Needs the
@@ -90,33 +100,47 @@ Read the per-session result records for the authoritative code-evaluator scores.
 
 ```python
 # simulation.py
-is_simulated(scenario) -> bool          # "actor_profile" in item
+is_simulated(scenario) -> bool          # scenarios.simulates: no turns + actor_profile
+# scenarios.py
+scenario_kind(item) -> "fixed" | "dynamic" | "legacy"
+simulates(item) -> bool                  # dynamic and has actor_profile
+dataset_kind(items) -> "predefined" | "simulated" | "mixed" | "empty"
+aws_examples(items) -> examples   # sync-to-aws payload: legacy prompt items →
+#   one-turn turns; every scenario-shaped item VERBATIM (metadata included).
+#   Never sync normalize_scenarios() output: it rewrites input-only dynamic
+#   items, and AWS dataset generation dedupes on content + metadata.source, so
+#   a rewritten copy makes the next generation add the same session again
+#   (spike 2026-11-26). normalize_scenarios is the replay view only.
+# Gotcha: dataset generation writes input-only dynamic items for single-turn
+#   sessions (no actor_profile) — the validator must accept them.
 run_simulated_scenario(data_client, *, agent_arn, method, scenario,
                        actor_model_id) -> runtime_session_id
 # routers.py
-RUNNABLE_CLOUD_SCHEMAS = {PREDEFINED_V1, SIMULATED_V1}
 _cloud_dataset_items(cloud_id) -> (display_name, items)
-#   400 dataset.cloud_not_active | 422 run.cloud_dataset_unsupported (unknown
-#   schema) | 422 dataset.empty; strips exampleId; _validate_items() after
+#   400 dataset.cloud_not_active | 422 dataset.empty; strips exampleId;
+#   _validate_items() after (no schema check — datasets are schema-less)
 GET /api/eval/datasets/cloud/{cloud_id}
-#   {datasetId, name, status, schemaType, exampleCount, runnable,
-#    has_ground_truth} — persona assertions count as ground truth
+#   {datasetId, name, status, kind, has_personas, exampleCount, runnable,
+#    has_ground_truth, …} — runnable = ACTIVE; kind = dataset_kind(draft
+#   examples), null when not ACTIVE; persona assertions count as ground truth
 RunCreate.cloud_dataset_id   # same XOR slot as dataset_id; both → 422
-RunCreate.actor_model_id     # REQUIRED iff items carry actor_profile
+RunCreate.actor_model_id     # REQUIRED iff any item simulates (no turns + actor_profile)
 #   (local or cloud) → else 422 run.actor_model_required
 # run row: dataset_id = cloud dataset id, dataset_name = f"cloud:{name}"
 #   (scope encoding like "window:{N}h"; frontend scopeLabel renders "☁ name")
 # execute_run: per-scenario dispatch — is_simulated → actor loop, else turn
 #   replay; ground_truth_metadata includes persona assertions (turns loop is
-#   empty for them). _validate_items accepts turns | actor_profile | prompt
-#   shapes; _infer_kind: actor_profile → "simulated" (sync-to-aws picks the
-#   schema by kind via DATASET_SCHEMA_TYPES).
+#   empty for them). _validate_items: turns (+ a valid profile if present) |
+#   dynamic (needs a non-empty input — the SDK 1.18 actor sends it as the
+#   opening message, stricter than AWS — and a valid profile if present) |
+#   prompt; _infer_kind: any simulating item → "simulated" (local rows only;
+#   sync-to-aws sends no schema type).
 ```
 
 Frontend: dropdown = optgroup LOCAL + AWS CLOUD; cloud option value is
 `"cloud:" + datasetId`, disabled only when not ACTIVE; simulated ones get a
-"personas" tag. Selecting a simulated dataset (cloud schemaType or local
-`kind === "simulated"`) reveals the ACTOR MODEL select (`ACTOR_MODELS`
+"personas" tag once its detail is cached. Selecting a persona dataset (cloud
+detail `has_personas` or local `kind === "simulated"`) reveals the ACTOR MODEL select (`ACTOR_MODELS`
 curated us-west-2 list, default haiku-4-5) and the submit payload adds
 `actor_model_id`. Trajectory* gating for a cloud selection fetches
 `GET /datasets/cloud/{id}` lazily and caches `has_ground_truth` per id.

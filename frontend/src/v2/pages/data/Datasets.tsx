@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type V2Dataset } from "../../../lib/api";
+import { scenarioKind } from "../../../lib/datasetDrafts";
 import { creatorLabel, fmtTime } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
 import {
@@ -55,7 +56,7 @@ function toRows(ds: V2Dataset | null): Row[] {
         original: item,
       };
     }
-    if ("actor_profile" in item) {
+    if (scenarioKind(item) === "dynamic") {
       return { input: String(item.input ?? ""), expected: "", extraTurns: 0, original: item };
     }
     return { input: String(item.prompt ?? ""), expected: String(item.expected ?? ""), extraTurns: 0, original: item };

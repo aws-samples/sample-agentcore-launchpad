@@ -24,7 +24,7 @@ def _stub_cloud(monkeypatch, *, versions=("3", "2", "1")):
     stub = MagicMock()
     stub.get_dataset.return_value = {
         "datasetId": CLOUD_ID, "datasetName": "pinned", "status": "ACTIVE",
-        "schemaType": "AGENTCORE_EVALUATION_PREDEFINED_V1", "exampleCount": 1,
+        "exampleCount": 1,
     }
     stub.list_dataset_examples.return_value = {"examples": [EXAMPLE]}
     stub.list_dataset_versions.return_value = {
