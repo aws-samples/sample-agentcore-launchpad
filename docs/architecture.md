@@ -3603,6 +3603,29 @@ through the same backend routes and permission checks as the classic pages.
   never evaluated directly — they become questions and reference replies to replay
   against a platform agent. Either source can store inputs only
   (`processing.keep_replies: false`).
+- **数据处理 · AgentCore 生成 source** (backend `app/evaluation/generation.py` +
+  `pipeline_routers._run_agentcore`): `source.type = "agentcore"` turns a platform
+  agent's sessions into scenarios through AgentCore `StartDatasetGeneration` — FIXED
+  (the recorded user turns, ground truth copied from the session: `expected_response`
+  per turn when `keep_replies`, `expected_trajectory`) or DYNAMIC (a persona
+  `actor_profile` written by the service; only multi-turn sessions are sent), with
+  optional service-side PII redaction. Sessions are picked **locally** (the agent's
+  service, the caller-visible and project-fenced ones, status, newest
+  `max_sessions` ≤ 25, none active in the last 10 minutes or already in the dataset)
+  and sent as `selection.identifiers.sessionIds` only: a filter-based generation
+  would write other principals' private sessions into the shared AWS Draft, and
+  deleting a generation does not remove what it wrote. The source is the agent's
+  runtime log group + service name (`resolve_telemetry`); `aws/spans` alone fails
+  `SPANS_INCOMPLETE`. The target needs a live AWS copy (an existing row is synced
+  first; a new name creates an empty AWS dataset, deleted again if nothing is
+  kept), FIXED writes into a `predefined` dataset and DYNAMIC into a `simulated`
+  one. On completion the generated examples (`ListDatasetExamples` filtered by
+  `generationIds`) are stored verbatim in the local row — minus other sessions,
+  Harness inline-function interrupt transcripts and invalid examples, which are
+  also deleted from the Draft, so the Draft equals the local items. The generation
+  id is persisted before polling; a run a restart left `running` resumes on the
+  next read. `last_run.generation` carries the AWS counts, per-code error details
+  and the redaction summary.
 - **日志 data source** (`v2/pages/tasks/LogStreamPicker.tsx`): the wizard lists the
   agent's runtime log streams in a window (default 7 days) through
   `GET /api/eval/agents/{id}/log-streams` and filters them by keyword — stream name

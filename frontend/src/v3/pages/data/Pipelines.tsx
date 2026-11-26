@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 import { ApiErrorDetail } from "../../../components/ApiErrorDetail";
 import { ErrorCallout } from "../../../components/ErrorCallout";
 import { api, type V2Pipeline } from "../../../lib/api";
+import { scenarioTypeOf } from "../../../lib/pipelineAgentcore";
 import { rangeLabel } from "../../../v2/format";
 import { useWorkspace } from "../../../workspace/workspace-context";
 import { useFailure } from "../../failure";
@@ -70,6 +71,36 @@ export function PipelinesTab() {
       setBusy(false);
     }
   };
+  // what a pipeline reads, per source type
+  const input = (p: V2Pipeline) => {
+    const src = p.config.source;
+    if (src.type === "agentcore") {
+      const scenario = scenarioTypeOf(src) === "DYNAMIC" ? t("v2.pipelines.ac.dynamic") : t("v2.pipelines.ac.fixed");
+      return [t("v2.pipelines.srcAgentcore"), src.agent ?? src.agent_id ?? "—", rangeLabel(t, src.range), scenario].join(" · ");
+    }
+    if (src.type === "logs") {
+      const groups = src.log_groups ?? [];
+      const group = groups.length > 1 ? `${groups[0]} +${groups.length - 1}` : (groups[0] ?? "—");
+      return [t("v2.pipelines.srcLogs"), group, rangeLabel(t, src.range)].join(" · ");
+    }
+    return [src.agent ?? t("v2.pipelines.allAgents"), rangeLabel(t, src.range), t(`v2.pipelines.status.${src.status}`)].join(" · ");
+  };
+  // the last run in one line; an agentcore run adds its generation counts (and the
+  // AWS error codes / failure reason as the tooltip)
+  const lastRun = (p: V2Pipeline) => {
+    const run = p.last_run;
+    if (!run) return t("v2.pipelines.never");
+    const gen = run.generation;
+    let text: string;
+    if (p.status === "running" && gen) text = t(`v2.pipelines.ac.stage.${gen.stage}`, { defaultValue: gen.stage });
+    else if (run.error) text = t("v2.pipelines.lastError");
+    else if (gen)
+      text = t("v2.pipelines.ac.lastRunShort", { requested: gen.requested, written: gen.results?.examplesWritten ?? 0, added: run.added });
+    else text = t("v2.pipelines.lastAdded", { count: run.added });
+    const codes = (gen?.error_details ?? []).map((e) => `${e.code} × ${e.count}`);
+    const title = [run.error, gen?.failure_reason, ...codes].filter(Boolean).join("\n") || undefined;
+    return <span title={title}>{ago(run.at)} · {text}</span>;
+  };
   const output = (p: V2Pipeline) => {
     const id = p.config.output.dataset_id;
     if (id) return names.get(id) ?? id;
@@ -128,20 +159,10 @@ export function PipelinesTab() {
                   <tr key={p.id}>
                     <td style={{ width: 24 }}><Lamp s={s} live={s === "wait"} /></td>
                     <td><div className="v3-name"><div><b>{p.name}</b><small>{p.description || p.id}</small></div></div></td>
-                    <td style={{ color: "var(--v3-text-2)" }}>
-                      {[p.config.source.agent ?? t("v2.pipelines.allAgents"), rangeLabel(t, p.config.source.range), t(`v2.pipelines.status.${p.config.source.status}`)].join(" · ")}
-                    </td>
+                    <td style={{ color: "var(--v3-text-2)" }}>{input(p)}</td>
                     <td>{output(p)}</td>
                     <td><Chip s={s === "off" ? undefined : s}>{t(`v2.pipelines.state.${p.status}`)}</Chip></td>
-                    <td className="num" style={{ color: "var(--v3-text-3)" }}>
-                      {p.last_run ? (
-                        <span title={p.last_run.error ?? undefined}>
-                          {ago(p.last_run.at)} · {p.last_run.error ? t("v2.pipelines.lastError") : t("v2.pipelines.lastAdded", { count: p.last_run.added })}
-                        </span>
-                      ) : (
-                        t("v2.pipelines.never")
-                      )}
-                    </td>
+                    <td className="num" style={{ color: "var(--v3-text-3)" }}>{lastRun(p)}</td>
                     <td style={{ width: 1, whiteSpace: "nowrap" }}>
                       <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                         <Btn size="sm" disabled={running !== null} onClick={() => void run(p)}>

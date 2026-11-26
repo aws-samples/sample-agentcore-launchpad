@@ -4,6 +4,18 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { api, errorMessage, type V2Pipeline, type V2PipelineBody, type V2Range } from "../../../lib/api";
+import {
+  AGENTCORE_MAX_SESSIONS,
+  cleanAgentcoreProcessing,
+  cleanAgentcoreSource,
+  generationAgents,
+  previewAgentcoreSessions,
+  REDACTION_PROBLEM_KEY,
+  receivableDatasets,
+  redactionProblem,
+  scenarioTypeOf,
+  targetKind,
+} from "../../../lib/pipelineAgentcore";
 import { cleanSource, defaultLogFormat, logSourceProblem, PROBLEM_KEY } from "../../../lib/pipelineLogs";
 import { creatorLabel, fmtTime, RANGES, rangeLabel } from "../../format";
 import { useLoad, usePaged, useV2Toast } from "../../hooks";
@@ -28,6 +40,7 @@ import {
   Tag,
   type TagTone,
 } from "../../ui";
+import { AgentcoreLogic, AgentcorePreviewCard, AgentcoreSourceFields, GenerationRunCard } from "./AgentcoreSource";
 import { LogFormatStep, LogSourceFields } from "./LogSource";
 
 const STATUS_TONE: Record<V2Pipeline["status"], TagTone> = {
@@ -147,6 +160,20 @@ export function PipelinesTab() {
       title: t("v2.pipelines.colInput"),
       render: (p) => {
         const src = p.config.source;
+        if (src.type === "agentcore") {
+          return (
+            <>
+              {t("v2.pipelines.srcAgentcore")}
+              <span className="sub">
+                {[
+                  src.agent ?? src.agent_id ?? "—",
+                  rangeLabel(t, src.range),
+                  scenarioTypeOf(src) === "DYNAMIC" ? t("v2.pipelines.ac.dynamic") : t("v2.pipelines.ac.fixed"),
+                ].join(" · ")}
+              </span>
+            </>
+          );
+        }
         if (src.type === "logs") {
           const groups = src.log_groups ?? [];
           return (
@@ -188,7 +215,11 @@ export function PipelinesTab() {
           <>
             {fmtTime(p.last_run.at)}
             <span className="sub">
-              {p.last_run.error ? t("v2.pipelines.lastError") : t("v2.pipelines.lastAdded", { count: p.last_run.added })}
+              {p.status === "running" && p.last_run.generation
+                ? t(`v2.pipelines.ac.stage.${p.last_run.generation.stage}`, { defaultValue: p.last_run.generation.stage })
+                : p.last_run.error
+                  ? t("v2.pipelines.lastError")
+                  : t("v2.pipelines.lastAdded", { count: p.last_run.added })}
             </span>
           </>
         ) : (
@@ -273,8 +304,11 @@ export function PipelineEditor({ id }: { id: string | null }) {
   const [saving, setSaving] = useState(false);
   const range: V2Range = draft?.source.range ?? "24h";
   const isLogs = draft?.source.type === "logs";
+  const isAgentcore = draft?.source.type === "agentcore";
   // the trajectory preview only — a logs source previews in its format step
   const sessions = useLoad(() => (isLogs ? Promise.resolve(null) : api.obsSessions(range)), `sessions:${isLogs ? "logs" : range}`);
+  // AgentCore 生成 reads one platform agent's sessions
+  const agentList = useLoad(() => (isAgentcore ? api.listAgents() : Promise.resolve(null)), `pipeline-agents:${isAgentcore ? "on" : "off"}`);
 
   if (id && draft === null && existing.data) {
     const p = existing.data;
@@ -303,12 +337,24 @@ export function PipelineEditor({ id }: { id: string | null }) {
     });
   }, [sessions.data, draft]);
   const agents = useMemo(() => [...new Set((sessions.data?.sessions ?? []).map((s) => s.agent).filter(Boolean))].sort(), [sessions.data]);
+  const genAgents = useMemo(() => generationAgents(agentList.data?.agents ?? []), [agentList.data]);
+  const pickedAgent = genAgents.find((a) => a.id === draft?.source.agent_id);
+  // sessions are labelled by the agent's (ledger) name; a saved pipeline remembers it
+  const agentName = pickedAgent?.name ?? (draft?.source.agent_id ? draft.source.agent : null) ?? null;
+  const acPreview = useMemo(
+    () => (draft && isAgentcore ? previewAgentcoreSessions(sessions.data?.sessions ?? [], draft.source, agentName) : null),
+    [sessions.data, draft, isAgentcore, agentName],
+  );
 
   if (id && (existing.loading || draft === null)) return existing.error ? <Alert tone="error">{existing.error}</Alert> : <Spin />;
   if (!draft) return <Spin />;
 
-  const receivable = (datasets.data?.datasets ?? []).filter((d) => d.kind !== "simulated");
+  const receivable = receivableDatasets(datasets.data?.datasets ?? [], draft.source);
   const outMode: "new" | "existing" = draft.output.dataset_id ? "existing" : "new";
+  // a saved / previously picked target that no longer suits the scenario type
+  const targetMismatch =
+    isAgentcore && !!draft.output.dataset_id && datasets.data !== null && !receivable.some((d) => d.id === draft.output.dataset_id);
+  const wantKind = targetKind(scenarioTypeOf(draft.source));
   const setSource = (patch: Partial<V2PipelineBody["source"]>) => setDraft({ ...draft, source: { ...draft.source, ...patch } });
   const setProc = (patch: Partial<V2PipelineBody["processing"]>) => setDraft({ ...draft, processing: { ...draft.processing, ...patch } });
 
@@ -317,9 +363,16 @@ export function PipelineEditor({ id }: { id: string | null }) {
     if (!draft.output.dataset_id && !draft.output.dataset_name?.trim()) return setError(t("v2.pipelines.errOutput"));
     const problem = isLogs ? logSourceProblem(draft.source) : null;
     if (problem) return setError(t(PROBLEM_KEY[problem]));
+    if (isAgentcore) {
+      if (!draft.source.agent_id) return setError(t("v2.pipelines.ac.errAgent"));
+      const redaction = redactionProblem(draft.source.redaction);
+      if (redaction) return setError(t(REDACTION_PROBLEM_KEY[redaction]));
+      if (targetMismatch) return setError(t("v2.pipelines.ac.errTargetKind", { kind: t(`v2.pipelines.ac.kind.${wantKind}`) }));
+    }
     const body: V2PipelineBody = {
       ...draft,
-      source: cleanSource(draft.source),
+      source: isAgentcore ? cleanAgentcoreSource(draft.source, agentName) : cleanSource(draft.source),
+      processing: isAgentcore ? cleanAgentcoreProcessing(draft.processing, scenarioTypeOf(draft.source)) : draft.processing,
       name: draft.name.trim(),
       output: draft.output.dataset_id ? { dataset_id: draft.output.dataset_id } : { dataset_name: draft.output.dataset_name?.trim() },
     };
@@ -395,11 +448,33 @@ export function PipelineEditor({ id }: { id: string | null }) {
         <>
           <Card title={t("v2.pipelines.sourceTitle")}>
             <div className="v2-options" style={{ marginBottom: 20 }}>
-              <OptionCard title={t("v2.pipelines.srcTraces")} desc={t("v2.pipelines.srcTracesDesc")} on={!isLogs} onClick={() => setSource({ type: "traces" })} testId="v2-pipeline-src-traces" />
+              <OptionCard
+                title={t("v2.pipelines.srcTraces")}
+                desc={t("v2.pipelines.srcTracesDesc")}
+                on={!isLogs && !isAgentcore}
+                onClick={() => setSource({ type: "traces" })}
+                testId="v2-pipeline-src-traces"
+              />
               <OptionCard title={t("v2.pipelines.srcLogs")} desc={t("v2.pipelines.srcLogsDesc")} on={isLogs} onClick={() => setSource({ type: "logs" })} testId="v2-pipeline-src-logs" />
+              <OptionCard
+                title={t("v2.pipelines.srcAgentcore")}
+                desc={t("v2.pipelines.srcAgentcoreDesc")}
+                on={isAgentcore}
+                onClick={() =>
+                  setSource({
+                    type: "agentcore",
+                    max_sessions: Math.min(draft.source.max_sessions, AGENTCORE_MAX_SESSIONS),
+                    scenario_type: draft.source.scenario_type ?? "FIXED",
+                    expected_trajectory: draft.source.expected_trajectory ?? true,
+                  })
+                }
+                testId="v2-pipeline-src-agentcore"
+              />
             </div>
             {isLogs ? (
               <LogSourceFields source={draft.source} onChange={setSource} />
+            ) : isAgentcore ? (
+              <AgentcoreSourceFields source={draft.source} agents={genAgents} agentsLoading={agentList.loading} onChange={setSource} />
             ) : (
             <div className="v2-form cols-2">
               <Field label="Agent" hint={t("v2.pipelines.agentHint")}>
@@ -437,7 +512,11 @@ export function PipelineEditor({ id }: { id: string | null }) {
             </div>
             )}
           </Card>
-          {!isLogs && (
+          {isAgentcore && acPreview && (
+            <AgentcorePreviewCard preview={acPreview} picked={!!agentName} loading={sessions.loading} error={sessions.error ?? agentList.error} />
+          )}
+          {isAgentcore && last?.generation && <GenerationRunCard run={last} />}
+          {!isLogs && !isAgentcore && (
           <Card title={t("v2.pipelines.preview")} sub={sessions.loading ? undefined : t("v2.pipelines.previewSub", { count: matching.length, take: Math.min(matching.length, draft.source.max_sessions) })}>
             <Table
               columns={[
@@ -467,7 +546,10 @@ export function PipelineEditor({ id }: { id: string | null }) {
       {current === "logic" && (
         <div className="v2-grid-2" style={{ gridTemplateColumns: "minmax(0, 360px) minmax(0, 1fr)" }}>
           <Card title={t("v2.pipelines.flow")}>
-            {[isLogs ? t("v2.pipelines.logs.node1") : t("v2.pipelines.node1"), t("v2.pipelines.node2"), t("v2.pipelines.node3"), t("v2.pipelines.node4"), t("v2.pipelines.node5")].map((label, i, all) => (
+            {(isAgentcore
+              ? [t("v2.pipelines.ac.node1"), t("v2.pipelines.ac.node2"), t("v2.pipelines.ac.node3"), t("v2.pipelines.ac.node4"), t("v2.pipelines.node5")]
+              : [isLogs ? t("v2.pipelines.logs.node1") : t("v2.pipelines.node1"), t("v2.pipelines.node2"), t("v2.pipelines.node3"), t("v2.pipelines.node4"), t("v2.pipelines.node5")]
+            ).map((label, i, all) => (
               <div key={label}>
                 <div className="v2-option" style={{ cursor: "default" }}>
                   <span className="t">
@@ -483,6 +565,11 @@ export function PipelineEditor({ id }: { id: string | null }) {
               </div>
             ))}
           </Card>
+          {isAgentcore ? (
+            <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
+              <AgentcoreLogic source={draft.source} processing={draft.processing} onSource={setSource} onProc={setProc} />
+            </div>
+          ) : (
           <Card title={t("v2.pipelines.logic")}>
             <div className="v2-form">
               <Field label={t("v2.pipelines.extract")} hint={t("v2.pipelines.extractHint")}>
@@ -526,6 +613,7 @@ export function PipelineEditor({ id }: { id: string | null }) {
               )}
             </div>
           </Card>
+          )}
         </div>
       )}
 
@@ -549,7 +637,11 @@ export function PipelineEditor({ id }: { id: string | null }) {
               />
             </Field>
             {outMode === "new" ? (
-              <Field label={t("v2.pipelines.newDatasetName")} required hint={t("v2.pipelines.newDatasetHint")}>
+              <Field
+                label={t("v2.pipelines.newDatasetName")}
+                required
+                hint={isAgentcore ? t("v2.pipelines.ac.newDatasetHint", { kind: t(`v2.pipelines.ac.kind.${wantKind}`) }) : t("v2.pipelines.newDatasetHint")}
+              >
                 <input
                   className="v2-input"
                   value={draft.output.dataset_name ?? ""}
@@ -559,7 +651,12 @@ export function PipelineEditor({ id }: { id: string | null }) {
                 />
               </Field>
             ) : (
-              <Field label={t("v2.addToDataset.dataset")} required>
+              <Field
+                label={t("v2.addToDataset.dataset")}
+                required
+                hint={isAgentcore ? t("v2.pipelines.ac.targetHint", { kind: t(`v2.pipelines.ac.kind.${wantKind}`) }) : undefined}
+                error={targetMismatch ? t("v2.pipelines.ac.errTargetKind", { kind: t(`v2.pipelines.ac.kind.${wantKind}`) }) : null}
+              >
                 <Select
                   value={draft.output.dataset_id ?? ""}
                   placeholder={t("v2.common.choose")}

@@ -1372,10 +1372,29 @@ a record's JSON is skipped. The turns then go through the trace extractor:
 `scenario_id = log-<session>`, `metadata{source: "logs", session_id, log_group}`.
 `processing.keep_replies: false` (either source) stores inputs only.
 
+A pipeline source can also be an **AgentCore dataset generation** (`source.type =
+"agentcore"`, `app/evaluation/generation.py`): `{agent_id, range, status, max_sessions
+≤ 25, scenario_type: FIXED|DYNAMIC, expected_trajectory, redaction{identifiers[≤100],
+custom[≤10 {name, regex}]}}`. The run picks the agent's sessions locally (visibility,
+project fence, status; DYNAMIC: ≥ 2 traces; skipped `too_fresh` < 10 min,
+`already_in_dataset`), syncs the target to AWS (or creates an empty AWS dataset for a new
+name), calls `StartDatasetGeneration` with `selection.identifiers.sessionIds`, the runtime
+log group + service name and an explicit window (FIXED: `groundTruth.fields` =
+`expected_response` when `keep_replies`, `expected_trajectory`), polls
+`GetDatasetGeneration`, then stores the generated examples verbatim in the local row and
+deletes the ones it does not keep from the Draft (skip reasons `generation_failed` +
+`code`, `unexpected_session`, `interrupt_transcript`, `invalid_example`, `duplicate`,
+`dataset_full`). FIXED needs a `predefined` target, DYNAMIC a `simulated` one (else 400
+`pipeline.target_kind_mismatch`); `ConflictException` → `dataset.generation_running`.
+`last_run.generation = {id, cloud_dataset_id, scenario_type, stage, status, requested,
+results{sessionsMatched…examplesWithGroundTruth}, error_details[{code, message, count,
+session_ids}], redaction{scanned, findings}, failure_reason}`; a run with a started
+generation resumes after a restart.
+
 | Method | Path | Behavior |
 |---|---|---|
 | `POST` | `/api/eval/datasets/from-sessions` | `{session_ids[1..50], range, dataset_id XOR name, description?, first_turn_only?, dedupe?}` → 201 `{dataset, added, skipped[{session_id, reason}]}`. Reasons: `not_found`, `no_transcript`, `no_exchange`, and (with an empty `session_id`) `duplicate` / `dataset_full`. A new dataset with nothing usable → 422 `dataset.nothing_extracted` with `detail.skipped` |
-| `GET` · `POST` | `/api/eval/pipelines` | List / create a saved processing task: `{name, description, source{type: traces\|logs, range, max_sessions ≤ 50, agent, status: all\|ok\|error (traces), log_groups[1..10], keyword?, format{preset: genai\|message\|exchange, session_field, role_field, text_field, user_roles, assistant_roles, input_field, output_field} (logs)}, processing{first_turn_only, dedupe, min_input_chars, keep_replies}, output{dataset_id XOR dataset_name}}` (an unknown or simulated output dataset → 404 / 400; a source without `type` is `traces`) |
+| `GET` · `POST` | `/api/eval/pipelines` | List / create a saved processing task: `{name, description, source{type: traces\|logs\|agentcore, range, max_sessions ≤ 50 (≤ 25 agentcore), agent, status: all\|ok\|error (traces), log_groups[1..10], keyword?, format{preset: genai\|message\|exchange, session_field, role_field, text_field, user_roles, assistant_roles, input_field, output_field} (logs), agent_id, scenario_type, expected_trajectory, redaction (agentcore)}, processing{first_turn_only, dedupe, min_input_chars, keep_replies}, output{dataset_id XOR dataset_name}}` (an unknown or simulated output dataset → 404 / 400; a source without `type` is `traces`) |
 | `POST` | `/api/eval/pipelines/preview-logs` | `{source}` (a logs source) → what it reads and extracts now, through the converter a run uses: `{events, truncated, parsed, failed{not_json\|not_genai\|no_session\|no_text\|other_role: n}, sessions_found, sessions[≤8 {session_id, stream, log_group, last, records, turns}], samples[≤5 raw {stream, timestamp, message}], paths[≤60 dotted field paths seen in the records]}`; a traces source → 422 `pipeline.not_logs` |
 | `GET` · `PUT` · `DELETE` | `/api/eval/pipelines/{pipeline_id}` | Read / replace (409 `pipeline.running` while running) / delete — the output dataset is kept |
 | `POST` | `/api/eval/pipelines/{pipeline_id}/run` | `202` with the row as `running` (409 `pipeline.running` if it already is); the bounded run proceeds in the background: list the window's sessions, filter by agent/status, read at most `max_sessions` newest, extract, merge (a logs source: query, convert, take the `max_sessions` newest sessions). The outcome lands on the row as `last_run{at, scanned, matched, added, skipped, dataset_id, error}` (plus `log{events, parsed, failed, truncated}` for a logs source) with `status` `succeeded` / `failed` (a run interrupted by a server restart reads back as `failed`); a `dataset_name` output is created on the first run and the pipeline then targets its id |
