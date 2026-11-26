@@ -1455,6 +1455,23 @@ def delete_dataset_examples(
     )
 
 
+# AddDatasetExamples / DeleteDatasetExamples / UpdateDatasetExamples take at most this
+# many examples per call.
+DATASET_EXAMPLES_PER_CALL = 1000
+
+
+def update_dataset_examples(
+    client: Any, *, dataset_id: str, examples: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """UpdateDatasetExamples on the DRAFT — every element is ``{exampleId, scenario_id,
+    …fields}`` and REPLACES that example outright (live-verified: fields left out are
+    dropped, not merged), so send the complete scenario. All-or-nothing validation,
+    async (poll to ACTIVE after)."""
+    return client.update_dataset_examples(
+        datasetId=dataset_id, clientToken=str(uuid.uuid4()), examples=examples
+    )
+
+
 def create_dataset_version(client: Any, *, dataset_id: str) -> dict[str, Any]:
     """Publish the DRAFT as the next immutable numbered version. The draft
     persists (draftStatus flips MODIFIED → UNMODIFIED); status goes UPDATING

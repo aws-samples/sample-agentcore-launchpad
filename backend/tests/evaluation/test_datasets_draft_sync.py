@@ -1,9 +1,10 @@
 """Cloud datasets — re-sync edits the AWS DRAFT in place, publish versions.
 
-One local row ↔ one AWS Dataset: the first sync creates it, later syncs replace
-the draft's examples (ListDatasetExamples → DeleteDatasetExamples →
-AddDatasetExamples, polled to ACTIVE), PUBLISH VERSION snapshots the draft as an
-immutable numbered version (CreateDatasetVersion → UPDATING → ACTIVE).
+One local row ↔ one AWS Dataset: the first sync creates it, later syncs diff the
+local scenarios against the draft by scenario_id (ListDatasetExamples → Delete →
+Update → AddDatasetExamples, only the calls with work to do, each polled to
+ACTIVE), PUBLISH VERSION snapshots the draft as an immutable numbered version
+(CreateDatasetVersion → UPDATING → ACTIVE).
 """
 
 from datetime import UTC, datetime
@@ -13,7 +14,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from app.evaluation import agentcore_eval as ac
-from app.evaluation.scenarios import normalize_scenarios
+from app.evaluation.scenarios import diff_examples, example_signature
 
 ARN = "arn:aws:bedrock-agentcore:us-west-2:1:dataset/cloudds-1"
 CREATED_AT = datetime(2026, 9, 5, 10, 0, tzinfo=UTC)
@@ -61,17 +62,16 @@ def stub_cloud(monkeypatch, *, get_side_effect=None, examples=(), versions=()):
     return stub
 
 
-def _synced_row(client, monkeypatch, **stub_kwargs):
+def _synced_row(client, monkeypatch, items=None, **stub_kwargs):
     """A local row that already has an ACTIVE cloud copy (first sync = create)."""
     stub = stub_cloud(monkeypatch, **stub_kwargs)
     ds = client.post("/api/eval/datasets", json={
-        "name": "sync me!", "items": [{"prompt": "2+2?", "expected": "4"}],
+        "name": "sync me!", "items": items or [{"prompt": "2+2?", "expected": "4"}],
     }).json()
     res = client.post(f"/api/eval/datasets/{ds['id']}/sync-to-aws")
     assert res.status_code == 200, res.text
     stub.create_dataset.assert_called_once()
-    stub.create_dataset.reset_mock()
-    stub.get_dataset.reset_mock()
+    stub.reset_mock()  # clears the recorded calls; return values / side effects stay
     return stub, res.json()
 
 
@@ -154,50 +154,258 @@ def test_first_sync_without_cloud_copy_creates(client, monkeypatch):
     assert cloud["versions"] == []
 
 
-def test_resync_edits_draft_in_place(client, monkeypatch):
+def _scn(sid, text, **extra):
+    return {"scenario_id": sid, "turns": [{"input": text}], **extra}
+
+
+def _cloud_ex(sid, text, **extra):
+    """A DRAFT example as ListDatasetExamples returns it (exampleId == scenario_id for
+    inline-added examples)."""
+    return {"exampleId": sid, **_scn(sid, text, **extra)}
+
+
+def _write_calls(stub):
+    ops = {"list_dataset_examples", "get_dataset", "delete_dataset_examples",
+           "update_dataset_examples", "add_dataset_examples"}
+    return [c[0] for c in stub.mock_calls if c[0] in ops]
+
+
+def _resync(client, ds_id):
+    return client.post(f"/api/eval/datasets/{ds_id}/sync-to-aws")
+
+
+def test_resync_mixed_diff_deletes_then_updates_then_adds(client, monkeypatch):
     stub, ds = _synced_row(
         client, monkeypatch,
-        examples=[{"exampleId": "ex-1", "scenario_id": "item_1", "turns": []},
-                  {"exampleId": "ex-2", "scenario_id": "item_2", "turns": []}],
+        items=[_scn("keep", "same"), _scn("edit", "new text"), _scn("fresh", "brand new")],
+        examples=[_cloud_ex("keep", "same"), _cloud_ex("edit", "old text"),
+                  _cloud_ex("gone", "generated elsewhere")],
         versions=[{"datasetVersion": "1", "exampleCount": 2, "createdAt": CREATED_AT}],
+        get_side_effect=[_detail(count=3)],
     )
-    # edit locally, then re-sync
-    edited = client.put(f"/api/eval/datasets/{ds['id']}", json={
-        "name": "sync me!", "items": [{"prompt": "3+3?", "expected": "6"}, {"prompt": "x"}],
-    })
-    assert edited.status_code == 200, edited.text
-    res = client.post(f"/api/eval/datasets/{ds['id']}/sync-to-aws")
+    res = _resync(client, ds["id"])
     assert res.status_code == 200, res.text
 
     stub.create_dataset.assert_not_called()
     stub.list_dataset_examples.assert_called_once_with(datasetId="cloudds-1")
-    stub.delete_dataset_examples.assert_called_once()
-    del_kwargs = stub.delete_dataset_examples.call_args.kwargs
-    assert del_kwargs["datasetId"] == "cloudds-1"
-    assert del_kwargs["exampleIds"] == ["ex-1", "ex-2"]
-    stub.add_dataset_examples.assert_called_once()
-    add_kwargs = stub.add_dataset_examples.call_args.kwargs
-    assert add_kwargs["datasetId"] == "cloudds-1"
-    assert add_kwargs["source"] == {
-        "inlineExamples": {"examples": normalize_scenarios(edited.json()["items"])}
+    # one call per kind, in this order, each followed by a poll to ACTIVE
+    assert _write_calls(stub) == [
+        "get_dataset", "list_dataset_examples",
+        "delete_dataset_examples", "get_dataset",
+        "update_dataset_examples", "get_dataset",
+        "add_dataset_examples", "get_dataset",
+    ]
+    assert stub.delete_dataset_examples.call_args.kwargs["exampleIds"] == ["gone"]
+    update = stub.update_dataset_examples.call_args.kwargs
+    assert update["datasetId"] == "cloudds-1" and update["clientToken"]
+    assert update["examples"] == [{**_scn("edit", "new text"), "exampleId": "edit"}]
+    assert stub.add_dataset_examples.call_args.kwargs["source"] == {
+        "inlineExamples": {"examples": [_scn("fresh", "brand new")]}
     }
-    # ordering: list → delete → add; GetDataset polled after each step
-    names = [c[0] for c in stub.mock_calls if c[0] in {
-        "list_dataset_examples", "delete_dataset_examples", "add_dataset_examples",
-    }]
-    assert names == ["list_dataset_examples", "delete_dataset_examples", "add_dataset_examples"]
-    assert stub.get_dataset.call_count >= 3  # existence check + after delete + after add
-
     cloud = res.json()["cloud"]
+    assert cloud["last_sync"] == {"added": 1, "updated": 1, "deleted": 1, "unchanged": 1}
     assert cloud["dataset_id"] == "cloudds-1"  # same dataset, not a new one
-    assert cloud["arn"] == ARN
-    assert cloud["status"] == "ACTIVE"
-    assert cloud["draft_status"] == "MODIFIED"
-    assert cloud["example_count"] == 1
-    assert cloud["failure_reason"] is None
+    assert cloud["status"] == "ACTIVE" and cloud["failure_reason"] is None
     assert cloud["versions"] == [
         {"version": "1", "example_count": 2, "created_at": CREATED_AT.isoformat()}
     ]
+
+
+def test_resync_without_differences_makes_no_write_call(client, monkeypatch):
+    stub, ds = _synced_row(
+        client, monkeypatch,
+        items=[_scn("a", "one"), _scn("b", "two")],
+        examples=[_cloud_ex("a", "one"), _cloud_ex("b", "two")],
+        get_side_effect=[_detail(draft="UNMODIFIED", count=2)],
+    )
+    res = _resync(client, ds["id"])
+    assert res.status_code == 200, res.text
+    for write in ("create_dataset", "add_dataset_examples", "update_dataset_examples",
+                  "delete_dataset_examples"):
+        getattr(stub, write).assert_not_called()
+    assert stub.get_dataset.call_count == 1  # the existence check only
+    cloud = res.json()["cloud"]
+    assert cloud["draft_status"] == "UNMODIFIED"  # nothing was written to the draft
+    assert cloud["last_sync"] == {"added": 0, "updated": 0, "deleted": 0, "unchanged": 2}
+
+
+def test_resync_add_only_and_delete_only(client, monkeypatch):
+    stub, ds = _synced_row(
+        client, monkeypatch,
+        items=[_scn("a", "one"), _scn("b", "two")],
+        examples=[_cloud_ex("a", "one")],
+    )
+    res = _resync(client, ds["id"])
+    assert res.status_code == 200, res.text
+    assert _write_calls(stub)[2:] == ["add_dataset_examples", "get_dataset"]
+    stub.delete_dataset_examples.assert_not_called()
+    stub.update_dataset_examples.assert_not_called()
+    assert res.json()["cloud"]["last_sync"] == {
+        "added": 1, "updated": 0, "deleted": 0, "unchanged": 1,
+    }
+
+    stub.reset_mock()
+    stub.list_dataset_examples.return_value = {
+        "examples": [_cloud_ex("a", "one"), _cloud_ex("b", "two"), _cloud_ex("c", "extra")],
+    }
+    res = _resync(client, ds["id"])
+    assert res.status_code == 200, res.text
+    assert stub.delete_dataset_examples.call_args.kwargs["exampleIds"] == ["c"]
+    stub.add_dataset_examples.assert_not_called()
+    stub.update_dataset_examples.assert_not_called()
+    assert res.json()["cloud"]["last_sync"] == {
+        "added": 0, "updated": 0, "deleted": 1, "unchanged": 2,
+    }
+
+
+def test_resync_changed_scenario_only_updates_that_example(client, monkeypatch):
+    stub, ds = _synced_row(
+        client, monkeypatch,
+        items=[_scn("a", "one"), _scn("b", "two edited", assertions=["says two"])],
+        examples=[_cloud_ex("a", "one"), _cloud_ex("b", "two")],
+    )
+    res = _resync(client, ds["id"])
+    assert res.status_code == 200, res.text
+    # UpdateDatasetExamples replaces the example, so the whole scenario is sent
+    assert stub.update_dataset_examples.call_args.kwargs["examples"] == [
+        {"scenario_id": "b", "turns": [{"input": "two edited"}], "assertions": ["says two"],
+         "exampleId": "b"},
+    ]
+    stub.delete_dataset_examples.assert_not_called()
+    stub.add_dataset_examples.assert_not_called()
+
+
+GEN_META = {"generation_id": "g-1234567890", "source": {"session_id": "sess-1"},
+            "redaction": {"operation": "DEIDENTIFY", "identifiers": []}}
+
+
+def test_resync_ignores_agentcore_metadata_but_not_user_metadata(client, monkeypatch):
+    generated = _cloud_ex("a", "one", metadata=dict(GEN_META))
+    stub, ds = _synced_row(
+        client, monkeypatch,
+        items=[_scn("a", "one"), _scn("b", "two", metadata={"tag": "x"})],
+        examples=[generated, _cloud_ex("b", "two", metadata={"tag": "x", **GEN_META})],
+    )
+    res = _resync(client, ds["id"])
+    assert res.status_code == 200, res.text
+    stub.update_dataset_examples.assert_not_called()  # AgentCore-added keys are not a change
+    assert res.json()["cloud"]["last_sync"]["unchanged"] == 2
+
+    stub.list_dataset_examples.return_value = {
+        "examples": [generated, _cloud_ex("b", "two", metadata={"tag": "y", **GEN_META})],
+    }
+    res = _resync(client, ds["id"])
+    assert res.json()["cloud"]["last_sync"] == {
+        "added": 0, "updated": 1, "deleted": 0, "unchanged": 1,
+    }
+    # the replacement keeps the provenance AgentCore dedupes on
+    assert stub.update_dataset_examples.call_args.kwargs["examples"] == [
+        {**_scn("b", "two", metadata={**GEN_META, "tag": "x"}), "exampleId": "b"}
+    ]
+
+
+def test_resync_edit_of_generated_example_keeps_its_agentcore_metadata(client, monkeypatch):
+    stub, ds = _synced_row(
+        client, monkeypatch,
+        items=[_scn("g1", "edited locally")],
+        examples=[_cloud_ex("g1", "as generated", metadata=dict(GEN_META))],
+    )
+    assert _resync(client, ds["id"]).status_code == 200
+    assert stub.update_dataset_examples.call_args.kwargs["examples"] == [
+        {**_scn("g1", "edited locally", metadata=dict(GEN_META)), "exampleId": "g1"}
+    ]
+
+
+def test_resync_legacy_prompt_items_match_positional_ids(client, monkeypatch):
+    stub, ds = _synced_row(
+        client, monkeypatch,
+        items=[{"prompt": "2+2?", "expected": "4"}, {"prompt": "hi"}],
+        examples=[
+            {"exampleId": "item_1", "scenario_id": "item_1",
+             "turns": [{"input": "2+2?", "expected_response": "4"}]},
+            {"exampleId": "item_2", "scenario_id": "item_2", "turns": [{"input": "hi"}]},
+        ],
+    )
+    res = _resync(client, ds["id"])
+    assert res.status_code == 200, res.text
+    stub.add_dataset_examples.assert_not_called()
+    assert res.json()["cloud"]["last_sync"]["unchanged"] == 2
+
+
+@pytest.mark.parametrize("write", ["delete_dataset_examples", "update_dataset_examples",
+                                   "add_dataset_examples"])
+def test_resync_conflict_is_409_generation_running_and_blob_untouched(
+    client, monkeypatch, write
+):
+    stub, ds = _synced_row(
+        client, monkeypatch,
+        items=[_scn("edit", "new"), _scn("fresh", "x")],
+        examples=[_cloud_ex("edit", "old"), _cloud_ex("gone", "y")],
+    )
+    getattr(stub, write).side_effect = ClientError(
+        {"Error": {"Code": "ConflictException", "Message": "generation in progress"}}, write
+    )
+    before = client.get("/api/eval/datasets").json()["datasets"]
+    res = _resync(client, ds["id"])
+    assert res.status_code == 409
+    assert res.json()["code"] == "dataset.generation_running"
+    assert "generation in progress" in res.json()["message"]
+    assert client.get("/api/eval/datasets").json()["datasets"] == before  # no UPDATE_FAILED
+
+
+def test_resync_splits_writes_into_calls_of_at_most_1000(client, monkeypatch):
+    stub, ds = _synced_row(
+        client, monkeypatch,
+        items=[_scn("only", "x")],
+        examples=[_cloud_ex(f"g{i}", "y") for i in range(1001)],
+    )
+    res = _resync(client, ds["id"])
+    assert res.status_code == 200, res.text
+    sent = [len(c.kwargs["exampleIds"]) for c in stub.delete_dataset_examples.call_args_list]
+    assert sent == [1000, 1]
+    stub.add_dataset_examples.assert_called_once()
+
+
+def test_publish_keeps_last_sync(client, monkeypatch):
+    stub, ds = _synced_row(client, monkeypatch, examples=[])
+    assert _resync(client, ds["id"]).json()["cloud"]["last_sync"]["added"] == 1
+    seq = [_detail("ACTIVE"), _detail("ACTIVE", draft="UNMODIFIED", count=1)]
+    stub.get_dataset.side_effect = lambda **_k: seq.pop(0) if len(seq) > 1 else seq[0]
+    res = client.post(f"/api/eval/datasets/{ds['id']}/publish-version")
+    assert res.status_code == 200, res.text
+    assert res.json()["cloud"]["last_sync"] == {
+        "added": 1, "updated": 0, "deleted": 0, "unchanged": 0,
+    }
+
+
+# ─── diff helpers ────────────────────────────────────────────────────────────
+def test_example_signature_ignores_example_id_and_key_order_only():
+    a = {"exampleId": "e1", "scenario_id": "s", "turns": [{"input": "x"}]}
+    b = {"turns": [{"input": "x"}], "scenario_id": "s"}
+    assert example_signature(a) == example_signature(b)
+    assert example_signature({**b, "metadata": {"k": 1}}) != example_signature(b)
+    assert example_signature({**b, "assertions": ["z"]}) != example_signature(b)
+
+
+def test_diff_examples_unmatchable_cloud_examples_are_deleted():
+    cloud = [
+        {"exampleId": "e1", "scenario_id": "s", "turns": [{"input": "x"}]},
+        {"exampleId": "e2", "scenario_id": "s", "turns": [{"input": "dup"}]},  # repeated id
+        {"exampleId": "e3", "turns": [{"input": "no id"}]},
+    ]
+    diff = diff_examples([_scn("s", "x")], cloud)
+    assert diff.deleted == ["e2", "e3"]
+    assert diff.counts() == {"added": 0, "updated": 0, "deleted": 2, "unchanged": 1}
+
+
+def test_update_wrapper_call_shape():
+    client = MagicMock()
+    ac.update_dataset_examples(
+        client, dataset_id="d", examples=[{"exampleId": "e", "scenario_id": "a"}]
+    )
+    kwargs = client.update_dataset_examples.call_args.kwargs
+    assert kwargs["datasetId"] == "d" and kwargs["clientToken"]
+    assert kwargs["examples"] == [{"exampleId": "e", "scenario_id": "a"}]
 
 
 def test_resync_empty_draft_skips_delete(client, monkeypatch):

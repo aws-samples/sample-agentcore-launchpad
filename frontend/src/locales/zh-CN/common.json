@@ -2791,6 +2791,7 @@
     "golden.holdout_closed_why": "留出集不能被调优，编制后就不再写入；新样本请走样本准入，进入开发集或回归集。",
     "golden.holdout_sealed": "留出集已经编制并封存。",
     "golden.holdout_sealed_why": "封存是为了让后续改动无法针对它调优；新样本请走样本准入。",
+    "dataset.generation_running": "该数据集上有 AgentCore 数据集生成正在运行——请在其完成后重试同步。",
     "dataset.golden_managed": "黄金集不能当作普通数据集修改或删除。",
     "dataset.golden_managed_why": "黄金集及其切分只能在黄金集页面里准入、移动或退役样本，这样才能保留来源记录和留出集的封存。",
     "golden.delete_busy": "还有评估在使用这个黄金集。",

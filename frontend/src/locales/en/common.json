@@ -2791,6 +2791,7 @@
     "golden.holdout_closed_why": "Nobody tunes against the holdout, so it is never written after curation; new samples go through sample admission into dev or regression.",
     "golden.holdout_sealed": "The holdout split is already curated and sealed.",
     "golden.holdout_sealed_why": "Sealing keeps later changes from being tuned against it; new samples go through sample admission.",
+    "dataset.generation_running": "An AgentCore dataset generation is running on this dataset — retry the sync once it finishes.",
     "dataset.golden_managed": "A golden set cannot be edited or deleted as a plain dataset.",
     "dataset.golden_managed_why": "A golden set and its splits change only on the golden set page — admit, move or retire items there — so provenance and the holdout seal are kept.",
     "golden.delete_busy": "An evaluation is still running on this golden set.",

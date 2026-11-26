@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
 # A scenario's input preview on the run row (`EvalRun.scenario_map`) and the compare read.
@@ -93,6 +94,80 @@ def aws_examples(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         item if scenario_kind(item) != "legacy" else normalized[i]
         for i, item in enumerate(items)
     ]
+
+
+# Top-level `metadata` keys AgentCore writes onto the examples it generates: the generation
+# id, the source descriptor (session id, log groups / batch ARN) and the redaction record.
+# They do not count toward the 2 KB metadata limit, and AgentCore dedupes later generations
+# on `source` — so a sync must never strip them from an example.
+AGENTCORE_METADATA_KEYS = frozenset({"generation_id", "source", "redaction"})
+
+
+def example_signature(example: dict[str, Any]) -> str:
+    """Canonical JSON (sorted keys) of an example without its service-assigned
+    ``exampleId`` — equal signatures mean equal content."""
+    body = {k: v for k, v in example.items() if k != "exampleId"}
+    return json.dumps(body, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def with_agentcore_metadata(scenario: dict[str, Any], cloud: dict[str, Any]) -> dict[str, Any]:
+    """``scenario`` plus the AgentCore-added ``metadata`` keys its AWS copy ``cloud`` carries
+    and the scenario lacks, so a local row that never pulled them down neither shows a
+    difference nor loses them when UpdateDatasetExamples replaces the example."""
+    carried = {
+        k: v
+        for k, v in (cloud.get("metadata") or {}).items()
+        if k in AGENTCORE_METADATA_KEYS and k not in (scenario.get("metadata") or {})
+    }
+    if not carried:
+        return scenario
+    return {**scenario, "metadata": {**carried, **(scenario.get("metadata") or {})}}
+
+
+@dataclass
+class ExampleDiff:
+    """What turns a DRAFT's examples into the local scenarios, keyed by ``scenario_id``."""
+
+    added: list[dict[str, Any]] = field(default_factory=list)  # local-only scenarios
+    # (exampleId, the complete replacement example incl. carried AgentCore metadata)
+    updated: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    deleted: list[str] = field(default_factory=list)  # exampleIds of cloud-only examples
+    unchanged: int = 0
+
+    def counts(self) -> dict[str, int]:
+        return {
+            "added": len(self.added),
+            "updated": len(self.updated),
+            "deleted": len(self.deleted),
+            "unchanged": self.unchanged,
+        }
+
+
+def diff_examples(local: list[dict[str, Any]], cloud: list[dict[str, Any]]) -> ExampleDiff:
+    """Diff the local scenarios against a DRAFT's examples (ListDatasetExamples) by
+    ``scenario_id``. A cloud example without a ``scenario_id`` (or repeating one already
+    seen) cannot be matched and is deleted."""
+    diff = ExampleDiff()
+    by_id: dict[str, dict[str, Any]] = {}
+    for ex in cloud:
+        example_id = ex.get("exampleId")
+        scenario_id = ex.get("scenario_id")
+        if scenario_id and scenario_id not in by_id:
+            by_id[scenario_id] = ex
+        elif example_id:
+            diff.deleted.append(example_id)
+    for scenario in local:
+        match = by_id.pop(scenario["scenario_id"], None)
+        if match is None:
+            diff.added.append(scenario)
+        else:
+            replacement = with_agentcore_metadata(scenario, match)
+            if example_signature(match) == example_signature(replacement):
+                diff.unchanged += 1
+            else:
+                diff.updated.append((match["exampleId"], replacement))
+    diff.deleted.extend(ex["exampleId"] for ex in by_id.values() if ex.get("exampleId"))
+    return diff
 
 
 def scenario_prompts(scenario: dict[str, Any]) -> list[str]:
