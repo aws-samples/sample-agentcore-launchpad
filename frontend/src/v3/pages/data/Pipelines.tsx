@@ -76,7 +76,8 @@ export function PipelinesTab() {
     const src = p.config.source;
     if (src.type === "agentcore") {
       const scenario = scenarioTypeOf(src) === "DYNAMIC" ? t("v2.pipelines.ac.dynamic") : t("v2.pipelines.ac.fixed");
-      return [t("v2.pipelines.srcAgentcore"), src.agent ?? src.agent_id ?? "—", rangeLabel(t, src.range), scenario].join(" · ");
+      const span = src.batch_run_id ? t("v2.pipelines.ac.fromRunShort", { id: src.batch_run_id }) : rangeLabel(t, src.range);
+      return [t("v2.pipelines.srcAgentcore"), src.agent ?? src.agent_id ?? "—", span, scenario].join(" · ");
     }
     if (src.type === "logs") {
       const groups = src.log_groups ?? [];

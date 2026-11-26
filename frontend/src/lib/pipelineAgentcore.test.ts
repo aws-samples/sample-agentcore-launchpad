@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import type { AgentInfo, ObsSessionRow, V2Dataset, V2PipelineSource } from "./api";
+import type { EvaluationRunInfo, EvaluationRunResultRow, EvaluationRunResults } from "./evaluation";
 import {
   cleanAgentcoreProcessing,
   cleanAgentcoreSource,
   cleanRedaction,
   generationAgents,
+  generationRuns,
+  lowestNormalized,
+  previewRunSessions,
+  sessionsFromOf,
   previewAgentcoreSessions,
   receivableDatasets,
   redactionProblem,
@@ -125,6 +130,8 @@ describe("cleanAgentcoreSource / cleanAgentcoreProcessing", () => {
   it("sends only agentcore fields, clamps the cap, carries the agent name for display", () => {
     const out = cleanAgentcoreSource({ ...src({ max_sessions: 40 }), log_groups: ["/x"], keyword: "k", format: null }, "hr-bot");
     expect(out).toEqual({
+      batch_run_id: null,
+      max_score: 0.7,
       type: "agentcore",
       agent: "hr-bot",
       agent_id: "a1",
@@ -148,5 +155,63 @@ describe("cleanAgentcoreSource / cleanAgentcoreProcessing", () => {
     const out = cleanAgentcoreSource(src({ scenario_type: undefined, expected_trajectory: undefined }), null);
     expect(out.scenario_type).toBe("FIXED");
     expect(out.expected_trajectory).toBe(true);
+  });
+});
+
+describe("run-sourced generation (P3)", () => {
+  const res = (evaluator_id: string, score: number | null): EvaluationRunResultRow => ({
+    evaluator_id, level: "SESSION", score, label: null, explanation: null, error_type: score == null ? "X" : null, error_message: null,
+  });
+  const results = (sessions: Record<string, EvaluationRunResultRow[]>): EvaluationRunResults => ({
+    run_id: "r1", batch_eval_id: "b1", available: true, count: Object.keys(sessions).length, truncated: false,
+    sessions: Object.entries(sessions).map(([session_id, rows]) => ({ session_id, results: rows })) as EvaluationRunResults["sessions"],
+  });
+
+  it("lowestNormalized inverts lower-is-better evaluators and ignores failed judgements", () => {
+    expect(lowestNormalized([res("Builtin.Helpfulness", 0.9), res("Builtin.Correctness", 0.6)])).toBeCloseTo(0.6);
+    expect(lowestNormalized([res("Builtin.Refusal", 0.8)])).toBeCloseTo(0.2); // penalty evaluator: 1 - score
+    expect(lowestNormalized([res("Builtin.Helpfulness", null)])).toBeNull();
+    expect(lowestNormalized([])).toBeNull();
+  });
+
+  it("marks sessions like the backend: unscored, above threshold, unsupported id, cap, run order", () => {
+    const r = results({
+      good: [res("Builtin.Helpfulness", 0.95)],
+      bad1: [res("Builtin.Helpfulness", 0.95), res("Builtin.Correctness", 0.3)],
+      none: [res("Builtin.Helpfulness", null)],
+      "bad id!": [res("Builtin.Correctness", 0.1)],
+      bad2: [res("Builtin.Correctness", 0.5)],
+      bad3: [res("Builtin.Correctness", 0.69)],
+    });
+    const order = ["bad3", "good", "bad1", "none", "bad id!", "bad2", "bad1"];
+    const rows = previewRunSessions(r, order, src({ batch_run_id: "r1", max_score: 0.7, max_sessions: 2 }));
+    expect(rows.map((x) => [x.session_id, x.verdict])).toEqual([
+      ["bad3", "send"], ["good", "above"], ["bad1", "send"], ["none", "unscored"], ["bad id!", "unsupported"], ["bad2", "overflow"],
+    ]);
+    // null threshold = every scored session; no run session list = the results' order
+    const all = previewRunSessions(r, [], src({ batch_run_id: "r1", max_score: null, max_sessions: 25 }));
+    expect(all.filter((x) => x.verdict === "send").map((x) => x.session_id)).toEqual(["good", "bad1", "bad2", "bad3"]);
+    expect(previewRunSessions(null, order, src())).toEqual([]);
+  });
+
+  it("offers the agent's completed evaluator runs only, newest first", () => {
+    const run = (id: string, patch: Partial<EvaluationRunInfo>) => ({ id, agent_id: "a1", mode: "evaluators", status: "completed", created_at: "2026-11-01T00:00:00Z", ...patch }) as EvaluationRunInfo;
+    const runs = [
+      run("old", {}),
+      run("new", { created_at: "2026-11-20T00:00:00Z" }),
+      run("insights", { mode: "insights" }),
+      run("active", { status: "invoking" }),
+      run("other", { agent_id: "a2" }),
+    ];
+    expect(generationRuns(runs, "a1").map((r) => r.id)).toEqual(["new", "old"]);
+    expect(generationRuns(runs, null)).toEqual([]);
+  });
+
+  it("sends the run id and threshold; a run-mode draft without a run is still run mode", () => {
+    expect(sessionsFromOf(src({ batch_run_id: "" }))).toBe("run");
+    expect(sessionsFromOf(src({ batch_run_id: null }))).toBe("traffic");
+    expect(cleanAgentcoreSource(src({ batch_run_id: "r1", max_score: 1.4 }), "hr-bot")).toMatchObject({ batch_run_id: "r1", max_score: 1 });
+    expect(cleanAgentcoreSource(src({ batch_run_id: "r1", max_score: null }), "hr-bot").max_score).toBeNull();
+    expect(cleanAgentcoreSource(src({ batch_run_id: "" }), "hr-bot").batch_run_id).toBeNull();
   });
 });

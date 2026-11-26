@@ -3,17 +3,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { api, errorMessage, type V2Pipeline, type V2PipelineBody, type V2Range } from "../../../lib/api";
+import { api, ApiError, errorMessage, type V2Pipeline, type V2PipelineBody, type V2Range } from "../../../lib/api";
 import {
   AGENTCORE_MAX_SESSIONS,
   cleanAgentcoreProcessing,
   cleanAgentcoreSource,
   generationAgents,
+  generationRuns,
   previewAgentcoreSessions,
+  previewRunSessions,
   REDACTION_PROBLEM_KEY,
   receivableDatasets,
   redactionProblem,
   scenarioTypeOf,
+  sessionsFromOf,
   targetKind,
 } from "../../../lib/pipelineAgentcore";
 import { cleanSource, defaultLogFormat, logSourceProblem, PROBLEM_KEY } from "../../../lib/pipelineLogs";
@@ -40,7 +43,7 @@ import {
   Tag,
   type TagTone,
 } from "../../ui";
-import { AgentcoreLogic, AgentcorePreviewCard, AgentcoreSourceFields, GenerationRunCard } from "./AgentcoreSource";
+import { AgentcoreLogic, AgentcorePreviewCard, AgentcoreSourceFields, GenerationRunCard, RunPreviewCard } from "./AgentcoreSource";
 import { LogFormatStep, LogSourceFields } from "./LogSource";
 
 const STATUS_TONE: Record<V2Pipeline["status"], TagTone> = {
@@ -167,7 +170,7 @@ export function PipelinesTab() {
               <span className="sub">
                 {[
                   src.agent ?? src.agent_id ?? "—",
-                  rangeLabel(t, src.range),
+                  src.batch_run_id ? t("v2.pipelines.ac.fromRunShort", { id: src.batch_run_id }) : rangeLabel(t, src.range),
                   scenarioTypeOf(src) === "DYNAMIC" ? t("v2.pipelines.ac.dynamic") : t("v2.pipelines.ac.fixed"),
                 ].join(" · ")}
               </span>
@@ -305,8 +308,18 @@ export function PipelineEditor({ id }: { id: string | null }) {
   const range: V2Range = draft?.source.range ?? "24h";
   const isLogs = draft?.source.type === "logs";
   const isAgentcore = draft?.source.type === "agentcore";
-  // the trajectory preview only — a logs source previews in its format step
-  const sessions = useLoad(() => (isLogs ? Promise.resolve(null) : api.obsSessions(range)), `sessions:${isLogs ? "logs" : range}`);
+  // P3: an agentcore source may read one evaluation run's sessions instead of recent traffic
+  const fromRun = isAgentcore && !!draft && sessionsFromOf(draft.source) === "run";
+  const agentId = draft?.source.agent_id ?? null;
+  const runId = fromRun ? (draft?.source.batch_run_id ?? "") : "";
+  // the trajectory preview only — a logs source previews in its format step, a run source from the run
+  const noTraffic = isLogs || fromRun;
+  const sessions = useLoad(() => (noTraffic ? Promise.resolve(null) : api.obsSessions(range)), `sessions:${noTraffic ? "none" : range}`);
+  const runList = useLoad(
+    () => (fromRun && agentId ? api.listEvaluationRuns({ agent_id: agentId, mode: "evaluators", limit: 100 }) : Promise.resolve(null)),
+    `pipeline-runs:${fromRun ? (agentId ?? "") : "off"}`,
+  );
+  const runResults = useLoad(() => (runId ? api.evaluationRunResults(runId) : Promise.resolve(null)), `pipeline-run-results:${runId}`);
   // AgentCore 生成 reads one platform agent's sessions
   const agentList = useLoad(() => (isAgentcore ? api.listAgents() : Promise.resolve(null)), `pipeline-agents:${isAgentcore ? "on" : "off"}`);
 
@@ -341,6 +354,12 @@ export function PipelineEditor({ id }: { id: string | null }) {
   const pickedAgent = genAgents.find((a) => a.id === draft?.source.agent_id);
   // sessions are labelled by the agent's (ledger) name; a saved pipeline remembers it
   const agentName = pickedAgent?.name ?? (draft?.source.agent_id ? draft.source.agent : null) ?? null;
+  const genRuns = useMemo(() => generationRuns(runList.data?.runs ?? [], agentId), [runList.data, agentId]);
+  const runPreview = useMemo(() => {
+    if (!draft || !fromRun) return [];
+    const info = genRuns.find((r) => r.id === draft.source.batch_run_id);
+    return previewRunSessions(runResults.data, info?.session_ids ?? [], draft.source);
+  }, [draft, fromRun, genRuns, runResults.data]);
   const acPreview = useMemo(
     () => (draft && isAgentcore ? previewAgentcoreSessions(sessions.data?.sessions ?? [], draft.source, agentName) : null),
     [sessions.data, draft, isAgentcore, agentName],
@@ -365,6 +384,7 @@ export function PipelineEditor({ id }: { id: string | null }) {
     if (problem) return setError(t(PROBLEM_KEY[problem]));
     if (isAgentcore) {
       if (!draft.source.agent_id) return setError(t("v2.pipelines.ac.errAgent"));
+      if (fromRun && !draft.source.batch_run_id) return setError(t("v2.pipelines.ac.errRun"));
       const redaction = redactionProblem(draft.source.redaction);
       if (redaction) return setError(t(REDACTION_PROBLEM_KEY[redaction]));
       if (targetMismatch) return setError(t("v2.pipelines.ac.errTargetKind", { kind: t(`v2.pipelines.ac.kind.${wantKind}`) }));
@@ -389,7 +409,9 @@ export function PipelineEditor({ id }: { id: string | null }) {
       }
       setParams({ tab: "pipelines" });
     } catch (err) {
-      setError(errorMessage(err));
+      // P3: say which rule the picked evaluation run broke
+      const reason = err instanceof ApiError && err.code === "pipeline.run_not_generatable" ? (err.detail as { reason?: string } | null)?.reason : undefined;
+      setError(reason ? t(`v2.pipelines.ac.runNotGeneratable.${reason}`, { defaultValue: errorMessage(err) }) : errorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -474,7 +496,14 @@ export function PipelineEditor({ id }: { id: string | null }) {
             {isLogs ? (
               <LogSourceFields source={draft.source} onChange={setSource} />
             ) : isAgentcore ? (
-              <AgentcoreSourceFields source={draft.source} agents={genAgents} agentsLoading={agentList.loading} onChange={setSource} />
+              <AgentcoreSourceFields
+                source={draft.source}
+                agents={genAgents}
+                agentsLoading={agentList.loading}
+                runs={genRuns}
+                runsLoading={runList.loading}
+                onChange={setSource}
+              />
             ) : (
             <div className="v2-form cols-2">
               <Field label="Agent" hint={t("v2.pipelines.agentHint")}>
@@ -512,7 +541,16 @@ export function PipelineEditor({ id }: { id: string | null }) {
             </div>
             )}
           </Card>
-          {isAgentcore && acPreview && (
+          {fromRun && (
+            <RunPreviewCard
+              rows={runPreview}
+              results={runResults.data}
+              pickedRun={!!draft.source.batch_run_id}
+              loading={runResults.loading}
+              error={runResults.error ?? runList.error}
+            />
+          )}
+          {isAgentcore && !fromRun && acPreview && (
             <AgentcorePreviewCard preview={acPreview} picked={!!agentName} loading={sessions.loading} error={sessions.error ?? agentList.error} />
           )}
           {isAgentcore && last?.generation && <GenerationRunCard run={last} />}

@@ -3524,7 +3524,9 @@
     "costs.bad_period": "请选择 1 到 92 天、且不从未来开始的自定义区间（日期格式 YYYY-MM-DD）。",
     "storage.agent_files_unavailable": "该工作空间还没有 Agent 文件存储桶——请管理员创建（default 工作空间：`cdk deploy`；其他工作空间：`POST /api/workspaces/{id}/agent-files/repair`），之后才能开启会话输出文件。",
     "chat.invalid_file_path": "该文件路径不在本会话的输出文件夹内。",
-    "chat.files_unavailable": "该 Agent 没有会话输出文件夹。"
+    "chat.files_unavailable": "该 Agent 没有会话输出文件夹。",
+    "pipeline.run_not_generatable": "只有已完成且带 AgentCore 批量评估的评估器运行（非洞察运行）才能用于生成数据集。",
+    "pipeline.run_agent_mismatch": "该评估运行属于其他 Agent，请选择本 Pipeline 所用 Agent 的运行。"
   },
   "chatPage": {
     "authRetryNote": "完成授权后，请重新发送你的消息。",
@@ -7247,7 +7249,9 @@
       "invalid_example": "样本无效",
       "unexpected_session": "不是请求的会话",
       "unsupported_session_id": "AgentCore 不支持该会话 ID",
-      "expired": "早于日志保留期"
+      "expired": "早于日志保留期",
+      "unscored": "评估运行中没有分数",
+      "above_threshold": "分数高于 Bad Case 阈值"
     },
     "datasets": {
       "colName": "名称",
@@ -7610,7 +7614,46 @@
         "noFindings": "未发现敏感信息",
         "skipped": "已跳过（{{count}}）",
         "skippedMore": "……另有 {{count}} 条",
-        "lastRunShort": "发送 {{requested}} · 生成 {{written}} · 写入 {{added}}"
+        "lastRunShort": "发送 {{requested}} · 生成 {{written}} · 写入 {{added}}",
+        "sessionsFrom": "会话来源",
+        "fromTraffic": "近期流量",
+        "fromRun": "评估运行",
+        "fromTrafficHint": "该 Agent 在所选时间范围内的会话",
+        "fromRunHint": "某次已完成评估运行评判过的会话，可只取其中的 Bad Case；AgentCore 通过该运行的批量评估读取",
+        "run": "评估运行",
+        "runHint": "该 Agent 已完成的评估器运行，按时间倒序",
+        "runsLoading": "正在加载运行…",
+        "runsNone": "该 Agent 还没有已完成的评估器运行",
+        "runPickAgent": "请先选择 Agent",
+        "runOption": "{{name}} · {{time}} · {{count}} 个会话",
+        "runGone": "{{id}}（已不可选）",
+        "maxScore": "Bad Case 阈值",
+        "maxScoreHint": "只保留最低归一化分数低于该值的会话（0–1；0.7 即控制台的 Bad Case 线）",
+        "allSessions": "全部已评分会话",
+        "allSessionsHint": "保留至少有一项分数的所有会话",
+        "dynamicRunHint": "模型根据每个多轮会话写出模拟用户画像，单轮会话只得到一条普通输入，不带标准答案。",
+        "errRun": "请选择评估运行",
+        "runNotGeneratable": {
+          "insights_run": "洞察运行没有分数，无法挑选 Bad Case，请选择评估器运行。",
+          "not_completed": "该评估运行尚未完成。",
+          "no_batch": "该评估运行没有可读取的 AgentCore 批量评估。"
+        },
+        "colLowest": "最低分",
+        "verdict": {
+          "send": "发送",
+          "above": "高于阈值",
+          "unscored": "未评分",
+          "unsupported": "ID 不受支持",
+          "overflow": "超出上限"
+        },
+        "runResultsUnavailable": "无法读取该运行的结果：{{reason}}",
+        "runResultsTruncated": "结果已截断，预览可能遗漏部分会话。",
+        "runPreviewNote": "分数已归一化为越高越好，以会话最低的一项评判为准。目标数据集中已有的会话和其他成员的私有会话会在运行开始时跳过。",
+        "runPreviewEmpty": "该运行没有会话",
+        "runPickRun": "选择运行后预览其会话",
+        "sourceRun": "来源运行",
+        "scannedRun": "运行中的会话",
+        "fromRunShort": "来自运行 {{id}}"
       }
     },
     "tasks": {

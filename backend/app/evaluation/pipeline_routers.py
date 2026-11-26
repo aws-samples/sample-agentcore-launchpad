@@ -38,7 +38,7 @@ from app.core.db import SessionLocal, get_db
 from app.core.errors import AppError, NotFoundError, aws_error_code
 from app.core.project_scope import project_context
 from app.evaluation import agentcore_eval as ac
-from app.evaluation import generation, log_streams, pipeline_logs, pipelines
+from app.evaluation import generation, log_streams, pipeline_logs, pipelines, service
 from app.evaluation import routers as eval_routers
 from app.evaluation.models import EvalDataset, EvalPipeline
 from app.evaluation.online_routers import _agent_in
@@ -285,6 +285,10 @@ class PipelineSource(BaseModel):
     scenario_type: Literal["FIXED", "DYNAMIC"] = "FIXED"
     expected_trajectory: bool = True  # FIXED ground truth; ignored for DYNAMIC
     redaction: Redaction | None = None
+    # an evaluation run of the agent as the session source (its bad cases: lowest
+    # normalized score below max_score; null = every scored session)
+    batch_run_id: str | None = Field(default=None, min_length=1, max_length=32)
+    max_score: float | None = Field(default=0.7, ge=0, le=1)
 
     @model_validator(mode="after")
     def _logs_fields(self) -> PipelineSource:
@@ -366,6 +370,8 @@ def _check_output(
     )
     if source is not None and source.type == "agentcore":
         _agentcore_agent(db, ws, source, viewer=viewer)
+        if source.batch_run_id:
+            _generation_run(db, ws, source, viewer=viewer)
         if target is not None:
             _require_generation_target(target, source.scenario_type)
         return
@@ -388,6 +394,27 @@ def _require_generation_target(dataset: EvalDataset, scenario_type: str) -> None
             {"scenario_type": scenario_type, "kind": dataset.kind},
             status_code=400,
         )
+
+
+def _generation_run(
+    db: Session, ws: WorkspaceScope, source: PipelineSource, *, viewer: Viewer = Viewer.ALL
+) -> Any:
+    """The evaluation run an agentcore source reads its sessions from: a visible,
+    completed evaluators run of the source's own agent, with a batch."""
+    run = eval_routers._run_in(db, ws, str(source.batch_run_id), viewer=viewer)
+    reason = (
+        "insights_run" if run.mode != "evaluators"
+        else "not_completed" if run.status != "completed"
+        else "no_batch" if not run.batch_eval_id else None
+    )
+    if reason:
+        raise AppError("pipeline.run_not_generatable",
+                       "only a completed evaluators run with a batch can feed a generation",
+                       {"reason": reason}, status_code=400)
+    if run.agent_id != source.agent_id:
+        raise AppError("pipeline.run_agent_mismatch",
+                       "the evaluation run belongs to another agent", status_code=400)
+    return run
 
 
 def _agentcore_agent(
@@ -529,8 +556,11 @@ def run_pipeline(
         raise AppError("pipeline.running", "the pipeline is already running", status_code=409)
     config = PipelineBody.model_validate({"name": row.name, **row.config})
     if config.source.type == "agentcore":
-        # whoever starts the run must be able to see the agent (not only its creator)
+        # whoever starts the run must be able to see the agent (and the evaluation
+        # run it reads), not only the pipeline's creator
         _agentcore_agent(db, ws, config.source, viewer=viewer)
+        if config.source.batch_run_id:
+            _generation_run(db, ws, config.source, viewer=viewer)
     private = _private(request, ws, db)  # snapshot under the caller's principal
     # whoever starts the run creates its output dataset (not necessarily the
     # pipeline's own creator)
@@ -833,7 +863,10 @@ def _prepare_generation(
     succeeds with 0 and makes no AWS write)."""
     src, proc, out = config.source, config.processing, config.output
     agent = _agentcore_agent(db, ws, src)
-    service_name, log_group = resolve_telemetry(agent, ws.context)
+    run = _generation_run(db, ws, src) if src.batch_run_id else None
+    service_name, log_group = (
+        ("", "") if run is not None else resolve_telemetry(agent, ws.context)
+    )
     target = None
     if out.dataset_id:
         target = _dataset_in(db, ws, out.dataset_id, need="own")
@@ -844,21 +877,30 @@ def _prepare_generation(
         raise AppError("pipeline.dataset_full",
                        f"the output dataset already holds {len(existing)} items "
                        f"(the cap is {pipelines.MAX_DATASET_ITEMS})", status_code=409)
-    listing = observability.list_sessions(src.range, db, ws.context)
-    fence = ProjectFence(db, ws.id)
-    rows = [r for r in listing.get("sessions", [])
-            if private.visible(r.get("session_id"))
-            and (not fence.closed or fence.allows_service(r.get("service")))]
     now = _now()
-    retention = _retention_days(ws, log_group)
-    picked, skipped, matched = generation.select_sessions(
-        rows, service=service_name, status=src.status,
-        dynamic=src.scenario_type == "DYNAMIC",
-        present=generation.present_session_ids(existing),
-        limit=min(src.max_sessions, room), now=now,
-        oldest=generation.retention_floor(now, retention),
-    )
-    outcome["scanned"] = sum(1 for r in rows if r.get("service") == service_name)
+    batch_arn = None
+    retention = None
+    if run is not None:
+        picked, skipped, matched, batch_arn = _select_from_run(
+            ws, run, src, private, present=generation.present_session_ids(existing),
+            limit=min(src.max_sessions, room),
+        )
+        outcome["scanned"] = len(run.session_ids or [])
+    else:
+        listing = observability.list_sessions(src.range, db, ws.context)
+        fence = ProjectFence(db, ws.id)
+        rows = [r for r in listing.get("sessions", [])
+                if private.visible(r.get("session_id"))
+                and (not fence.closed or fence.allows_service(r.get("service")))]
+        retention = _retention_days(ws, log_group)
+        picked, skipped, matched = generation.select_sessions(
+            rows, service=service_name, status=src.status,
+            dynamic=src.scenario_type == "DYNAMIC",
+            present=generation.present_session_ids(existing),
+            limit=min(src.max_sessions, room), now=now,
+            oldest=generation.retention_floor(now, retention),
+        )
+        outcome["scanned"] = sum(1 for r in rows if r.get("service") == service_name)
     outcome["matched"] = matched
     outcome["skipped"] = skipped
     if not picked:
@@ -887,8 +929,10 @@ def _prepare_generation(
     source = generation.build_source(
         src, service_name=service_name, log_group=log_group, sessions=picked,
         keep_replies=proc.keep_replies, now=now, retention_days=retention,
+        batch_arn=batch_arn,
     )
     outcome["generation"] = {
+        "batch_run_id": run.id if run is not None else None,
         "id": None, "cloud_dataset_id": cloud_id, "created_dataset": target is None,
         "local_dataset_id": target.id if target is not None else None,
         "scenario_type": src.scenario_type, "stage": "starting", "status": None,
@@ -904,6 +948,26 @@ def _prepare_generation(
     if target is None:
         ac.poll_dataset_active(control, dataset_id=cloud_id, interval=2.0, max_polls=60)
     return True
+
+
+def _select_from_run(
+    ws: WorkspaceScope, run: Any, src: PipelineSource, private: PrivateSessions,
+    *, present: set[str], limit: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], int, str]:
+    """The run's sessions to send (its bad cases below `max_score`, or all scored
+    ones) and the batch's ARN for the `batchEvaluation` source."""
+    results = service.run_results(run, workspace=ws.context)
+    if not results.get("available"):
+        raise AppError("pipeline.run_not_generatable",
+                       "the evaluation run's results cannot be read",
+                       {"reason": results.get("reason") or "unreadable"}, status_code=400)
+    by_session = {s["session_id"]: s["results"] for s in results.get("sessions") or []}
+    picked, skipped, matched = generation.select_run_sessions(
+        list(run.session_ids or []) or list(by_session), by_session,
+        max_score=src.max_score, visible=private.visible, present=present, limit=limit,
+    )
+    detail = ac.get_batch_evaluation(data_client(ws.context), batch_id=run.batch_eval_id)
+    return picked, skipped, matched, str(detail["batchEvaluationArn"])
 
 
 def _refuse_running_generation(ws: WorkspaceScope, cloud_id: str) -> None:

@@ -5292,6 +5292,13 @@ export interface V2PipelineSource {
   expected_trajectory?: boolean;
   /** agentcore only: service-side PII redaction, null = off */
   redaction?: V2PipelineRedaction | null;
+  /** agentcore only (P3): read the sessions of this completed evaluators run (an
+   *  EvalRun id) through its AWS batch evaluation instead of recent traffic;
+   *  null = recent traffic. With a run, `range` / `status` are ignored. */
+  batch_run_id?: string | null;
+  /** agentcore + batch_run_id: keep sessions whose LOWEST normalized score is below
+   *  this (0..1, default 0.7 = the console's bad-case line); null = every scored session */
+  max_score?: number | null;
 }
 
 export interface V2PipelineConfig {
@@ -5332,6 +5339,8 @@ export interface V2PipelineGeneration {
   /** AWS generationId; null before the start call returned */
   id: string | null;
   cloud_dataset_id: string | null;
+  /** the evaluation run the sessions came from (P3); null / absent = recent traffic */
+  batch_run_id?: string | null;
   scenario_type: "FIXED" | "DYNAMIC";
   stage: "starting" | "generating" | "merging" | "done";
   status: "IN_PROGRESS" | "COMPLETED" | "COMPLETED_WITH_ERRORS" | "FAILED" | null;

@@ -1386,7 +1386,13 @@ deletes the ones it does not keep from the Draft (skip reasons `generation_faile
 `code`, `unexpected_session`, `interrupt_transcript`, `invalid_example`, `duplicate`,
 `dataset_full`). FIXED needs a `predefined` target, DYNAMIC a `simulated` one (else 400
 `pipeline.target_kind_mismatch`); `ConflictException` → `dataset.generation_running`.
-`last_run.generation = {id, cloud_dataset_id, scenario_type, stage, status, requested,
+With `batch_run_id` (a completed evaluators run of the same agent; else 400
+`pipeline.run_not_generatable` `{reason: insights_run|not_completed|no_batch}` or
+`pipeline.run_agent_mismatch`) the sessions are that run's — with `max_score` (0..1,
+default 0.7; `null` = all scored sessions) only those whose lowest normalized score is
+below it (skips `unscored`, `above_threshold`) — and the source is the run's
+`batchEvaluation` ARN; `range` / `status` are ignored.
+`last_run.generation = {id, batch_run_id, cloud_dataset_id, scenario_type, stage, status, requested,
 results{sessionsMatched…examplesWithGroundTruth}, error_details[{code, message, count,
 session_ids}], redaction{scanned, findings}, failure_reason}`; a run with a started
 generation resumes after a restart.

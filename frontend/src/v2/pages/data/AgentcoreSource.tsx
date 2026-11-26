@@ -5,19 +5,25 @@ import { Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type { AgentInfo, V2PipelineBody, V2PipelineRun, V2PipelineSource, V2Range } from "../../../lib/api";
+import type { EvaluationRunInfo, EvaluationRunResults } from "../../../lib/evaluation";
 import {
   AGENTCORE_MAX_SESSIONS,
   type AgentcorePreview,
+  clampScore,
   clampSessions,
+  DEFAULT_MAX_SCORE,
   FRESH_MINUTES,
   GENERATION_COUNTS,
   MANAGED_REDACTION_IDS,
   MAX_CUSTOM_IDENTIFIERS,
   REDACTION_PROBLEM_KEY,
   redactionProblem,
+  type RunPreviewRow,
+  type RunVerdict,
   scenarioTypeOf,
+  sessionsFromOf,
 } from "../../../lib/pipelineAgentcore";
-import { fmtTime, RANGES, rangeLabel } from "../../format";
+import { fmtScore, fmtTime, RANGES, rangeLabel, scoreTone } from "../../format";
 import { Alert, Button, Card, Descriptions, Field, LinkButton, Segmented, Select, Table, Tag, type TagTone } from "../../ui";
 
 type Source = V2PipelineSource;
@@ -27,15 +33,21 @@ export function AgentcoreSourceFields({
   source,
   agents,
   agentsLoading,
+  runs,
+  runsLoading,
   onChange,
 }: {
   source: Source;
   agents: AgentInfo[];
   agentsLoading: boolean;
+  /** the picked agent's completed evaluator runs, newest first (P3) */
+  runs: EvaluationRunInfo[];
+  runsLoading: boolean;
   onChange: (patch: Partial<Source>) => void;
 }) {
   const { t } = useTranslation();
   const scenario = scenarioTypeOf(source);
+  const fromRun = sessionsFromOf(source) === "run";
   const picked = agents.some((a) => a.id === source.agent_id);
   // a saved agent that is no longer offered (deleted / not active) stays visible, flagged
   const options = [
@@ -44,6 +56,15 @@ export function AgentcoreSourceFields({
       : []),
     ...agents.map((a) => ({ value: a.id, label: `${a.display_name || a.name} · ${t(`v2.pipelines.ac.method.${a.method}`, { defaultValue: a.method })}` })),
   ];
+  const runListed = runs.some((r) => r.id === source.batch_run_id);
+  const runOptions = [
+    ...(source.batch_run_id && !runListed && !runsLoading ? [{ value: source.batch_run_id, label: t("v2.pipelines.ac.runGone", { id: source.batch_run_id }) }] : []),
+    ...runs.map((r) => ({
+      value: r.id,
+      label: t("v2.pipelines.ac.runOption", { name: r.name || r.id, time: fmtTime(r.created_at), count: r.session_ids.length }),
+    })),
+  ];
+  const allSessions = source.max_score === null;
   return (
     <div className="v2-form cols-2">
       <Field label="Agent" required hint={t("v2.pipelines.ac.agentHint")}>
@@ -51,20 +72,78 @@ export function AgentcoreSourceFields({
           value={source.agent_id ?? ""}
           placeholder={agentsLoading ? t("v2.pipelines.ac.agentsLoading") : t("v2.common.choose")}
           options={options}
-          onChange={(v) => onChange({ agent_id: v || null })}
+          // a run belongs to one agent: picking another agent clears the run
+          onChange={(v) => onChange({ agent_id: v || null, ...(fromRun ? { batch_run_id: "" } : {}) })}
           testId="v2-pipeline-ac-agent"
         />
       </Field>
-      <Field label={t("v2.common.timeRange")}>
-        <Select value={source.range} options={RANGES.map((r) => ({ value: r, label: rangeLabel(t, r) }))} onChange={(v) => onChange({ range: v as V2Range })} />
-      </Field>
-      <Field label={t("v2.pipelines.sessionStatus")}>
+      <Field label={t("v2.pipelines.ac.sessionsFrom")} hint={fromRun ? t("v2.pipelines.ac.fromRunHint") : t("v2.pipelines.ac.fromTrafficHint")}>
         <Segmented
-          value={source.status}
-          onChange={(v) => onChange({ status: v })}
-          options={(["all", "ok", "error"] as const).map((s) => ({ value: s, label: t(`v2.pipelines.status.${s}`) }))}
+          value={fromRun ? "run" : "traffic"}
+          onChange={(v) => onChange(v === "run" ? { batch_run_id: source.batch_run_id ?? "", max_score: source.max_score === undefined ? DEFAULT_MAX_SCORE : source.max_score } : { batch_run_id: null })}
+          options={[
+            { value: "traffic", label: t("v2.pipelines.ac.fromTraffic"), testId: "v2-pipeline-ac-from-traffic" },
+            { value: "run", label: t("v2.pipelines.ac.fromRun"), testId: "v2-pipeline-ac-from-run" },
+          ]}
         />
       </Field>
+      {fromRun ? (
+        <>
+          <Field
+            label={t("v2.pipelines.ac.run")}
+            required
+            full
+            hint={!source.agent_id ? t("v2.pipelines.ac.runPickAgent") : !runsLoading && runs.length === 0 ? t("v2.pipelines.ac.runsNone") : t("v2.pipelines.ac.runHint")}
+          >
+            <Select
+              value={source.batch_run_id ?? ""}
+              placeholder={runsLoading ? t("v2.pipelines.ac.runsLoading") : t("v2.common.choose")}
+              options={runOptions}
+              disabled={!source.agent_id}
+              onChange={(v) => onChange({ batch_run_id: v })}
+              testId="v2-pipeline-ac-run"
+            />
+          </Field>
+          <Field label={t("v2.pipelines.ac.maxScore")} hint={allSessions ? t("v2.pipelines.ac.allSessionsHint") : t("v2.pipelines.ac.maxScoreHint")}>
+            <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+              <input
+                className="v2-input"
+                style={{ width: 120 }}
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                disabled={allSessions}
+                value={allSessions ? "" : (source.max_score ?? DEFAULT_MAX_SCORE)}
+                onChange={(e) => onChange({ max_score: clampScore(Number(e.target.value)) })}
+                data-testid="v2-pipeline-ac-max-score"
+              />
+              <label className="v2-check">
+                <input
+                  type="checkbox"
+                  checked={allSessions}
+                  onChange={(e) => onChange({ max_score: e.target.checked ? null : DEFAULT_MAX_SCORE })}
+                  data-testid="v2-pipeline-ac-all-sessions"
+                />
+                {t("v2.pipelines.ac.allSessions")}
+              </label>
+            </div>
+          </Field>
+        </>
+      ) : (
+        <>
+          <Field label={t("v2.common.timeRange")}>
+            <Select value={source.range} options={RANGES.map((r) => ({ value: r, label: rangeLabel(t, r) }))} onChange={(v) => onChange({ range: v as V2Range })} />
+          </Field>
+          <Field label={t("v2.pipelines.sessionStatus")}>
+            <Segmented
+              value={source.status}
+              onChange={(v) => onChange({ status: v })}
+              options={(["all", "ok", "error"] as const).map((s) => ({ value: s, label: t(`v2.pipelines.status.${s}`) }))}
+            />
+          </Field>
+        </>
+      )}
       <Field label={t("v2.pipelines.maxSessions")} hint={t("v2.pipelines.ac.maxSessionsHint", { max: AGENTCORE_MAX_SESSIONS })}>
         <input
           className="v2-input"
@@ -76,7 +155,11 @@ export function AgentcoreSourceFields({
           data-testid="v2-pipeline-ac-max"
         />
       </Field>
-      <Field label={t("v2.pipelines.ac.scenarioType")} full hint={scenario === "DYNAMIC" ? t("v2.pipelines.ac.dynamicHint") : t("v2.pipelines.ac.fixedHint")}>
+      <Field
+        label={t("v2.pipelines.ac.scenarioType")}
+        full
+        hint={scenario === "DYNAMIC" ? (fromRun ? t("v2.pipelines.ac.dynamicRunHint") : t("v2.pipelines.ac.dynamicHint")) : t("v2.pipelines.ac.fixedHint")}
+      >
         <Segmented
           value={scenario}
           onChange={(v) => onChange({ scenario_type: v })}
@@ -87,6 +170,63 @@ export function AgentcoreSourceFields({
         />
       </Field>
     </div>
+  );
+}
+
+const VERDICT_TONE: Record<RunVerdict, TagTone> = { send: "blue", above: "gray", unscored: "orange", unsupported: "red", overflow: "gray" };
+
+/** The run-sourced preview (P3): the run's sessions with their lowest normalized
+ *  score and whether a run would send them. */
+export function RunPreviewCard({
+  rows,
+  results,
+  pickedRun,
+  loading,
+  error,
+}: {
+  rows: RunPreviewRow[];
+  results: EvaluationRunResults | null;
+  /** whether a run is chosen yet */
+  pickedRun: boolean;
+  loading: boolean;
+  error: string | null;
+}) {
+  const { t } = useTranslation();
+  const sending = rows.filter((r) => r.verdict === "send").length;
+  const unavailable = results && !results.available;
+  return (
+    <Card title={t("v2.pipelines.preview")} sub={loading || !pickedRun || unavailable ? undefined : t("v2.pipelines.ac.previewSub", { count: sending })}>
+      {pickedRun && !loading && unavailable && (
+        <Alert tone="warn">{t("v2.pipelines.ac.runResultsUnavailable", { reason: results.detail || results.reason || "—" })}</Alert>
+      )}
+      {pickedRun && !loading && results?.available && (
+        <Alert>
+          {[results.truncated && t("v2.pipelines.ac.runResultsTruncated"), t("v2.pipelines.ac.runPreviewNote")].filter(Boolean).join(" ")}
+        </Alert>
+      )}
+      <Table
+        columns={[
+          { key: "sid", title: t("v2.traces.colSession"), render: (r: RunPreviewRow) => <span className="mono">{r.session_id}</span> },
+          {
+            key: "low",
+            title: t("v2.pipelines.ac.colLowest"),
+            className: "num",
+            render: (r: RunPreviewRow) => (r.lowest === null ? "—" : <span className={`v2-score ${scoreTone(r.lowest)}`}>{fmtScore(r.lowest)}</span>),
+          },
+          {
+            key: "send",
+            title: t("v2.pipelines.ac.colSend"),
+            render: (r: RunPreviewRow) => <Tag tone={VERDICT_TONE[r.verdict]}>{t(`v2.pipelines.ac.verdict.${r.verdict}`)}</Tag>,
+          },
+        ]}
+        rows={rows}
+        rowKey={(r) => r.session_id}
+        loading={loading}
+        error={error}
+        empty={pickedRun ? t("v2.pipelines.ac.runPreviewEmpty") : t("v2.pipelines.ac.runPickRun")}
+        testId="v2-pipeline-ac-run-preview"
+      />
+    </Card>
   );
 }
 
@@ -300,7 +440,8 @@ export function GenerationRunCard({ run }: { run: V2PipelineRun }) {
       <Descriptions
         items={[
           { label: t("v2.pipelines.ac.scenarioType"), value: gen.scenario_type === "DYNAMIC" ? t("v2.pipelines.ac.dynamic") : t("v2.pipelines.ac.fixed") },
-          { label: t("v2.pipelines.ac.scanned"), value: run.scanned },
+          ...(gen.batch_run_id ? [{ label: t("v2.pipelines.ac.sourceRun"), value: <span className="mono">{gen.batch_run_id}</span> }] : []),
+          { label: gen.batch_run_id ? t("v2.pipelines.ac.scannedRun") : t("v2.pipelines.ac.scanned"), value: run.scanned },
           { label: t("v2.pipelines.ac.requested"), value: gen.requested },
           { label: t("v2.pipelines.ac.added"), value: run.added },
           ...counts.map((k) => ({ label: t(`v2.pipelines.ac.count.${k}`), value: results[k] })),
