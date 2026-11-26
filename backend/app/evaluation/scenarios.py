@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
 # A scenario's input preview on the run row (`EvalRun.scenario_map`) and the compare read.
@@ -93,6 +94,70 @@ def aws_examples(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         item if scenario_kind(item) != "legacy" else normalized[i]
         for i, item in enumerate(items)
     ]
+
+
+# `metadata` keys AgentCore writes onto the examples it generates (they do not count toward
+# the 2 KB metadata limit and are not part of a scenario's content).
+AGENTCORE_METADATA_KEYS = frozenset({"generation_id"})
+
+
+def example_signature(example: dict[str, Any]) -> str:
+    """Canonical JSON (sorted keys) of an example's *content*: the service-assigned
+    ``exampleId`` and the AgentCore-added ``metadata`` keys are dropped, and a
+    ``metadata`` left empty by that equals an absent one — so a local scenario and
+    its AWS copy compare equal iff the user-authored content is identical."""
+    body = {k: v for k, v in example.items() if k != "exampleId"}
+    metadata = body.get("metadata")
+    if isinstance(metadata, dict):
+        kept = {k: v for k, v in metadata.items() if k not in AGENTCORE_METADATA_KEYS}
+        if kept:
+            body["metadata"] = kept
+        else:
+            body.pop("metadata")
+    return json.dumps(body, sort_keys=True, ensure_ascii=False, default=str)
+
+
+@dataclass
+class ExampleDiff:
+    """What turns a DRAFT's examples into the local scenarios, keyed by ``scenario_id``."""
+
+    added: list[dict[str, Any]] = field(default_factory=list)  # local-only scenarios
+    updated: list[tuple[str, dict[str, Any]]] = field(default_factory=list)  # (exampleId, scenario)
+    deleted: list[str] = field(default_factory=list)  # exampleIds of cloud-only examples
+    unchanged: int = 0
+
+    def counts(self) -> dict[str, int]:
+        return {
+            "added": len(self.added),
+            "updated": len(self.updated),
+            "deleted": len(self.deleted),
+            "unchanged": self.unchanged,
+        }
+
+
+def diff_examples(local: list[dict[str, Any]], cloud: list[dict[str, Any]]) -> ExampleDiff:
+    """Diff the local scenarios against a DRAFT's examples (ListDatasetExamples) by
+    ``scenario_id``. A cloud example without a ``scenario_id`` (or repeating one already
+    seen) cannot be matched and is deleted."""
+    diff = ExampleDiff()
+    by_id: dict[str, dict[str, Any]] = {}
+    for ex in cloud:
+        example_id = ex.get("exampleId")
+        scenario_id = ex.get("scenario_id")
+        if scenario_id and scenario_id not in by_id:
+            by_id[scenario_id] = ex
+        elif example_id:
+            diff.deleted.append(example_id)
+    for scenario in local:
+        match = by_id.pop(scenario["scenario_id"], None)
+        if match is None:
+            diff.added.append(scenario)
+        elif example_signature(match) == example_signature(scenario):
+            diff.unchanged += 1
+        else:
+            diff.updated.append((match["exampleId"], scenario))
+    diff.deleted.extend(ex["exampleId"] for ex in by_id.values() if ex.get("exampleId"))
+    return diff
 
 
 def scenario_prompts(scenario: dict[str, Any]) -> list[str]:

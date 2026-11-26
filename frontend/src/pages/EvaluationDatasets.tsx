@@ -52,6 +52,8 @@ interface CloudBlob {
   failure_reason?: string | null;
   draft_status?: string | null;
   example_count?: number | null;
+  /** what the latest sync did to the DRAFT, keyed by scenario_id */
+  last_sync?: { added: number; updated: number; deleted: number; unchanged: number } | null;
   versions?: CloudVersion[];
 }
 

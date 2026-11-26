@@ -5177,7 +5177,13 @@ export interface V2Dataset {
   description: string;
   item_count: number;
   items: Record<string, unknown>[];
-  cloud: { dataset_id?: string; status?: string; draft_status?: string } | null;
+  cloud: {
+    dataset_id?: string;
+    status?: string;
+    draft_status?: string;
+    /** what the latest sync-to-aws did to the AWS draft, diffed by scenario_id */
+    last_sync?: { added: number; updated: number; deleted: number; unchanged: number } | null;
+  } | null;
   has_ground_truth: boolean;
   created_at: string | null;
   /** Agent-DLC: `golden` for a golden set and its splits, else `scratch`. */

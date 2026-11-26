@@ -22,6 +22,7 @@ from app.core.errors import (
     AppError,
     NotFoundError,
     aws_error_code,
+    aws_error_message,
     mapped_aws_error,
     public_aws_message,
 )
@@ -35,6 +36,7 @@ from app.evaluation.queue import run_queue
 from app.evaluation.scenarios import (
     aws_examples,
     dataset_kind,
+    diff_examples,
     normalize_scenarios,
     scenario_kind,
     simulates,
@@ -551,7 +553,8 @@ def _refuse_golden(dataset: EvalDataset, action: str) -> None:
 
 # ─── AWS cloud datasets (draft in place + published versions) ───────────────
 # One local row ↔ one AWS Dataset. The first sync creates the dataset; every
-# later sync replaces the examples of its DRAFT in place; PUBLISH VERSION
+# later sync diffs the local scenarios against its DRAFT by scenario_id and
+# applies only the difference; PUBLISH VERSION
 # snapshots the draft as an immutable numbered version. AWS is the source of
 # truth — the `cloud` blob on the row only caches display state.
 def _iso(value: Any) -> str | None:
@@ -581,8 +584,9 @@ def _cloud_blob(
     versions: list[dict[str, Any]] | None,
     failure_reason: str | None = None,
     status: str | None = None,
+    last_sync: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    return {
+    blob = {
         "dataset_id": detail.get("datasetId"),
         "arn": detail.get("datasetArn"),
         "status": status or detail.get("status"),
@@ -592,6 +596,10 @@ def _cloud_blob(
         "example_count": detail.get("exampleCount"),
         "versions": versions if versions is not None else [],
     }
+    if last_sync is not None:
+        # what the latest sync did to the DRAFT: {added, updated, deleted, unchanged}
+        blob["last_sync"] = last_sync
+    return blob
 
 
 def _existing_cloud_draft(client: Any, dataset: EvalDataset) -> dict[str, Any] | None:
@@ -619,12 +627,15 @@ def sync_dataset_to_aws(
 ) -> dict[str, Any]:
     """Push the local dataset to AWS. Without a live cloud copy this creates an
     AWS Dataset (inline examples, devguide predefined schema) and waits for
-    ACTIVE. With one, the cloud dataset's DRAFT is edited in place — its current
-    examples are deleted (DeleteDatasetExamples) and the local scenarios added
-    (AddDatasetExamples), each step polled to ACTIVE — so the dataset id, its
-    published versions and any run pinned to them survive; the draft then reads
-    MODIFIED until PUBLISH VERSION snapshots it. The recorded `cloud` blob caches
-    id/arn/status plus draft_status, example_count and the version list."""
+    ACTIVE. With one, the cloud dataset's DRAFT is edited in place by `scenario_id`
+    — cloud-only examples are deleted, changed ones updated, local-only ones added
+    (each write polled to ACTIVE, none made when nothing differs) — so the dataset
+    id, its published versions, any run pinned to them and the exampleIds of
+    untouched scenarios survive; a changed draft then reads MODIFIED until PUBLISH
+    VERSION snapshots it. 409 `dataset.generation_running` while an AgentCore
+    generation holds the draft. The recorded `cloud` blob caches id/arn/status plus
+    draft_status, example_count, the version list and `last_sync` (what the latest
+    sync added / updated / deleted / left unchanged)."""
     dataset = _dataset_in(db, ws, dataset_id, viewer=viewer, need="own")
     examples = aws_examples(dataset.items)
     client = control_client(ws.context)
@@ -675,7 +686,11 @@ def _resync_draft(
     examples: list[dict[str, Any]],
     synced_at: str,
 ) -> dict[str, Any]:
-    """Replace the DRAFT examples of the row's cloud dataset with ``examples``."""
+    """Bring the DRAFT of the row's cloud dataset in line with ``examples``, diffing by
+    ``scenario_id`` so examples AgentCore generated into the draft and the exampleIds of
+    untouched scenarios survive until the local row says otherwise: cloud-only examples
+    are deleted, changed ones updated, local-only ones added (in that order, each write
+    polled to ACTIVE). A sync with nothing to do makes no write call."""
     cloud_id = detail["datasetId"]
     previous = dataset.cloud or {}
 
@@ -687,31 +702,47 @@ def _resync_draft(
             versions=previous.get("versions") or [],
             status="UPDATE_FAILED",
             failure_reason=reason,
+            last_sync=previous.get("last_sync"),
         )
         db.commit()
         return AppError("dataset.sync_failed", reason, status_code=502)
 
+    def write(call: Any, **kwargs: Any) -> dict[str, Any]:
+        call(client, dataset_id=cloud_id, **kwargs)
+        return ac.poll_dataset_active(client, dataset_id=cloud_id, interval=2.0, max_polls=60)
+
+    step = ac.DATASET_EXAMPLES_PER_CALL
     try:
+        final = detail
         # a draft still settling from an earlier edit must reach ACTIVE first;
         # AWS accepts example edits only on ACTIVE / *_FAILED datasets
         if detail.get("status") not in ac.DATASET_TERMINAL:
-            ac.poll_dataset_active(client, dataset_id=cloud_id, interval=2.0, max_polls=60)
-        current_ids = [
-            ex["exampleId"]
-            for ex in ac.list_dataset_examples(client, dataset_id=cloud_id)
-            if ex.get("exampleId")
-        ]
-        if current_ids:
-            ac.delete_dataset_examples(client, dataset_id=cloud_id, example_ids=current_ids)
-            ac.poll_dataset_active(client, dataset_id=cloud_id, interval=2.0, max_polls=60)
-        ac.add_dataset_examples(client, dataset_id=cloud_id, examples=examples)
-        final = ac.poll_dataset_active(client, dataset_id=cloud_id, interval=2.0, max_polls=60)
+            final = ac.poll_dataset_active(client, dataset_id=cloud_id, interval=2.0, max_polls=60)
+        diff = diff_examples(examples, ac.list_dataset_examples(client, dataset_id=cloud_id))
+        to_update = [{**scenario, "exampleId": eid} for eid, scenario in diff.updated]
+        for i in range(0, len(diff.deleted), step):
+            final = write(ac.delete_dataset_examples, example_ids=diff.deleted[i : i + step])
+        for i in range(0, len(to_update), step):
+            final = write(ac.update_dataset_examples, examples=to_update[i : i + step])
+        for i in range(0, len(diff.added), step):
+            final = write(ac.add_dataset_examples, examples=diff.added[i : i + step])
         versions = _cloud_versions(client, cloud_id)
     except (RuntimeError, TimeoutError) as exc:
         raise fail(exc) from exc
     except ClientError as exc:
+        if aws_error_code(exc) == "ConflictException":
+            # a dataset generation is IN_PROGRESS on this dataset: the draft is locked, not
+            # broken — leave the cached blob alone and let the caller retry later
+            raise AppError(
+                "dataset.generation_running",
+                "an AgentCore dataset generation is running on this dataset — "
+                f"retry once it finishes ({aws_error_message(exc)})",
+                status_code=409,
+            ) from exc
         raise fail(exc) from exc
-    dataset.cloud = _cloud_blob(final, synced_at=synced_at, versions=versions)
+    dataset.cloud = _cloud_blob(
+        final, synced_at=synced_at, versions=versions, last_sync=diff.counts()
+    )
     db.commit()
     return _dataset_out(dataset)
 
@@ -758,11 +789,15 @@ def publish_dataset_version(
             versions=previous.get("versions") or [],
             status="UPDATE_FAILED",
             failure_reason=exc.message,
+            last_sync=previous.get("last_sync"),
         )
         db.commit()
         raise
     dataset.cloud = _cloud_blob(
-        final, synced_at=synced_at, versions=_cloud_versions(client, cloud_id)
+        final,
+        synced_at=synced_at,
+        versions=_cloud_versions(client, cloud_id),
+        last_sync=previous.get("last_sync"),
     )
     db.commit()
     return _dataset_out(dataset)
