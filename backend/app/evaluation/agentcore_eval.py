@@ -1376,12 +1376,15 @@ def create_dataset(
     examples: list[dict[str, Any]],
     description: str = "",
 ) -> dict[str, Any]:
-    """CreateDataset with inline examples (async — poll to ACTIVE after)."""
+    """CreateDataset with inline examples (async — poll to ACTIVE after). With no
+    examples the ``source`` is omitted: an empty Draft, filled later (a dataset
+    generation writes into it)."""
     kwargs: dict[str, Any] = {
         "datasetName": name,
-        "source": {"inlineExamples": {"examples": examples}},
         "clientToken": str(uuid.uuid4()),
     }
+    if examples:
+        kwargs["source"] = {"inlineExamples": {"examples": examples}}
     if description:
         kwargs["description"] = description
     return client.create_dataset(**kwargs)
@@ -1411,17 +1414,22 @@ def list_datasets(client: Any) -> list[dict[str, Any]]:
 
 
 def list_dataset_examples(
-    client: Any, *, dataset_id: str, version: str | None = None
+    client: Any, *, dataset_id: str, version: str | None = None,
+    generation_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """All examples of a cloud dataset, in the schema they were created with
     (each carries a service-assigned ``exampleId`` on top). Reads the DRAFT
     unless ``version`` pins a published version; AWS only honours
     ``datasetVersion`` on the first page (later pages take it from the
-    pagination token), so it is sent once."""
+    pagination token), so it is sent once. ``generation_id`` keeps only the
+    examples one dataset generation wrote; that filter must ride on EVERY page
+    (a filtered page can be empty and still carry a token)."""
     out: list[dict[str, Any]] = []
     token: str | None = None
     while True:
         kwargs: dict[str, Any] = {"datasetId": dataset_id}
+        if generation_id:
+            kwargs["filter"] = {"generationIds": [generation_id]}
         if token:
             kwargs["nextToken"] = token
         elif version:
@@ -1504,6 +1512,61 @@ def delete_dataset(
     if version:
         kwargs["datasetVersion"] = version
     return client.delete_dataset(**kwargs)
+
+
+# ─── Dataset generation (data plane, public preview) ────────────────────────
+# StartDatasetGeneration reads an agent's traces and writes scenarios into a
+# dataset's DRAFT (one generation per dataset at a time; the draft is locked
+# — ConflictException — while it runs). Live facts: research/spike-findings.md
+# of the 11-26-adopt-dataset-generation task, summarised in
+# .trellis/spec/launchpad/pipeline-agentcore-source.md.
+GENERATION_TERMINAL = {"COMPLETED", "COMPLETED_WITH_ERRORS", "FAILED"}
+
+
+def start_dataset_generation(
+    data: Any,
+    *,
+    dataset_id: str,
+    name: str,
+    scenario_type: str,
+    source: dict[str, Any],
+    client_token: str,
+    description: str = "",
+) -> dict[str, Any]:
+    """StartDatasetGeneration (202) → ``{generationId, status: IN_PROGRESS, …}``.
+    ``source`` is the ``traceGeneration`` member; ``client_token`` makes a retry of
+    the same request return the same generation."""
+    kwargs: dict[str, Any] = {
+        "datasetId": dataset_id,
+        "name": name,
+        "scenarioType": scenario_type,
+        "source": {"traceGeneration": source},
+        "clientToken": client_token,
+    }
+    if description:
+        kwargs["description"] = description[:200]
+    return data.start_dataset_generation(**kwargs)
+
+
+def list_dataset_generations(data: Any, *, dataset_id: str) -> list[dict[str, Any]]:
+    """ListDatasetGenerations (response key ``datasetGenerations``), every page."""
+    out: list[dict[str, Any]] = []
+    token: str | None = None
+    while True:
+        kwargs: dict[str, Any] = {"datasetId": dataset_id}
+        if token:
+            kwargs["nextToken"] = token
+        resp = data.list_dataset_generations(**kwargs)
+        out.extend(resp.get("datasetGenerations", []))
+        token = resp.get("nextToken")
+        if not token:
+            return out
+
+
+def get_dataset_generation(data: Any, *, dataset_id: str, generation_id: str) -> dict[str, Any]:
+    """GetDatasetGeneration — status, generationResults counts, errorDetails,
+    redactionSummary, failureReason."""
+    return data.get_dataset_generation(datasetId=dataset_id, generationId=generation_id)
 
 
 def poll_dataset_active(

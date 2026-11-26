@@ -102,10 +102,18 @@ def items_from_transcript(
 
 
 def _first_input(item: dict[str, Any]) -> str:
+    """The item's opening user message: a fixed scenario's first turn, a dynamic
+    scenario's `input`, a legacy item's `prompt`."""
     if "turns" in item:
         turns = item.get("turns") or []
-        return str((turns[0] or {}).get("input") or "") if turns else ""
-    return str(item.get("prompt") or "")
+        raw = (turns[0] or {}).get("input") if turns else ""
+    elif "input" in item and "prompt" not in item:
+        raw = item.get("input")
+    else:
+        raw = item.get("prompt")
+    if isinstance(raw, dict):
+        raw = raw.get("content") or raw.get("prompt")
+    return str(raw or "")
 
 
 def merge_items(
@@ -127,7 +135,7 @@ def merge_items(
             reasons.append("duplicate")
             continue
         key = _first_input(item).strip()
-        if dedupe and key in inputs:
+        if dedupe and key and key in inputs:
             reasons.append("duplicate")
             continue
         if len(merged) >= MAX_DATASET_ITEMS:

@@ -5228,7 +5228,22 @@ export interface V2FromSessionsBody {
 
 export interface V2SkippedSession {
   session_id: string;
-  reason: "not_found" | "no_transcript" | "no_exchange" | "duplicate" | "dataset_full" | string;
+  reason:
+    | "not_found"
+    | "no_transcript"
+    | "no_exchange"
+    | "duplicate"
+    | "dataset_full"
+    // agentcore source (P2)
+    | "too_fresh"
+    | "already_in_dataset"
+    | "generation_failed"
+    | "interrupt_transcript"
+    | "invalid_example"
+    | "unexpected_session"
+    | string;
+  /** the AWS error code behind the skip (agentcore source), e.g. `SPANS_INCOMPLETE` */
+  code?: string;
 }
 
 export interface V2FromSessionsResult {
@@ -5250,16 +5265,33 @@ export interface V2LogFormat {
   output_field?: string | null;
 }
 
+/** `PipelineSource.redaction` of an agentcore source: CloudWatch managed data
+ *  identifiers (≤100, `^[A-Z0-9_]+$`) plus custom regex identifiers (≤10). */
+export interface V2PipelineRedaction {
+  identifiers: string[];
+  custom: { name: string; regex: string }[];
+}
+
 export interface V2PipelineSource {
-  /** absent on rows saved before log sources existed = "traces" */
-  type?: "traces" | "logs";
+  /** absent on rows saved before log sources existed = "traces"; "agentcore" =
+   *  AgentCore StartDatasetGeneration over the picked agent's sessions */
+  type?: "traces" | "logs" | "agentcore";
   agent: string | null;
   range: V2Range;
   status: "all" | "ok" | "error";
+  /** 1..50 for traces; 1..25 for agentcore */
   max_sessions: number;
   log_groups?: string[];
   keyword?: string | null;
   format?: V2LogFormat | null;
+  /** agentcore only: the platform `Agent.id` whose sessions are sent */
+  agent_id?: string | null;
+  /** agentcore only, default FIXED */
+  scenario_type?: "FIXED" | "DYNAMIC";
+  /** agentcore FIXED only (default true): copy the observed tool calls as ground truth */
+  expected_trajectory?: boolean;
+  /** agentcore only: service-side PII redaction, null = off */
+  redaction?: V2PipelineRedaction | null;
 }
 
 export interface V2PipelineConfig {
@@ -5290,6 +5322,35 @@ export interface V2PipelineRun {
   error: string | null;
   /** a logs source's parse stats */
   log?: { events: number; parsed: number; failed: Record<string, number>; truncated: boolean };
+  /** an agentcore source's dataset generation */
+  generation?: V2PipelineGeneration;
+}
+
+/** `last_run.generation` of an agentcore run — the AWS StartDatasetGeneration
+ *  it drove (counts are AWS's `generationResults`, verbatim). */
+export interface V2PipelineGeneration {
+  /** AWS generationId; null before the start call returned */
+  id: string | null;
+  cloud_dataset_id: string | null;
+  scenario_type: "FIXED" | "DYNAMIC";
+  stage: "starting" | "generating" | "merging" | "done";
+  status: "IN_PROGRESS" | "COMPLETED" | "COMPLETED_WITH_ERRORS" | "FAILED" | null;
+  /** sessions sent */
+  requested: number;
+  /** absent / null until the generation is terminal */
+  results?: Partial<{
+    sessionsMatched: number;
+    sessionsSelected: number;
+    sessionsUnscored: number;
+    sessionsFailed: number;
+    scenariosGenerated: number;
+    scenariosDeduplicated: number;
+    examplesWritten: number;
+    examplesWithGroundTruth: number;
+  }> | null;
+  error_details?: { code: string; message: string; count: number; session_ids: string[] }[];
+  redaction?: { scanned: number; findings: Record<string, number> } | null;
+  failure_reason?: string | null;
 }
 
 export interface V2Pipeline {

@@ -269,6 +269,14 @@ def test_pipeline_deleted_mid_run_records_nothing(client, fake_sessions, monkeyp
     started = []
     monkeypatch.setattr(pipeline_routers, "_spawn", started.append)
     client.post(f"/api/eval/pipelines/{pid}/run")
-    assert client.delete(f"/api/eval/pipelines/{pid}").json() == {"deleted": True}
+    # the API refuses a delete mid-run (the run's merge commits on its row)…
+    res = client.delete(f"/api/eval/pipelines/{pid}")
+    assert res.status_code == 409 and res.json()["code"] == "pipeline.running"
+    # …but a row that vanishes anyway (removed out of band) must not break the run
+    from app.evaluation.models import EvalPipeline
+    db = SessionLocal()
+    db.delete(db.get(EvalPipeline, pid))
+    db.commit()
+    db.close()
     started[0]()  # must not raise on the vanished row
     assert pid not in pipeline_routers._live_runs
