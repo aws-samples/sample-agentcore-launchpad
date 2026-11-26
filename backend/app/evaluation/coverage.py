@@ -37,7 +37,7 @@ from app.evaluation.agentcore_eval import (
     TRAJECTORY_EVALUATORS,
     ground_truth_placeholders,
 )
-from app.evaluation.scenarios import normalize_scenarios
+from app.evaluation.scenarios import normalize_scenarios, simulates
 
 FIELDS = ("expected_response", "assertions", "expected_tool_trajectory")
 KNOWN_BUILTINS: dict[str, str] = {**ALL_BUILTIN_EVALUATORS, **TRAJECTORY_EVALUATORS}
@@ -60,7 +60,7 @@ def reference_targets(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             session_fields.add("assertions")
         if scenario.get("expected_trajectory"):
             session_fields.add("expected_tool_trajectory")
-        if "actor_profile" in scenario:
+        if simulates(scenario):
             out.append({"id": sid, "kind": "session", "scenario_id": sid,
                         "fields": set(session_fields)})
             out.append({"id": f"{sid}/{SIMULATED_TURNS}", "kind": "trace", "scenario_id": sid,

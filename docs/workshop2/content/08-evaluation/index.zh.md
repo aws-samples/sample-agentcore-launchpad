@@ -97,7 +97,7 @@ Anthropic 投资收益）、**口径与正负号**（TTM 自由现金流是净�
 ### 同步为 AWS 数据集
 
 选中数据集，点击 `同步 AWS`。本地 SQLite 是唯一数据源，同步产生不可变的云端快照
-（`AGENTCORE_EVALUATION_PREDEFINED_V1`）。
+（AWS 数据集不再声明 schema type，固定场景与动态场景可混在同一数据集）。
 
 ![数据集详情与同步](../static/images/08-dataset-detail.png)
 *图 8-2：数据集详情。列表行显示 `5 · predefined · ◆ 真值`，云端列同步成功后变为 `ACTIVE`。*

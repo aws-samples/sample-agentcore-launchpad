@@ -1347,11 +1347,10 @@ def diff_configs(
 # CreateDataset/GetDataset/ListDatasets/DeleteDataset — the devguide "Manage
 # datasets" lifecycle. Dataset names share the batch-eval name constraint:
 # ^[a-zA-Z][a-zA-Z0-9_]{0,47}$ (no hyphens).
-DATASET_SCHEMA_TYPES = {
-    "legacy": "AGENTCORE_EVALUATION_PREDEFINED_V1",
-    "predefined": "AGENTCORE_EVALUATION_PREDEFINED_V1",
-    "simulated": "AGENTCORE_EVALUATION_SIMULATED_V1",
-}
+# Datasets declare no schema type (removed by AgentCore 2026-11; CreateDataset
+# ignores one and Get/ListDatasets no longer return it): one dataset may mix
+# fixed (``turns``) and dynamic (``input`` / ``actor_profile``) scenarios, and
+# each example's own fields decide how it runs (``scenarios.scenario_kind``).
 
 # CREATING/UPDATING are in progress; the *_FAILED states end a poll. UPDATING
 # covers AddDatasetExamples / DeleteDatasetExamples / CreateDatasetVersion.
@@ -1374,14 +1373,12 @@ def create_dataset(
     client: Any,
     *,
     name: str,
-    schema_type: str,
     examples: list[dict[str, Any]],
     description: str = "",
 ) -> dict[str, Any]:
     """CreateDataset with inline examples (async — poll to ACTIVE after)."""
     kwargs: dict[str, Any] = {
         "datasetName": name,
-        "schemaType": schema_type,
         "source": {"inlineExamples": {"examples": examples}},
         "clientToken": str(uuid.uuid4()),
     }

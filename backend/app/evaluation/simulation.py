@@ -21,12 +21,15 @@ from bedrock_agentcore.evaluation import (
     SimulationConfig,
 )
 
+from app.evaluation.scenarios import simulates
 from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 
 
 def is_simulated(scenario: dict[str, Any]) -> bool:
-    return "actor_profile" in scenario
+    """An actor-driven scenario (no ``turns``, has ``actor_profile``) — the AWS
+    rule; a scenario that carries ``turns`` replays them even with a profile."""
+    return simulates(scenario)
 
 
 def run_simulated_scenario(

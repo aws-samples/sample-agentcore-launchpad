@@ -291,10 +291,26 @@ export function toItems(scenarios: ScenarioDraft[], kind: string): DatasetItem[]
   });
 }
 
+/** AWS dataset schema (no schema type; the item's fields decide): `turns` → a
+ *  fixed scenario, even beside an `actor_profile`; no `turns` with `input` or
+ *  `actor_profile` → dynamic; else a legacy `{prompt, expected}` item. Mirrors
+ *  backend `scenarios.scenario_kind`. */
+export function scenarioKind(item: DatasetItem): "fixed" | "dynamic" | "legacy" {
+  if ("turns" in item) return "fixed";
+  if ("actor_profile" in item) return "dynamic";
+  if ("input" in item && !("prompt" in item)) return "dynamic";
+  return "legacy";
+}
+
+/** A dynamic scenario an LLM actor drives (backend `scenarios.simulates`). */
+export function simulates(item: DatasetItem): boolean {
+  return scenarioKind(item) === "dynamic" && "actor_profile" in item;
+}
+
 // Stored simulated items (devguide actor_profile shape) → editor drafts.
 export function toSimDrafts(items: DatasetItem[]): SimScenarioDraft[] {
   return items
-    .filter((item) => "actor_profile" in item)
+    .filter(simulates)
     .map((item, i) => {
       const profile = (item.actor_profile ?? {}) as Record<string, unknown>;
       const traits = (profile.traits ?? {}) as Record<string, unknown>;
@@ -353,7 +369,7 @@ export function toSimItems(drafts: SimScenarioDraft[]): DatasetItem[] {
 /** kind=simulated with non-actor items can only come from import — the persona
  *  form cannot represent those rows, so the editor degrades to a warning. */
 export function isMixedSimulated(kind: string, items: DatasetItem[]): boolean {
-  return kind === "simulated" && items.some((item) => !("actor_profile" in item));
+  return kind === "simulated" && items.some((item) => !simulates(item));
 }
 
 export type ImportError = { code: "noScenarios" } | { code: "badLine"; line: number };

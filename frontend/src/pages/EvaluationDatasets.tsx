@@ -71,7 +71,6 @@ interface CloudRow {
   datasetId: string;
   name: string | null;
   status: string | null;
-  schemaType: string | null;
   exampleCount: number | null;
   draftStatus?: string | null;
   updatedAt: string | null;
@@ -81,6 +80,9 @@ interface CloudRow {
 interface CloudDetail {
   datasetId: string;
   status: string | null;
+  // predefined | simulated | mixed | empty, read off the examples (AWS datasets
+  // declare no schema type); null while the dataset is not ACTIVE
+  kind: string | null;
   draft_status: string | null;
   failure_reason: string | null;
   versions: CloudVersion[];
@@ -998,7 +1000,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                   <td className="mono">☁ {row.name ?? row.datasetId}</td>
                   <td className="mono dim">{row.exampleCount ?? "—"}</td>
                   <td className="mono dim">
-                    {(row.schemaType ?? "").replace("AGENTCORE_EVALUATION_", "")}
+                    {cloudDetail?.datasetId === row.datasetId ? (cloudDetail.kind ?? "—") : "—"}
                   </td>
                   <td className="mono dim">—</td>
                   <td>
@@ -1050,7 +1052,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
             local
               ? `${local.id} · ${local.kind}`
               : cloud
-                ? (cloud.schemaType ?? "").replace("AGENTCORE_EVALUATION_", "")
+                ? (cloudDetail?.datasetId === cloud.datasetId ? (cloudDetail.kind ?? "") : "")
                 : t("evalPage.datasets.formSub")
           }
           end={
@@ -1133,7 +1135,9 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
               </div>
               <div className="kv">
                 <span className="k mono">{t("evalPage.datasets.detail.schema")}</span>
-                <span className="v mono">{cloud.schemaType ?? "—"}</span>
+                <span className="v mono">
+                  {cloudDetail?.datasetId === cloud.datasetId ? (cloudDetail.kind ?? "—") : "—"}
+                </span>
               </div>
               <div className="kv">
                 <span className="k mono">{t("evalPage.datasets.detail.examples")}</span>

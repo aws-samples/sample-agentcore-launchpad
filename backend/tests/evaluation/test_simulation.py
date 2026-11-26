@@ -4,7 +4,14 @@ import pytest
 
 from app.evaluation import simulation
 from app.evaluation.routers import _infer_kind, _validate_items
-from app.evaluation.scenarios import ground_truth_metadata, normalize_scenarios
+from app.evaluation.scenarios import (
+    aws_examples,
+    dataset_kind,
+    ground_truth_metadata,
+    normalize_scenarios,
+    scenario_kind,
+    simulates,
+)
 from tests.evaluation.test_datasets_v2 import PERSONA, SCENARIO
 
 
@@ -152,6 +159,87 @@ def test_persona_items_rejected_without_goal_or_input():
     for bad in bad_cases:
         with pytest.raises(AppError):
             _validate_items([bad])
+
+
+def test_scenario_kind_follows_the_aws_schema():
+    """AWS datasets declare no schema type: `turns` makes a fixed scenario even
+    beside an actor_profile; no `turns` with input/actor_profile is dynamic."""
+    both = {**SCENARIO, "actor_profile": PERSONA["actor_profile"]}
+    assert scenario_kind(SCENARIO) == "fixed" and not simulates(SCENARIO)
+    assert scenario_kind(both) == "fixed" and not simulates(both)
+    assert not simulation.is_simulated(both)
+    assert scenario_kind(PERSONA) == "dynamic" and simulates(PERSONA)
+    assert scenario_kind({"scenario_id": "q", "input": "hi"}) == "dynamic"
+    assert not simulates({"scenario_id": "q", "input": "hi"})
+    assert scenario_kind({"prompt": "hi"}) == "legacy"
+    _validate_items([both])  # fixed + a valid profile passes both rule sets
+    assert _infer_kind([both]) == "predefined"
+
+
+def test_input_only_dynamic_scenario_replays_as_one_turn():
+    item = {"scenario_id": "one-shot", "input": "What is PTO?", "max_turns": 3,
+            "assertions": ["explains PTO"]}
+    _validate_items([item])
+    assert _infer_kind([item]) == "predefined"
+    assert normalize_scenarios([item]) == [{
+        "scenario_id": "one-shot", "assertions": ["explains PTO"],
+        "turns": [{"input": "What is PTO?"}],
+    }]
+
+
+def test_legacy_prompt_item_with_a_stray_input_stays_legacy():
+    item = {"prompt": "2+2?", "expected": "4", "input": "ignored"}
+    assert scenario_kind(item) == "legacy"
+    _validate_items([item])  # no scenario_id needed, as before
+    assert normalize_scenarios([item])[0]["turns"] == [
+        {"input": "2+2?", "expected_response": "4"}
+    ]
+
+
+def test_traffic_prompts_read_input_only_dynamic_items():
+    from types import SimpleNamespace
+
+    from app.optimization.service import resolve_traffic_items
+    ds = SimpleNamespace(kind="predefined", items=[
+        {"scenario_id": "one-shot", "input": "What is PTO?"}, SCENARIO,
+    ])
+    assert resolve_traffic_items(ds) == [
+        ("one-shot", "What is PTO?"), ("refund_flow", "I want a refund"),
+    ]
+
+
+def test_aws_examples_send_scenarios_verbatim_and_convert_only_legacy():
+    """sync-to-aws sends what AWS stores: an input-only dynamic item (dataset
+    generation writes them for single-turn sessions) keeps its shape and metadata,
+    so AWS's content dedupe still recognises it; only prompt items are converted."""
+    generated = {"scenario_id": "g1", "input": "hi",
+                 "metadata": {"generation_id": "gen-1", "source": {"session_id": "s1"}}}
+    legacy = {"prompt": "2+2?", "expected": "4"}
+    assert aws_examples([generated, PERSONA, SCENARIO, legacy]) == [
+        generated, PERSONA, SCENARIO,
+        {"scenario_id": "item_4", "turns": [{"input": "2+2?", "expected_response": "4"}]},
+    ]
+
+
+def test_dynamic_items_rejected_without_a_usable_shape():
+    from app.core.errors import AppError
+    bad_cases = [
+        {"scenario_id": "x", "input": "   "},  # dynamic without an opening message
+        # AWS accepts a profile without input; the local SDK actor needs one
+        {"scenario_id": "x", "actor_profile": {"context": "c", "goal": "g"}},
+        {**SCENARIO, "actor_profile": {"context": "c"}},  # fixed + invalid profile
+        {"scenario_id": "x"},  # none of turns / input / actor_profile / prompt
+    ]
+    for bad in bad_cases:
+        with pytest.raises(AppError):
+            _validate_items([bad])
+
+
+def test_dataset_kind_from_examples():
+    assert dataset_kind([]) == "empty"
+    assert dataset_kind([SCENARIO, {"prompt": "x"}]) == "predefined"
+    assert dataset_kind([PERSONA]) == "simulated"
+    assert dataset_kind([SCENARIO, PERSONA]) == "mixed"
 
 
 def test_persona_normalize_passthrough_and_ground_truth():

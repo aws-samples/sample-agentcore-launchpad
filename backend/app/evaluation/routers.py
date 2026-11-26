@@ -32,7 +32,13 @@ from app.evaluation.findings import batch_findings
 from app.evaluation.models import EvalDataset, EvalRecommendation, EvalRun
 from app.evaluation.online_evaluators import require_visible_evaluators
 from app.evaluation.queue import run_queue
-from app.evaluation.scenarios import normalize_scenarios
+from app.evaluation.scenarios import (
+    aws_examples,
+    dataset_kind,
+    normalize_scenarios,
+    scenario_kind,
+    simulates,
+)
 from app.models.ledger import Agent
 from app.models.shares import KIND_EVAL_DATASET
 from app.routers.workspaces import WorkspaceScope, require_workspace
@@ -73,11 +79,26 @@ def _turn_input_text(turn: Any) -> str:
 
 
 def _validate_items(items: list[dict[str, Any]]) -> None:
-    """Per-item shape checks: predefined scenario items (they carry ``turns``)
-    need a unique scenario_id and non-empty turns; simulated persona items
-    (they carry ``actor_profile``) need a unique scenario_id, an initial input
-    and the actor's context/goal; prompt items need a prompt."""
+    """Per-item shape checks, following the AWS dataset schema (datasets declare
+    no schema type; the fields of each item decide): fixed scenarios (they carry
+    ``turns``) need a unique scenario_id and non-empty turns — and, like AWS,
+    a valid actor profile if they also carry one; dynamic scenarios (no
+    ``turns``) need a unique scenario_id plus an ``input``, an ``actor_profile``
+    with context/goal, or both; prompt items need a prompt."""
     seen_ids: set[str] = set()
+
+    def check_profile(idx: int, item: dict[str, Any]) -> None:
+        profile = item.get("actor_profile")
+        if (
+            not isinstance(profile, dict)
+            or not str(profile.get("context", "")).strip()
+            or not str(profile.get("goal", "")).strip()
+        ):
+            raise AppError(
+                "dataset.invalid_item",
+                f"item {idx}: actor_profile needs context and goal",
+                status_code=422,
+            )
 
     def check_scenario_id(idx: int, item: dict[str, Any]) -> None:
         scenario_id = str(item.get("scenario_id") or "").strip()
@@ -110,22 +131,19 @@ def _validate_items(items: list[dict[str, Any]]) -> None:
                         f"item {idx} turn {turn_no}: input required",
                         status_code=422,
                     )
-        elif "actor_profile" in item:
+            if "actor_profile" in item:
+                check_profile(idx, item)
+        elif scenario_kind(item) == "dynamic":
             check_scenario_id(idx, item)
-            profile = item.get("actor_profile")
-            if not str(item.get("input", "")).strip():
-                raise AppError(
-                    "dataset.invalid_item", f"item {idx}: input required",
-                    status_code=422,
-                )
-            if (
-                not isinstance(profile, dict)
-                or not str(profile.get("context", "")).strip()
-                or not str(profile.get("goal", "")).strip()
-            ):
+            if "actor_profile" in item:
+                check_profile(idx, item)
+            # AWS accepts an actor_profile without input, but the SDK actor the
+            # platform runs (bedrock-agentcore 1.18 SimulatedScenario) sends
+            # `input` as the opening message, so a dynamic scenario needs one here
+            if not _turn_input_text(item):
                 raise AppError(
                     "dataset.invalid_item",
-                    f"item {idx}: actor_profile needs context and goal",
+                    f"item {idx}: input required (the opening message)",
                     status_code=422,
                 )
         elif not str(item.get("prompt", "")).strip():
@@ -135,9 +153,11 @@ def _validate_items(items: list[dict[str, Any]]) -> None:
 
 
 def _infer_kind(items: list[dict[str, Any]]) -> str:
-    if any("actor_profile" in item for item in items):
+    """A local row's (immutable) kind: ``simulated`` when any item simulates a
+    user, ``predefined`` when any item is in scenario shape, else ``legacy``."""
+    if any(simulates(item) for item in items):
         return "simulated"
-    return "predefined" if any("turns" in item for item in items) else "legacy"
+    return "legacy" if all(scenario_kind(i) == "legacy" for i in items) else "predefined"
 
 
 def _has_ground_truth(items: list[dict[str, Any]]) -> bool:
@@ -606,7 +626,7 @@ def sync_dataset_to_aws(
     MODIFIED until PUBLISH VERSION snapshots it. The recorded `cloud` blob caches
     id/arn/status plus draft_status, example_count and the version list."""
     dataset = _dataset_in(db, ws, dataset_id, viewer=viewer, need="own")
-    examples = normalize_scenarios(dataset.items)
+    examples = aws_examples(dataset.items)
     client = control_client(ws.context)
     synced_at = datetime.now(UTC).isoformat()
     existing = _existing_cloud_draft(client, dataset)
@@ -615,14 +635,11 @@ def sync_dataset_to_aws(
 
     name = ac.sanitize_dataset_name(dataset.name)
     try:
+        # AWS datasets declare no schema type (fixed and dynamic scenarios mix);
+        # each example's own fields decide how it runs
         created = ac.create_dataset(
             client,
             name=name,
-            # simulated persona datasets sync with their own schema; scenario
-            # and legacy prompt datasets both normalize to predefined
-            schema_type=ac.DATASET_SCHEMA_TYPES.get(
-                dataset.kind, ac.DATASET_SCHEMA_TYPES["predefined"]
-            ),
             examples=examples,
             description=dataset.description or "",
         )
@@ -751,22 +768,16 @@ def publish_dataset_version(
     return _dataset_out(dataset)
 
 
-# Locally runnable cloud schemas: predefined scenarios replay their turns;
-# simulated persona datasets run through the SDK's LLM-actor simulation
-# (requires an actor_model_id on the run).
-RUNNABLE_CLOUD_SCHEMAS = {
-    ac.DATASET_SCHEMA_TYPES["predefined"],
-    ac.DATASET_SCHEMA_TYPES["simulated"],
-}
-
-
 def _cloud_dataset_items(
     cloud_id: str, ws: WorkspaceScope, version: str | None = None
 ) -> tuple[str, list[dict[str, Any]]]:
     """(display name, run items) for an ACTIVE AWS cloud dataset — the DRAFT,
     or the published ``version`` when pinned (both GetDataset and
     ListDatasetExamples read that version, so the scenarios replayed and the
-    ground truth gated on are exactly the snapshot's)."""
+    ground truth gated on are exactly the snapshot's). AWS datasets declare no
+    schema type any more: fixed scenarios replay their turns, dynamic ones with an
+    actor run through the SDK's LLM-actor simulation (an actor_model_id on the
+    run), and one dataset may mix both — the examples themselves are validated."""
     client = control_client(ws.context)
     if version:
         known = {str(v["version"]) for v in _cloud_versions(client, cloud_id)}
@@ -782,12 +793,6 @@ def _cloud_dataset_items(
             "dataset.cloud_not_active",
             f"cloud dataset is {detail.get('status')} — only ACTIVE datasets can run",
             status_code=400,
-        )
-    if detail.get("schemaType") not in RUNNABLE_CLOUD_SCHEMAS:
-        raise AppError(
-            "run.cloud_dataset_unsupported",
-            f"cloud dataset schema '{detail.get('schemaType')}' is not runnable here",
-            status_code=422,
         )
     items = [
         {k: v for k, v in example.items() if k != "exampleId"}
@@ -815,7 +820,6 @@ def list_cloud_datasets(
                 "datasetId": ds.get("datasetId"),
                 "name": ds.get("datasetName"),
                 "status": ds.get("status"),
-                "schemaType": ds.get("schemaType"),
                 "exampleCount": ds.get("exampleCount"),
                 "draftStatus": ds.get("draftStatus"),
                 "updatedAt": str(ds["updatedAt"]) if ds.get("updatedAt") else None,
@@ -841,23 +845,26 @@ def get_cloud_dataset(
 
 
 def _cloud_detail_out(client: Any, detail: dict[str, Any]) -> dict[str, Any]:
+    """The detail projection. `kind` (predefined / simulated / mixed / empty) is
+    derived from the DRAFT's examples — AWS no longer returns a schema type — and
+    is null while the dataset is not ACTIVE (its examples are not read then)."""
     cloud_id = detail["datasetId"]
-    runnable = (
-        detail.get("status") == "ACTIVE"
-        and detail.get("schemaType") in RUNNABLE_CLOUD_SCHEMAS
-    )
+    runnable = detail.get("status") == "ACTIVE"
     has_ground_truth = False
+    kind: str | None = None
     if runnable:
         items = [
             {k: v for k, v in example.items() if k != "exampleId"}
             for example in ac.list_dataset_examples(client, dataset_id=cloud_id)
         ]
         has_ground_truth = bool(items) and _has_ground_truth(items)
+        kind = dataset_kind(items)
     return {
         "datasetId": detail.get("datasetId"),
         "name": detail.get("datasetName"),
         "status": detail.get("status"),
-        "schemaType": detail.get("schemaType"),
+        "kind": kind,
+        "has_personas": kind in ("simulated", "mixed"),
         "exampleCount": detail.get("exampleCount"),
         "draft_status": detail.get("draftStatus"),
         "failure_reason": detail.get("failureReason"),
@@ -1892,7 +1899,7 @@ def _start_run(
         # like "window:Nh": the scope rides in dataset_name, no schema change
         dataset_name = f"logs:{len(set(req.session_ids or []))}"
 
-    persona = any("actor_profile" in item for item in items)
+    persona = any(simulates(item) for item in items)
     actor_model_id = req.actor_model_id or (actor_fallback if persona else None)
     if persona and not actor_model_id:
         raise AppError(

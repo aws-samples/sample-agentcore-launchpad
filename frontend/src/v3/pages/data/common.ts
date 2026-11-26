@@ -1,6 +1,7 @@
 // Data center helpers: one signal per status, the V2 range vocabulary, and the
 // dataset shape helpers the list and the detail share.
 import type { V2Dataset, V2Pipeline, V2Range } from "../../../lib/api";
+import { scenarioKind } from "../../../lib/datasetDrafts";
 import { RANGES } from "../../../v2/format";
 import type { Signal } from "../../ui";
 
@@ -47,7 +48,7 @@ export function datasetRows(ds: V2Dataset): DatasetRow[] {
         original: item,
       };
     }
-    if ("actor_profile" in item) return { input: String(item.input ?? ""), expected: "", extraTurns: 0, original: item };
+    if (scenarioKind(item) === "dynamic") return { input: String(item.input ?? ""), expected: "", extraTurns: 0, original: item };
     return { input: String(item.prompt ?? ""), expected: String(item.expected ?? ""), extraTurns: 0, original: item };
   });
 }

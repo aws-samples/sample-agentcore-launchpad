@@ -37,7 +37,7 @@ from app.evaluation.online_evaluators import (  # noqa: F401 — re-exported
     ONLINE_EVAL_MAX,
     normalize_online_evaluators,
 )
-from app.evaluation.scenarios import scenario_prompts
+from app.evaluation.scenarios import normalize_scenarios, scenario_prompts
 from app.models.ledger import Agent, Deployment, Job
 from app.optimization import providers as rec_providers
 from app.optimization.models import Experiment, RuntimeCanary
@@ -1788,7 +1788,9 @@ def resolve_traffic_items(dataset: Any) -> list[tuple[str, str]]:
             # a scenario's first user turn — reuse the eval replay extractor so
             # dict inputs ({"content"|"prompt": …}, imported JSON) unwrap the
             # same way here as when the dataset is replayed for evaluation
-            turn_prompts = [p for p in scenario_prompts(item) if p.strip()]
+            # (normalized first: an input-only dynamic scenario is one turn)
+            turn_prompts = [p for p in scenario_prompts(normalize_scenarios([item])[0])
+                            if p.strip()]
             text = turn_prompts[0] if turn_prompts else ""
         else:
             text = str(item.get("prompt") or "")
