@@ -652,6 +652,9 @@ own prefix), the files API and the delete hooks.
   (`ChatSession.actor_id`) or an administrator may read; anyone else gets the missing-session
   404 — stricter than the transcript list. The V3 chat inspector's **Files** tab (`?inspect=files`)
   lists the files, reloads after each finished turn, and downloads through the presigned URL.
+  The V2 chat's right-hand inspector has the same tab (`?tab=files`, `v2/pages/chat/FilesPanel.tsx`,
+  rebuilt on the V2 kit); there a 404 `chat.session_not_found` reads as "only the session's owner or an
+  administrator can see its files" rather than as an error.
 - **Retention and delete.** Objects expire after 30 days. Deleting an agent (the delete route,
   a project purge, a conversation clear, the deferred teardown sweep) removes
   `projects/<project|shared>/agents/<agent id>/` best-effort (`agent_files.delete_agent_files`:

@@ -427,7 +427,8 @@ spec 的 `filesystem.mounts[]`；`filesystem_entries(spec, agent_id)` 把它们�
 - **文件 API。** `GET /api/chat/{agent_id}/sessions/{session_id}/files` 列出文件，`…/files/download?path=` 签发预签名
   URL（五分钟，附件）。前缀由 Agent 记录和会话台账计算；`path` 必须留在其中。只有该会话自己的用户（`ChatSession.actor_id`）
   或管理员可读，其他人得到“会话不存在”的 404——比对话记录列表更严格。V3 对话检查器的**文件**标签页（`?inspect=files`）
-  列出文件，每轮结束后重新加载，并通过预签名 URL 下载。
+  列出文件，每轮结束后重新加载，并通过预签名 URL 下载。V2 对话右侧的检查器有同样的标签页（`?tab=files`，
+  `v2/pages/chat/FilesPanel.tsx`，用 V2 组件重写）；在那里 404 `chat.session_not_found` 显示为“只有会话主人或管理员可以查看其文件”，而不是错误。
 - **保留与删除。** 对象 30 天后过期。删除 Agent（删除路由、项目清除、会话清空、延迟拆除巡检）会尽力删除
   `projects/<project|shared>/agents/<agent id>/`（`agent_files.delete_agent_files`：分页列出并批量删除，绝不抛出；
   生命周期规则作为兜底）。工作区清除只删除台账行、不触碰 AWS，因此这里没有需要删除的内容。
