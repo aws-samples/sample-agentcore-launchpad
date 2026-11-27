@@ -32,6 +32,7 @@ export function Inspector({
   onTab,
   onClose,
   agentId,
+  editTo,
   sessionId,
   busy,
   memoryState,
@@ -40,6 +41,8 @@ export function Inspector({
   onTab: (tab: InspectTab) => void;
   onClose: () => void;
   agentId: string;
+  /** where the agent's settings open (`editPath`), for the disabled Files tab */
+  editTo: string;
   sessionId: string | undefined;
   busy: boolean;
   memoryState: AgentMemoryState;
@@ -131,7 +134,7 @@ export function Inspector({
             <div className="v3-chat-inspect-sid mono" title={sessionId}>session {sessionId}</div>
             {active.error && <Notice s="act">{t("v3.chat.inspect.failed", { msg: active.error })}</Notice>}
             {tab === "trace" ? <TraceBody read={trace} /> : tab === "files" ? (
-              <FilesBody read={files} agentId={agentId} sessionId={sessionId} />
+              <FilesBody read={files} agentId={agentId} editTo={editTo} sessionId={sessionId} />
             ) : <MemoryBody read={memory} memoryState={memoryState} />}
           </>
         )}
@@ -196,7 +199,7 @@ function MemoryBody({ read, memoryState }: { read: Read<ChatMemorySummary>; memo
 
 /** The session output folder: what the agent saved, newest first, with a download per
  *  file (a presigned URL fetched on click — it lives five minutes). */
-export function FilesBody({ read, agentId, sessionId }: { read: Read<SessionFiles>; agentId: string; sessionId: string }) {
+export function FilesBody({ read, agentId, editTo, sessionId }: { read: Read<SessionFiles>; agentId: string; editTo: string; sessionId: string }) {
   const { t } = useTranslation();
   const [downloading, setDownloading] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -206,7 +209,7 @@ export function FilesBody({ read, agentId, sessionId }: { read: Read<SessionFile
     return (
       <div className="v3-chat-inspect-empty" data-testid="v3-chat-files-disabled">
         <p>{t("v3.chat.files.disabled")}</p>
-        <Link className="v3-chat-inspect-link" to={`/v2/agents?view=edit&id=${encodeURIComponent(agentId)}`}>
+        <Link className="v3-chat-inspect-link" to={editTo}>
           {t("v3.chat.files.enable")}
         </Link>
       </div>

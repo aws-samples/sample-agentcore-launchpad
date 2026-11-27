@@ -256,12 +256,39 @@ spec 也能被无歧义地读回,将来新增第二个 SDK 无需迁移已存 sp
 它按会话隔离，使用同一 `runtimeSessionId` 停止并恢复后数据仍在，每个会话最多 1 GB，
 闲置 14 天过期，每发布一个新版本都会重置。显式传 `session_storage: null` 即关闭。
 
-| 方式 | 会话存储 | 自带 S3 Files / EFS（+ VPC） | 发送位置 |
+**会话文件存储：托管 vs S3 bucket。** Agent 的会话文件只能放在三处中的一处，V2 向导的文件系统卡片把它们做成一个选项：
+**托管会话存储**（`filesystem.session_storage`，默认）、**S3 bucket** 会话输出文件夹（`filesystem.outputs`，见下文「会话输出文件」），
+或者**都不用**。托管 Harness 没有 S3 bucket 这一项（只有托管或都不用）。
+
+| | 托管会话存储（默认） | S3 bucket（会话输出文件夹） | 都不用 |
 |---|---|---|---|
-| `harness` | 支持 | 支持（P3 / P4 探测待做） | `environment.agentCoreRuntimeEnvironment.filesystemConfigurations` |
-| `zip_runtime` / `studio` | 支持 | 支持（P1 / P2 探测待做） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
-| `container` | 支持 | 支持（2026-07-13 实测） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
-| `byoc`（代码 zip、镜像；Agent 与 MCP 服务器） | 支持 | 支持（P5 探测待做） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| Spec | `session_storage: {mount_path}`（默认 `/mnt/workspace`） | `outputs: {mount_path}`（默认 `/mnt/outputs`）；`session_storage` 解析为 `null` | `session_storage: null`，没有 `outputs` |
+| AWS 条目 | `sessionStorage` | 工作区 Agent 文件存储桶上的 `s3BucketMount` | — |
+| 文件语义 | POSIX 文件系统 | **不是 POSIX**：只能整文件写入——追加 `EPERM`、原地修改 `EBADF`、重命名 `ENOSYS`；整文件覆盖可以 | 只有 `/tmp` |
+| 生命周期 | 按会话；停止 / 恢复后仍在，≤ 1 GB，闲置 14 天过期，每个新版本重置 | 按会话；每个对象写入 30 天后过期 | 会话所在的 microVM |
+| 用户能否下载 | 否 | 能，在对话的**文件**标签页下载，保留 30 天 | 否 |
+| 支持的方式 | 全部，含 Harness | 平台版本 V2 的 Runtime 方式（不含 Harness） | 全部 |
+| Strands 日志根目录（`templates/strands_agent/builder.py` 的 `journal_root`） | 会话挂载 | `/tmp`（没有会话挂载） | `/tmp` |
+| 占用的 `filesystemConfigurations` 条目 | 5 个中占 1 个 | 5 个中占 1 个 | 0 |
+
+两者**互斥**（`schemas/agent.FilesystemConfig`）：同时设置 `outputs` 和非空 `session_storage` 的 spec 返回
+`422 validation.invalid_request`（“choose either managed session storage or the session output folder (S3 bucket), not
+both”）。只设置了 `outputs`、**没有** `session_storage` 键的请求，会话存储解析为关闭而不是默认的开启，因此只加了 `outputs`
+的 API 或脚本调用方不会被拒；`outputs: null` 不改变任何东西。所以选择 S3 bucket 也就是放弃托管会话存储：Agent 失去了文档中唯一
+能跨越停止 / 恢复的 POSIX 空间，Strands Agent 的日志退回到 `/tmp`（`/tmp` 能否跨越停止 / 恢复没有保证）。两个字段名及其默认值都已冻结——已存储的 spec、快照和 Strands
+黄金夹具都按这个拼写，重命名 `session_storage` 会把每条已存储的 `session_storage: null`（关闭）读成默认的开启。引入该规则时
+（2026-11-27）dev 和 prod 上没有任何同时设置两者的 spec，因此不需要数据迁移。
+
+两者之间的切换就是一次普通的重新发布。托管 → S3 bucket：spec 里没有会话存储，线上的 `sessionStorage` 条目被去掉，并加上
+`s3BucketMount`。S3 bucket → 托管：`/mnt/outputs` 是该 Agent 之前某次发布设置过的路径（`deployer/mounts.published_mount_paths`），
+因此算作平台的条目而被卸载，不会当作外部挂载保留；canary 候选版本使用同样的已发布路径（`optimization/canary_infra._candidate_mounts`）。
+
+| 方式 | 托管会话存储 | S3 bucket 会话输出文件夹 | 自带 S3 Files / EFS（+ VPC） | 发送位置 |
+|---|---|---|---|---|
+| `harness` | 支持 | 不支持（`BUCKET_MOUNT_UNSUPPORTED`） | 支持（P3 / P4 探测待做） | `environment.agentCoreRuntimeEnvironment.filesystemConfigurations` |
+| `zip_runtime` / `studio` | 支持 | 支持，平台版本 V2 | 支持（P1 / P2 探测待做） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `container` | 支持 | 支持，平台版本 V2 | 支持（2026-07-13 实测） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `byoc`（代码 zip、镜像；Agent 与 MCP 服务器） | 支持 | 支持，平台版本 V2 | 支持（P5 探测待做） | `CreateAgentRuntime` / `UpdateAgentRuntime` |
 
 `schemas/agent.BYO_MOUNT_METHODS` 列出接受自带挂载的方式（设计 storage-mounts §3）。
 所有方式的请求形状都在 `bedrock-agentcore-control` service model 中；线上行为探测脚本是
@@ -378,8 +405,8 @@ spec 的 `filesystem.mounts[]`；`filesystem_entries(spec, agent_id)` 把它们�
 - **Agent 如何得知。** 清单条目带有 `scope`；提示词说明“只能整文件写入——不能追加、重命名或原地修改”（Mountpoint for S3：
   追加 `EPERM`、原地修改 `EBADF`、重命名 `ENOSYS`），按会话挂载的还会标注“仅限本次会话”。
 
-**会话输出文件**（`filesystem.outputs`，`services/agent_files.py`）。成员可以为每个 Agent 开启一个按会话隔离的可读写
-输出文件夹（默认关闭；位于 V2 向导的文件系统卡片）。它是挂在工作区自己的 **Agent 文件存储桶**
+**会话输出文件**（`filesystem.outputs`，`services/agent_files.py`）。成员可以为每个 Agent 选择一个按会话隔离的可读写
+输出文件夹作为会话文件存储，**代替**托管会话存储（默认关闭；即 V2 向导文件系统卡片里的 S3 bucket 选项，见上文「会话文件存储」）。它是挂在工作区自己的 **Agent 文件存储桶**
 （`launchpad-agent-files-<account>-<region>`，`resources.agent_files_bucket`）上的 `s3BucketMount`，前缀为
 `projects/<project|shared>/agents/<agent id>/sessions/{runtimeSessionId}/`，挂载到 `/mnt/outputs`。它不是目录条目，
 因此不需要允许名单：spec 里是 `outputs: {mount_path, bucket, project_key}`，其中 `bucket` 和 `project_key` 由服务端写入
@@ -391,7 +418,7 @@ spec 的 `filesystem.mounts[]`；`filesystem_entries(spec, agent_id)` 把它们�
   拒绝——`AgentSpec` 校验器直接拒绝）；工作区没有该桶时返回 `422 storage.agent_files_unavailable`，直到桶存在：hub——栈缺少 `AgentFilesBucketName`
   输出时 `make bootstrap` 会执行 `cdk deploy`（`REQUIRED_OUTPUTS`）；新的 spoke——其引导的 `storage` 阶段（spoke 模板 v3 提供
   `s3:PutLifecycleConfiguration`）；已经 `ready` 的 spoke（不允许重新引导）——`POST /api/workspaces/{id}/agent-files/repair`，只重跑这一步。
-  该文件夹占 AgentCore 五个 `filesystemConfigurations` 中的一个。
+  该文件夹占 AgentCore 五个 `filesystemConfigurations` 中的一个——也就是托管会话存储原本占用的那一个，因为两者不会同时存在。
 - **存储桶。** 不开版本控制（过期必须真正删除）、SSE-S3、Block Public Access，对象创建 30 天后过期，未完成的分片上传一天后清理，
   CDK 中为 `RETAIN`（客户文件在栈拆除后仍保留；`teardown.py` 不会删它）。桶策略（`agent_files.bucket_policy`，由 spoke
   引导流程应用；CDK 栈带有相同的语句，两者均有测试固定）为仅限 TLS，加上经探测（P4b）验证的会话限制：带
@@ -435,11 +462,12 @@ Harness 还会在系统提示词末尾附一段「Shared directories」说明（
   以 spec 为准替换，并在部署日志记一行。金丝雀回滚不带 `environment`，因此保留当前挂载。
 
 所有已存储的 spec 都是 `model_dump()` 写入的，本身就带着默认值。所以现有的 Harness 或 Strands
-Agent 下次重新发布时会挂上 `/mnt/workspace`，除非用户把它关掉。会话存储不需要 IAM 授权。
+Agent 下次重新发布时会挂上 `/mnt/workspace`，除非用户选择了 S3 bucket 或都不用。会话存储不需要 IAM 授权。
 在 VPC 网络配置档中（见下文「Agent 网络」），运行时经配置档的 S3 网关端点访问
 `acr-storage-*` S3 桶，配置档预检对每个 Agent 都要求该端点。Harness 通过原生 `shell` /
-`file_operations` 工具访问挂载。V2 向导（`FilesystemCard`）编辑这一设置，其中自带挂载行只有管理员可以编辑；
-经典控制台会原样回传已存储的值。
+`file_operations` 工具访问挂载。V2 向导（`FilesystemCard`）编辑这个三选一（托管 / S3 bucket / 都不用；Harness 只有托管或都不用），
+其中自带挂载行只有管理员可以编辑。经典控制台只提供托管会话存储的开 / 关，其余已存储的值原样回传；唯一的例外是在经典控制台打开
+托管会话存储时会清掉已存储的 `outputs`（两者不能共存）。
 
 ### Agent 网络（`AgentSpec.network`）
 

@@ -93,12 +93,22 @@ def _candidate_mounts(live: dict, spec: Any, agent: Any, log: Any) -> list[dict]
     not set (an AWS console mount), so a candidate does not lose them. Paths the current
     spec names are the platform's; a candidate on the PUBLIC network keeps none of the
     NFS-backed ones (S3 Files / EFS need a VPC) but keeps an ``s3BucketMount``."""
+    from app.core.db import SessionLocal
     from app.deployer.filesystem import merge_live, mount_path, needs_vpc
-    from app.deployer.mounts import manifest_paths
+    from app.deployer.mounts import manifest_paths, published_mount_paths
 
+    # the paths ANY publish of this agent set, as the three main deployers use: after a
+    # session-storage <-> output-folder switch the old /mnt/outputs is the platform's,
+    # not an external mount to carry over. A read-only lookup — the canary never writes
+    # the ledger.
+    db = SessionLocal()
+    try:
+        managed = manifest_paths(agent.spec) | published_mount_paths(db, agent.id)
+    finally:
+        db.close()
     platform = filesystem_configurations(spec, agent.id)
     merged = merge_live(live.get("filesystemConfigurations"), platform,
-                        managed_paths=manifest_paths(agent.spec))
+                        managed_paths=managed)
     kept = merged[len(platform):]
     if any(needs_vpc(fs) for fs in kept) and spec_vpc(spec, agent.workspace_id) is None:
         log("S3 Files / EFS mounts set outside the platform are not carried to a PUBLIC "

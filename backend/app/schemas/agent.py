@@ -512,6 +512,13 @@ class FilesystemConfig(BaseModel):
     session_storage defaults ON; an explicit JSON null disables it. BYO mounts need
     the agent in a VPC (its network profile, `AgentSpec.network`) and a method of
     `BYO_MOUNT_METHODS`.
+
+    Managed session storage and the session output folder (`outputs`, an S3 bucket
+    mount) are peers — one or the other, never both. A payload that sets `outputs` and
+    says nothing about `session_storage` resolves to session storage OFF (rather than
+    the default ON) so API callers are not refused for omitting a key. The two field
+    names and their defaults are frozen: stored specs, snapshots and the Strands golden
+    fixtures all spell them this way.
     """
 
     session_storage: SessionStorageFs | None = Field(default_factory=SessionStorageFs)
@@ -549,8 +556,21 @@ class FilesystemConfig(BaseModel):
         """``(kind, mount)`` for every resolved catalog mount (``mount.mode`` set)."""
         return [(m.kind, m) for m in self.mounts if m.resolved and m.kind]
 
+    @model_validator(mode="before")
+    @classmethod
+    def _outputs_replace_default_session_storage(cls, data: Any) -> Any:
+        if (isinstance(data, dict) and data.get("outputs") is not None
+                and "session_storage" not in data):
+            return {**data, "session_storage": None}
+        return data
+
     @model_validator(mode="after")
     def _check(self) -> "FilesystemConfig":
+        if self.outputs is not None and self.session_storage is not None:
+            raise ValueError(
+                "choose either managed session storage or the session output folder "
+                "(S3 bucket), not both"
+            )
         # every filesystemConfigurations entry counts against AgentCore's limit of five
         limit = MAX_FILESYSTEM_ENTRIES - (1 if self.session_storage else 0)
         outputs = 1 if self.outputs else 0
@@ -902,8 +922,8 @@ class AgentSpec(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     max_iterations: int = Field(default=100, ge=1, le=100)
     timeout_seconds: int = Field(default=600, ge=10, le=3600)
-    # AgentCore Runtime persistent storage. Session storage mounts on the harness,
-    # zip_runtime/studio and container methods; BYO mounts are container-only.
+    # AgentCore Runtime persistent storage. Session storage mounts on every method;
+    # BYO mounts (S3 Files / EFS / catalog) on `BYO_MOUNT_METHODS`.
     filesystem: FilesystemConfig = Field(default_factory=FilesystemConfig)
     # VPC networking (design §12.3): None = PUBLIC, a profile reference, or the legacy
     # inline subnets/SGs. Mandatory whenever a BYO file system is mounted.
@@ -1337,6 +1357,10 @@ class AgentSpec(BaseModel):
 
     @model_validator(mode="after")
     def _byo_needs_vpc(self) -> "AgentSpec":
+        # Despite the name this is the spec's whole mount-vs-method gate: it refuses the
+        # session output folder / S3 bucket mounts on a method that cannot take them
+        # (Harness), BYO mounts on a method outside BYO_MOUNT_METHODS, and NFS mounts
+        # without a network profile.
         # BYO mounts ride the agent's own network (design storage-mounts §3.2): the
         # mount targets are reached from the runtime's ENIs, so a PUBLIC agent cannot
         # mount them. Refused, not dropped, so a spec never shows a mount its runtime

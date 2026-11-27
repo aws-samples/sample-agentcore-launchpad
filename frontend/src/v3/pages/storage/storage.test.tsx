@@ -319,18 +319,32 @@ describe("agent storage card", () => {
     expect(html).toContain("works on the PUBLIC network");
   });
 
-  it("lists the session output folder as a read-write per-session row", () => {
-    const html = render(<StorageCardView agent={agent} loading={false} error={null} data={{
-      ...data, mounts: [], inline: [], outputs: { mount_path: "/mnt/outputs", bucket: "launchpad-agent-files-1-us-west-2" },
-    }} />);
-    expect(html).toContain('data-testid="v3-agent-storage-outputs"');
-    expect(html).toContain("/mnt/outputs");
-    expect(html).toContain("Session output files");
-    expect(html).toContain("per session");
-    expect(html).toContain("downloadable from the chat for 30 days");
+  it("shows managed session storage as the session file storage row", () => {
+    const html = render(<StorageCardView agent={agent} loading={false} error={null} data={{ ...data, mounts: [], inline: [] }} />);
+    expect(html).toContain('data-testid="v3-agent-storage-session"');
+    expect(html).toContain('data-kind="managed"');
+    expect(html).toContain("Session file storage");
+    expect(html).toContain("/mnt/workspace");
+    expect(html).toContain("not downloadable from the chat");
   });
 
-  it("renders nothing when only session storage is mounted", () => {
-    expect(render(<StorageCardView agent={agent} loading={false} error={null} data={{ ...data, mounts: [], inline: [] }} />)).toBe("");
+  it("lists the S3 bucket choice as a read-write per-session row", () => {
+    const html = render(<StorageCardView agent={agent} loading={false} error={null} data={{
+      ...data, mounts: [], inline: [], session_storage: null,
+      outputs: { mount_path: "/mnt/outputs", bucket: "launchpad-agent-files-1-us-west-2" },
+    }} />);
+    expect(html).toContain('data-kind="s3"');
+    expect(html).toContain("/mnt/outputs");
+    expect(html).toContain("S3 bucket");
+    expect(html).toContain("per session");
+    expect(html).toContain("downloadable from the chat for 30 days");
+    expect(html).not.toContain("/mnt/workspace");
+  });
+
+  it("shows the none choice with /tmp", () => {
+    const html = render(<StorageCardView agent={agent} loading={false} error={null} data={{ ...data, mounts: [], inline: [], session_storage: null }} />);
+    expect(html).toContain('data-kind="none"');
+    expect(html).toContain("/tmp");
+    expect(html).toContain("nothing is kept across stop/resume");
   });
 });

@@ -70,13 +70,14 @@ def network_configuration(vpc: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def environment_for_create(
-    session_storage: list[dict[str, Any]], vpc: Mapping[str, Any] | None
+    filesystem_entries: list[dict[str, Any]], vpc: Mapping[str, Any] | None
 ) -> dict[str, Any] | None:
-    """CreateHarness ``environment``: the session storage plus, for a VPC agent, its
-    network. A PUBLIC agent with no storage omits the member (the service default)."""
+    """CreateHarness ``environment``: the spec's filesystemConfigurations entries (session
+    storage and any BYO mounts) plus, for a VPC agent, its network. A PUBLIC agent with no
+    storage omits the member (the service default)."""
     request: dict[str, Any] = {}
-    if session_storage:
-        request["filesystemConfigurations"] = list(session_storage)
+    if filesystem_entries:
+        request["filesystemConfigurations"] = list(filesystem_entries)
     if vpc:
         request["networkConfiguration"] = network_configuration(vpc)
     return {"agentCoreRuntimeEnvironment": request} if request else None
