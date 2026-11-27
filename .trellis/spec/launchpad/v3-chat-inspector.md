@@ -25,6 +25,9 @@
   fetches the presigned URL (`…/files/download?path=`, 5 min) on click and navigates to it; shows the
   30-day retention note and a truncation note past 1000 files. Only the session's user / an admin gets data
   (404 `chat.session_not_found` otherwise → the usual `v3.chat.inspect.failed` notice).
+  The V2 chat inspector has the same tab (`frontend/src/v2/pages/chat/FilesPanel.tsx`, `?tab=files`): it cannot import
+  this V3 body (`v3/ui.tsx` pulls `story.css`), so it is rebuilt on the V2 kit and shares only `fileSize` and the
+  `v3.chat.files.*` copy; its 404 `chat.session_not_found` shows an info note (`v2.chat.filesForbidden`), not an error.
 - Links: 在可观测中打开 → `/v3/observability?tab=sessions&view=session&id=`; 在记忆中打开 →
   `/v3/memory?tab=short-term&actor=<actor_id>&session=`.
 

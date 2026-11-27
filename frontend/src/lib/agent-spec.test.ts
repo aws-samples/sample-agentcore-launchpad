@@ -17,8 +17,7 @@ import {
   formFromStoredSpec,
   hasByoMounts,
   republishSpec,
-  sessionKind,
-  sessionKindFlags,
+  storeCount,
   withContextVia,
 } from "./agent-spec";
 import { formFromSharedTemplate } from "../v2/pages/agents/templateForms";
@@ -344,83 +343,78 @@ describe("BYO mounts on every method (storage-mounts §3)", () => {
   });
 });
 
-describe("session file storage: managed, S3 bucket or none (task 11-27-session-fs-choice)", () => {
+describe("session storage and the S3 output folder are independent (task 11-27-session-fs-both)", () => {
   const base = { ...emptyAgentForm("zip_runtime"), name: "out-a", systemPrompt: "hi" };
-  const s3 = { ...base, ...sessionKindFlags("s3") };
+  const both = { ...base, outputsFs: true };
 
   it("defaults to managed session storage with the folder off", () => {
-    expect(sessionKind(emptyAgentForm("zip_runtime"))).toBe("managed");
-    expect(emptyAgentForm("zip_runtime").outputsFs).toBe(false);
+    expect(emptyAgentForm("zip_runtime")).toMatchObject({ sessionFs: true, outputsFs: false });
   });
 
-  it("sets exactly one flag per choice", () => {
-    expect(sessionKindFlags("managed")).toEqual({ sessionFs: true, outputsFs: false });
-    expect(sessionKindFlags("s3")).toEqual({ sessionFs: false, outputsFs: true });
-    expect(sessionKindFlags("none")).toEqual({ sessionFs: false, outputsFs: false });
-  });
-
-  it("serializes each choice (an explicit null turns session storage off)", () => {
+  it("serializes each toggle on its own, and both together", () => {
     const managed = buildAgentSpec(base, CATALOGS).filesystem;
     expect(managed?.session_storage).toEqual({ mount_path: "/mnt/workspace" });
     expect(managed).not.toHaveProperty("outputs");
-    const bucket = buildAgentSpec({ ...s3, outputsMount: "/mnt/out" }, CATALOGS).filesystem;
+    const bucket = buildAgentSpec({ ...base, sessionFs: false, outputsFs: true, outputsMount: "/mnt/out" }, CATALOGS).filesystem;
     expect(bucket?.outputs).toEqual({ mount_path: "/mnt/out" });
     expect(bucket).toHaveProperty("session_storage", null);
-    const none = buildAgentSpec({ ...base, ...sessionKindFlags("none") }, CATALOGS).filesystem;
+    const bothSent = buildAgentSpec({ ...both, outputsMount: "/mnt/out" }, CATALOGS).filesystem;
+    expect(bothSent?.session_storage).toEqual({ mount_path: "/mnt/workspace" });
+    expect(bothSent?.outputs).toEqual({ mount_path: "/mnt/out" });
+    const none = buildAgentSpec({ ...base, sessionFs: false }, CATALOGS).filesystem;
     expect(none).toHaveProperty("session_storage", null);
     expect(none).not.toHaveProperty("outputs");
   });
 
-  it("never sends the folder from the Harness, which has no S3 bucket", () => {
-    const harness = { ...s3, method: "harness" as const };
-    expect(sessionKind(harness)).toBe("none");
-    expect(buildAgentSpec(harness, CATALOGS).filesystem).not.toHaveProperty("outputs");
+  it("never sends the folder from the Harness", () => {
+    expect(buildAgentSpec({ ...both, method: "harness" }, CATALOGS).filesystem).not.toHaveProperty("outputs");
   });
 
-  it("round-trips each choice through a stored spec (the server's stamp is not echoed back)", () => {
-    const stored = { filesystem: { session_storage: null, outputs: { mount_path: "/mnt/out", bucket: "b", project_key: "p" } } };
+  it("round-trips a stored spec that carries both (the server's stamp is not echoed back)", () => {
+    const stored = {
+      filesystem: {
+        session_storage: { mount_path: "/mnt/ws" },
+        outputs: { mount_path: "/mnt/out", bucket: "b", project_key: "p" },
+      },
+    };
     const form = formFromStoredSpec("zip_runtime", "out-b", stored).form;
-    expect(sessionKind(form)).toBe("s3");
-    expect(form.outputsMount).toBe("/mnt/out");
+    expect(form).toMatchObject({ sessionFs: true, sessionMount: "/mnt/ws", outputsFs: true, outputsMount: "/mnt/out" });
+    expect(buildAgentSpec(form, CATALOGS).filesystem).toMatchObject({
+      session_storage: { mount_path: "/mnt/ws" },
+      outputs: { mount_path: "/mnt/out" },
+    });
     expect(buildAgentSpec(form, CATALOGS).filesystem?.outputs).toEqual({ mount_path: "/mnt/out" });
-    const managed = formFromStoredSpec("zip_runtime", "out-c", { filesystem: { session_storage: { mount_path: "/mnt/ws" } } }).form;
-    expect(sessionKind(managed)).toBe("managed");
-    const none = formFromStoredSpec("zip_runtime", "out-d", { filesystem: { session_storage: null } }).form;
-    expect(sessionKind(none)).toBe("none");
   });
 
-  it("refuses both stores at once, and the folder on a V1 Runtime", () => {
-    const both = { ...base, outputsFs: true };
-    expect(filesystemIssues(both).bothStores).toBe(true);
-    expect(filesystemValid(both)).toBe(false);
-    expect(filesystemValid(s3)).toBe(true);
-    const v1 = { ...s3, runtimeConfig: { ...s3.runtimeConfig!, platform_version: "V1" as const } };
+  it("accepts both stores, and blocks the folder on a V1 Runtime", () => {
+    expect(filesystemValid(both)).toBe(true);
+    const v1 = { ...both, runtimeConfig: { ...both.runtimeConfig!, platform_version: "V1" as const } };
     expect(filesystemIssues(v1).outputsNeedsV2).toBe(true);
     expect(filesystemValid(v1)).toBe(false);
-    // the Harness ignores the folder, so it cannot conflict there
-    expect(filesystemIssues({ ...both, method: "harness" }).bothStores).toBe(false);
+    // the Harness never carries the folder, so V1 does not matter there
+    expect(filesystemIssues({ ...v1, method: "harness" }).outputsNeedsV2).toBe(false);
   });
 
   it("checks the path, the unique paths and the five-entry limit", () => {
-    expect(filesystemIssues({ ...s3, outputsMount: "/data" }).outputsMount).toBe(true);
-    expect(filesystemIssues({ ...s3, outputsMount: "/mnt/workspace" }).duplicatePaths).toBe(false);
-    expect(filesystemIssues({ ...base, outputsFs: true, outputsMount: "/mnt/workspace" }).duplicatePaths).toBe(true);
-    expect(filesystemIssues(s3)).toMatchObject({ outputsMount: false, duplicatePaths: false, tooMany: false });
-    // either store takes one of the five entries, leaving four for mounts
+    expect(filesystemIssues({ ...both, outputsMount: "/data" }).outputsMount).toBe(true);
+    expect(filesystemIssues({ ...both, outputsMount: "/mnt/workspace" }).duplicatePaths).toBe(true);
+    expect(filesystemIssues(both)).toMatchObject({ outputsMount: false, duplicatePaths: false, tooMany: false });
+    // each store takes one of the five entries
     const rows = ["a", "b", "c", "d", "e"].map((x) => ({ storageId: `cat-${x}`, kind: "s3bucket" as const, mountPath: `/mnt/${x}`, mode: "ro" as const }));
-    expect(filesystemIssues({ ...s3, catalogMounts: rows.slice(0, 4) as never }).tooMany).toBe(false);
-    expect(filesystemIssues({ ...s3, catalogMounts: rows.slice(0, 5) as never }).tooMany).toBe(true);
-    // no store at all: all five are free
-    const none = { ...base, ...sessionKindFlags("none") };
-    expect(filesystemIssues({ ...none, catalogMounts: rows as never }).tooMany).toBe(false);
+    expect(storeCount(both)).toBe(2);
+    expect(filesystemIssues({ ...both, catalogMounts: rows.slice(0, 3) as never }).tooMany).toBe(false);
+    expect(filesystemIssues({ ...both, catalogMounts: rows.slice(0, 4) as never }).tooMany).toBe(true);
+    // one store leaves four, no store leaves five, the Harness counts no folder
+    expect(filesystemIssues({ ...base, catalogMounts: rows.slice(0, 4) as never }).tooMany).toBe(false);
+    expect(filesystemIssues({ ...base, sessionFs: false, catalogMounts: rows as never }).tooMany).toBe(false);
+    expect(storeCount({ ...both, method: "harness" })).toBe(1);
   });
 
   it("gates a BYOC agent on the filesystem too", () => {
     const byoc = { ...emptyAgentForm("byoc"), name: "fs-by", byocUploadId: "u1" };
     const opts = { knobIssues: [], byocUploading: false };
     expect(agentFormValid(byoc, CATALOGS, opts)).toBe(true);
-    expect(agentFormValid({ ...byoc, ...sessionKindFlags("s3"), outputsMount: "/data" }, CATALOGS, opts)).toBe(false);
-    expect(agentFormValid({ ...byoc, outputsFs: true }, CATALOGS, opts)).toBe(false);
+    expect(agentFormValid({ ...byoc, outputsFs: true, outputsMount: "/data" }, CATALOGS, opts)).toBe(false);
   });
 });
 
