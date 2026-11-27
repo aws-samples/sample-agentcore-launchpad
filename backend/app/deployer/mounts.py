@@ -86,14 +86,17 @@ def prompt_note(spec: AgentSpec) -> str:
             lines.append(f"- {entry['path']} (session output folder, read-write; this "
                          "session only): save the files the user should receive here — "
                          "the user can download them from the chat for "
-                         f"{OUTPUTS_RETENTION_DAYS} days; {_WHOLE_FILES}")
+                         f"{OUTPUTS_RETENTION_DAYS} days; {_WHOLE_FILES}. This agent has no "
+                         "managed session storage: files you write outside this folder "
+                         "(including /tmp) are not kept for later sessions")
             continue
         lines.append(f"- {entry['path']} ({_KIND_LABEL.get(entry['kind'], entry['kind'])}, "
                      f"{access}{notes})")
     return (
         "\n\n## Shared directories\n"
-        "These directories are mounted into your environment and shared across "
-        "sessions (and possibly with other agents):\n" + "\n".join(lines)
+        "These directories are mounted into your environment. Unless a line says "
+        "otherwise they are shared across sessions (and possibly with other "
+        "agents):\n" + "\n".join(lines)
     )
 
 

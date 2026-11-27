@@ -70,16 +70,36 @@ def test_outputs_default_off_and_mount_path_default():
 
 
 def test_outputs_counts_against_the_five_entries_and_the_unique_paths():
-    arn = "arn:aws:s3files:us-west-2:111122223333:file-system/fs-1/access-point/fsap-{}"
-    efs = [{"access_point_arn": arn.format(i), "mount_path": f"/mnt/m{i}"} for i in range(2)]
+    from app.schemas.agent import FilesystemConfig
+
+    refs = [{"storage_id": f"store{i}"} for i in range(5)]
     with pytest.raises(ValidationError, match="session output folder"):
-        # session storage + 2 + 2 + outputs = 6
-        _spec({}, s3_files=efs, efs=[
-            {"access_point_arn": "arn:aws:elasticfilesystem:us-west-2:111122223333:"
-                                 f"access-point/fsap-{i}", "mount_path": f"/mnt/e{i}"}
-            for i in range(2)])
+        # the folder is the sixth entry (it replaces session storage, it never adds to it)
+        FilesystemConfig(outputs={}, mounts=refs)
+    assert FilesystemConfig(outputs={}, mounts=refs[:4]).outputs is not None
     with pytest.raises(ValidationError, match="unique"):
-        _spec({"mount_path": "/mnt/workspace"})  # session storage's default path
+        FilesystemConfig(outputs={"mount_path": "/mnt/data"}, mounts=[
+            {"storage_id": "data"}])
+
+
+def test_session_storage_and_outputs_are_mutually_exclusive():
+    both = r"choose either managed session storage or the session output folder"
+    with pytest.raises(ValidationError, match=both):
+        _spec({}, session_storage={})  # session storage given explicitly as on
+    with pytest.raises(ValidationError, match=both):
+        _spec({}, session_storage={"mount_path": "/mnt/scratch"})
+    # given outputs and no session_storage key, session storage resolves to OFF ...
+    only_outputs = _spec({})
+    assert only_outputs.filesystem.session_storage is None
+    assert only_outputs.filesystem.outputs is not None
+    # ... and an explicit null says the same thing
+    assert _spec({}, session_storage=None).filesystem.session_storage is None
+    # only session storage: unchanged (default on, outputs off)
+    only_session = _spec(None)
+    assert only_session.filesystem.session_storage.mount_path == "/mnt/workspace"
+    assert only_session.filesystem.outputs is None
+    # neither
+    assert _spec(None, session_storage=None).filesystem.session_storage is None
 
 
 def test_outputs_refused_on_the_harness_and_bad_paths():
@@ -154,7 +174,6 @@ def test_the_route_helper_stamps_with_the_agents_own_project():
 def test_the_mount_is_the_per_session_prefix_of_the_agents_folder():
     entries = filesystem_configurations(_spec(), AGENT)
     assert entries == [
-        {"sessionStorage": {"mountPath": "/mnt/workspace"}},
         {"s3BucketMount": {
             "bucket": BUCKET, "mountPath": "/mnt/outputs",
             "prefix": f"projects/{TEST_PROJECT}/agents/{AGENT}/sessions/{{runtimeSessionId}}/"}},
