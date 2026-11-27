@@ -9522,6 +9522,7 @@
       "apiHint": "The public /v1 API runs the same invoke chain; authenticate with an API key.",
       "copy": "Copy",
       "copied": "Copied to clipboard",
+      "copyFailed": "Could not copy — select the text and copy it manually",
       "keysTitle": "API keys",
       "newKey": "New key",
       "noKeys": "No API keys yet",
