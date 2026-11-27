@@ -2404,7 +2404,7 @@ locking or directory split).
 | `GET` | `/api/storage-mounts/projects/{project_id}` | admin | `{project_id, workspace_id, storage[…]}`: the project's allowed set in the request's workspace. `404 project.not_found` when the project is not bound to it |
 | `PUT` | `/api/storage-mounts/projects/{project_id}` | admin | Body `{storage_ids[] (≤ 50)}` → the GET shape. Replaces the allowed set. Taking an entry away from a project whose agents mount it is allowed; their next publish is refused until the mount is removed or the entry is allowed again |
 | `POST` | `/api/storage-mounts/preflight` | `perm:project.use` | Body `{mounts[{storage_id, mount_path?, mode?: ro\|rw}] (1–5), network_profile_id?, method?, byoc_artifact_kind?, platform_version?: V1\|V2}` → `{status: ok\|warn\|blocked, results[{check, severity, message, details, storage_id}]}`. The wizard's check of a spec's catalog mounts against its network (§5), writing nothing: the network profile is required for S3 Files / EFS mounts (they need a VPC; an S3 bucket mount works on PUBLIC), then same VPC, a mount target in every subnet's AZ, NFS (TCP 2049) out of the agent's security groups and into the mount targets', the mode within `max_mode`, plus method and release-mode notes. An S3 bucket mount skips the NFS checks: it blocks on the Harness (`storage.method`) and on `platform_version: V1` (`storage.requires_v2`), and on a VPC network warns without an S3 gateway endpoint or NAT gateway (`storage.s3_endpoint`) or for a bucket in another Region (`storage.s3_region`). A failed EC2 read degrades the network checks to warnings. An entry the project may not use → `404 storage.not_found` |
-| `GET` | `/api/storage-mounts/agents/{agent_id}` | member | The agent detail page's storage card: `{agent_id, version, mounts[{storage_id, mount_path, mode, entry{name, kind, status, max_mode, data_class, archived, checked_at, blocking, warnings} \| null, missing}], inline[{kind, access_point_arn, mount_path, mode: rw}], session_storage, outputs}` — `session_storage` is the managed session storage mount path or `null` when off, `outputs` is `{mount_path, bucket}` for the S3 bucket session output folder or `null`; at most one of the two is set. Another project's agent → `404 agent.not_found` Also `live{status: ok\|no_resource\|unavailable, kind?, error?, entries[{kind: s3files\|efs, mount_path, access_point_arn, origin: platform\|external, storage_id, storage_name}]}`: the mounts the Runtime / Harness carries on AWS (`GetAgentRuntime` / `GetHarness`); `external` = added outside Launchpad (kept on re-publish), matched to a catalog entry by access point ARN. An AWS failure only sets `live.status = unavailable`. |
+| `GET` | `/api/storage-mounts/agents/{agent_id}` | member | The agent detail page's storage card: `{agent_id, version, mounts[{storage_id, mount_path, mode, entry{name, kind, status, max_mode, data_class, archived, checked_at, blocking, warnings} \| null, missing}], inline[{kind, access_point_arn, mount_path, mode: rw}], session_storage, outputs}` — `session_storage` is the managed session storage mount path or `null` when off, `outputs` is `{mount_path, bucket}` for the S3 bucket session output folder or `null`; the two are independent and both may be set. Another project's agent → `404 agent.not_found` Also `live{status: ok\|no_resource\|unavailable, kind?, error?, entries[{kind: s3files\|efs, mount_path, access_point_arn, origin: platform\|external, storage_id, storage_name}]}`: the mounts the Runtime / Harness carries on AWS (`GetAgentRuntime` / `GetHarness`); `external` = added outside Launchpad (kept on re-publish), matched to a catalog entry by access point ARN. An AWS failure only sets `live.status = unavailable`. |
 | `POST` | `/api/storage-mounts/provision` | admin | The console creates S3 Files storage (§7). Body (`extra="forbid"`) `{id, name?, network_profile_id, max_mode?, data_class?, posix_uid? (default 1000), posix_gid? (default 1000), root_directory? (default "/data", one to four `/segment`s; created on first mount, owned by the POSIX identity — "/" is refused, the file system root belongs to root), project_ids?[]}` → `202` the job view `{job_id, op: create, storage_id, status, done, stages[{name, status, detail}], resources, request, error}`. The job `storage_provision` runs `validate → bucket → file-system → security-group → mount-targets → access-point → register`: a new versioned bucket `launchpad-s3files-<account>-<hash>`, an S3 file system on it linked with the workspace's sync role (`resources.s3files_sync_role_arn`), a security group `launchpad-mt-<id>` admitting TCP 2049 from the profile's security groups and holding no outbound rule, one mount target per Availability Zone of the profile's subnets, the access point, then a catalog entry with `origin: "platform"` (checked, and allowed for `project_ids`). Every stage is list-or-get then create, and a restart resumes the job. A second call for the same id returns its running job, or resumes a failed one from the stage that failed. `409 storage.id_exists`, `409 storage.sync_role_missing` (re-run the bootstrap), `404 network_profile.not_found`, `404 project.not_found` |
 | `POST` | `/api/storage-mounts/provision/plan` | admin | Read-only: what a create would add to the network profile's VPC, shown in the create dialog before it is confirmed. Body `{network_profile_id, id?}` → `{network_profile_id, vpc_id, vpc_cidrs[], mount_target_security_group{name, vpc_id, inbound[{protocol, port, source_group_id}], outbound[] (always empty: the default allow-all rule is revoked)}, mount_targets[{subnet_id, availability_zone_id}], agent_security_groups[{group_id, name, status: ok|missing|not_found, required_outbound{protocol, port, destination}}] (the profile's groups are never edited; `missing` = no outbound TCP 2049 rule to a range holding the mount-target subnets), s3_gateway_endpoint{service_name, endpoint_ids[], status: ok|unrouted|missing, unrouted_subnets[], docs}, nat_gateways[]}`. `404 network_profile.not_found` |
 | `GET` | `/api/storage-mounts/provision/jobs` | admin | `{jobs[…]}`: the workspace's create / teardown jobs, newest first (the job view above) |
@@ -2413,7 +2413,7 @@ locking or directory split).
 
 An agent spec mounts an entry as `filesystem.mounts[{storage_id, mount_path? (default
 /mnt/<storage_id>), mode? (default ro)}]`; together with the inline `s3_files` / `efs`
-mounts an agent has at most 4 when it uses managed session storage or the S3 bucket session output folder (`filesystem.outputs`, below), and 5 when it uses neither — every `filesystemConfigurations` entry counts, and the two session options never coexist. Each entry is mounted once, all mount paths unique. On
+mounts an agent has at most 5 minus one for managed session storage (when on) and one for the S3 bucket session output folder (`filesystem.outputs`, below; when on), so 3 when both are on and 5 when neither is — every `filesystemConfigurations` entry counts. Each entry is mounted once, all mount paths unique. On
 `POST /api/agents` and redeploy each mount must be in the project's allowed set
 (`404 storage.not_found`), not blocked by its last check (`409 storage.blocked`) and
 within `max_mode` (`400 storage.mode_exceeds_max`); the server stamps the entry's `kind`
@@ -2428,9 +2428,11 @@ it must be live and allowed for the project and of the same kind as the source's
 `409 storage.unmapped`; inline access points carry the source account and are refused
 with `409 storage.inline_not_promotable`.
 
-**Session file storage** (`filesystem.session_storage` / `filesystem.outputs`) is one choice
-of three — managed session storage, the S3 bucket session output folder, or none — wherever
-an agent spec is stored (`POST /api/agents`, redeploy):
+**Session file storage** (`filesystem.session_storage` / `filesystem.outputs`) is two independent
+options — managed session storage and the S3 bucket session output folder; either, both or
+neither may be on (AgentCore lets the mount types be combined, see "Combine file systems" in
+the Runtime filesystem guide) — wherever an agent spec is stored (`POST /api/agents`,
+redeploy):
 
 - `session_storage: {mount_path? (default /mnt/workspace)} | null` — managed AgentCore
   session storage (`sessionStorage`). **On by default**: an absent key means on, `null` means
@@ -2445,21 +2447,21 @@ an agent spec is stored (`POST /api/agents`, redeploy):
   methods on `runtime_config.platform_version` `V2` only (`422 storage.requires_v2`; refused on
   the Harness with `422 validation.invalid_request`), and `422 storage.agent_files_unavailable`
   while the workspace has no agent-files bucket.
-- **Not both.** A spec with `outputs` and a non-null `session_storage` →
-  `422 validation.invalid_request` ("choose either managed session storage or the session
-  output folder (S3 bucket), not both"). A spec that sends `outputs` and **no**
-  `session_storage` key resolves to `session_storage: null` and is stored that way, so adding
-  `outputs` alone is enough; `outputs: null` leaves session storage as sent. Neither leaves the
-  agent only `/tmp`.
+- **Independent.** Setting `outputs` does not change `session_storage`: a spec that sends
+  `outputs` and no `session_storage` key keeps managed session storage on, so both are on;
+  send `session_storage: null` as well for the S3 bucket only. Each takes one of the five
+  `filesystemConfigurations` entries (see the mount limit above); paths must still be unique.
+  Neither on leaves the agent only `/tmp`. Turning one off on a re-publish detaches only
+  its own mount.
 - **Trade-off.** The S3 bucket is not POSIX: whole-file writes only (append `EPERM`, in-place
-  edit `EBADF`, rename `ENOSYS`; overwriting a whole file works). Choosing it turns managed
-  session storage off, so the agent loses the one POSIX space documented to survive a
-  stop/resume, and a Strands agent's journal root falls back to `/tmp` (whose lifetime across
-  a stop/resume is not guaranteed).
+  edit `EBADF`, rename `ENOSYS`; overwriting a whole file works). It is per session and its
+  files are downloadable from the chat for 30 days. Managed session storage is the POSIX
+  space; a Strands agent's journal root is the session mount when it is on and `/tmp` (whose
+  lifetime across a stop/resume is not guaranteed) when it is off.
 - The field names and their defaults are stable. Unknown keys under `filesystem` are
-  ignored, so a misspelled or renamed key is dropped silently, and a spec without `outputs`
-  that loses its `session_storage: null` (or sends it under another name) has managed session
-  storage turned back on.
+  ignored, so a misspelled or renamed key is dropped silently, and a spec that loses its
+  `session_storage: null` (or sends it under another name) has managed session storage
+  turned back on.
 
 ## Console System Update API — online update
 

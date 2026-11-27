@@ -83,12 +83,17 @@ def prompt_note(spec: AgentSpec) -> str:
             if entry["mode"] != "ro":
                 notes += f"; {_WHOLE_FILES}"
         if entry.get("purpose") == "outputs":
-            lines.append(f"- {entry['path']} (session output folder, read-write; this "
-                         "session only): save the files the user should receive here — "
-                         "the user can download them from the chat for "
-                         f"{OUTPUTS_RETENTION_DAYS} days; {_WHOLE_FILES}. This agent has no "
-                         "managed session storage: files you write outside this folder "
-                         "(including /tmp) are not kept for later sessions")
+            line = (f"- {entry['path']} (session output folder, read-write; this "
+                    "session only): save the files the user should receive here — "
+                    "the user can download them from the chat for "
+                    f"{OUTPUTS_RETENTION_DAYS} days; {_WHOLE_FILES}")
+            if spec.filesystem.session_storage is None:
+                # the manifest does not list managed session storage, so say nothing
+                # about it while it is on; only claim its absence when it is off
+                line += (". This agent has no managed session storage: files you write "
+                         "outside this folder (including /tmp) are not kept for later "
+                         "sessions")
+            lines.append(line)
             continue
         lines.append(f"- {entry['path']} ({_KIND_LABEL.get(entry['kind'], entry['kind'])}, "
                      f"{access}{notes})")

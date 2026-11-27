@@ -12,15 +12,19 @@ Task 11-23-s3mount-p2-agent-files. Two modes:
 
 (default)  the member flow, against a backend whose workspace has ``agent_files_bucket``:
 
-1. deploy a PUBLIC zip_runtime agent (V2) with ``filesystem.outputs`` on
+1. deploy a PUBLIC zip_runtime agent (V2) with ``filesystem.outputs`` on and managed session
+   storage explicitly off (the two are independent; the next steps toggle each)
 2. live runtime readback: the ``s3BucketMount`` on the platform bucket, prefix
    ``projects/<project>/agents/<agent_id>/sessions/{runtimeSessionId}/``, ``/mnt/outputs``
 3. one console chat turn, then write ``report.md`` into ``/mnt/outputs`` inside that session
    (InvokeAgentRuntimeCommand) → the Files API lists it, the presigned download returns the
    same bytes, a ``../`` path is refused
 4. a second session of the same agent lists nothing from the first
-5. re-publish keeps the mount; S3 → managed (live runtime: sessionStorage only), both set → 422,
-   managed → S3 (live: s3BucketMount only); a fresh session ends with report.md listed
+5. re-publish keeps the mount; session storage ON while the folder stays ON (live runtime:
+   sessionStorage + s3BucketMount, BOTH /mnt/workspace and /mnt/outputs writable in one session);
+   session storage off (s3BucketMount only); folder off + session on (sessionStorage only);
+   back to both — the demo end state, a fresh session whose Files tab lists report.md and a
+   file in /mnt/workspace
 6. delete the agent → the agent's prefix is gone from the bucket
 7. cleanup (agent, log groups); ``--keep`` skips 6 and 7 (the agent stays as a demo)
 
@@ -189,7 +193,7 @@ class E2E:
             "system_prompt": "You are a terse test agent. Answer in one short sentence.",
             "toolkits": [],
             "runtime_config": {"platform_version": "V2", "billing_model": "consumption"},
-            "filesystem": {"outputs": {"mount_path": MOUNT}},
+            "filesystem": {"session_storage": None, "outputs": {"mount_path": MOUNT}},
         }
         body = self.api("POST", "/api/agents", json=spec)
         self.agent_id = body["agent"]["id"]
@@ -242,15 +246,31 @@ class E2E:
               and self.files(other["session_id"]).get("files") == [],
               "a second session of the same agent does not see the first session's file")
 
-        # ── the S3 bucket and managed session storage are one choice ────────────
+        # ── managed session storage and the S3 folder are independent ───────────
         agent = self.republish({})
         check(self.live_kinds(agent) == ["s3BucketMount"],
               f"re-publish keeps exactly the output-folder mount: {self.live_kinds(agent)}")
 
-        managed = {"session_storage": {"mount_path": "/mnt/workspace"}, "outputs": None}
-        agent = self.republish(managed)
+        session_on = {"mount_path": "/mnt/workspace"}
+        agent = self.republish({"session_storage": session_on})
+        check(self.live_kinds(agent) == ["s3BucketMount", "sessionStorage"],
+              f"session storage ON, folder stays ON: the live runtime has both members: "
+              f"{self.live_kinds(agent)}")
+        token = uuid.uuid4().hex
+        code, out = self.command(new_session(),
+                                 f"echo {token} > /mnt/workspace/m.txt && cat /mnt/workspace/m.txt"
+                                 f" && echo {token} > {MOUNT}/b.txt && cat {MOUNT}/b.txt")
+        check(code == 0 and out.count(token) == 2,
+              f"both /mnt/workspace and {MOUNT} are writable in one session: {out.strip()!r}")
+
+        agent = self.republish({"session_storage": None})
+        check(self.live_kinds(agent) == ["s3BucketMount"],
+              f"session storage off: the live runtime has s3BucketMount and NO sessionStorage: "
+              f"{self.live_kinds(agent)}")
+
+        agent = self.republish({"session_storage": session_on, "outputs": None})
         check(self.live_kinds(agent) == ["sessionStorage"],
-              f"S3 -> managed: the live runtime has sessionStorage and NO s3BucketMount: "
+              f"folder off, session storage on: sessionStorage and NO s3BucketMount: "
               f"{self.live_kinds(agent)}")
         code, out = self.command(new_session(), "echo managed > /mnt/workspace/m.txt && "
                                                 "cat /mnt/workspace/m.txt")
@@ -259,24 +279,17 @@ class E2E:
         off = self.files(chat_sse(self.client, str(self.agent_id), "Say hi.")["session_id"])
         check(off.get("enabled") is False, f"Files API reports the folder off: {off}")
 
-        both = self.client.post(
-            f"/api/agents/{self.agent_id}/redeploy",
-            json={**self.api("GET", f"/api/agents/{self.agent_id}")["spec"],
-                  "filesystem": {"session_storage": {"mount_path": "/mnt/workspace"},
-                                 "outputs": {"mount_path": MOUNT}}})
-        check(both.status_code == 422 and "not both" in both.text,
-              f"both stores set -> 422 (HTTP {both.status_code}): {both.text[:160]}")
+        agent = self.republish({"session_storage": session_on, "outputs": {"mount_path": MOUNT}})
+        check(self.live_kinds(agent) == ["s3BucketMount", "sessionStorage"],
+              f"back to both: the live runtime has both members: {self.live_kinds(agent)}")
 
-        agent = self.republish({"session_storage": None, "outputs": {"mount_path": MOUNT}})
-        check(self.live_kinds(agent) == ["s3BucketMount"],
-              f"managed -> S3: the live runtime has s3BucketMount and NO sessionStorage: "
-              f"{self.live_kinds(agent)}")
-
-        # the end state a demo wants: a chat session whose Files tab lists a report
+        # the end state a demo wants: a chat session whose Files tab lists a report, and a
+        # file in the managed workspace
         demo = chat_sse(self.client, str(self.agent_id), "Say hello again.")["session_id"]
         token = uuid.uuid4().hex
         code, out = self.command(demo, f"printf 'session output files demo %s\\n' {token} > "
-                                       f"{MOUNT}/report.md && cat {MOUNT}/report.md")
+                                       f"{MOUNT}/report.md && cat {MOUNT}/report.md && "
+                                       f"echo notes > /mnt/workspace/notes.txt")
         listing = {}
         for _ in range(6):
             listing = self.files(demo)
@@ -284,7 +297,7 @@ class E2E:
                 break
             time.sleep(5)  # nosemgrep: arbitrary-sleep
         check(code == 0 and [f["key_rel"] for f in listing.get("files") or []] == ["report.md"],
-              f"after switching back, the new session's Files tab lists report.md: {listing}")
+              f"with both on, the new session's Files tab lists report.md: {listing}")
         log(f"demo agent {self.agent_id} · session {demo} · {self.args.base}")
 
         if self.args.keep:

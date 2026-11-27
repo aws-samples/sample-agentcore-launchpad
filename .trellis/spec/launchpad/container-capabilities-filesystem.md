@@ -61,8 +61,8 @@ the container image. Introduced by task `07-12-agent-sdk-capabilities-fs`.
 ```python
 # schemas/agent.py
 class FilesystemConfig:   # AgentSpec.filesystem (default: session ON @ /mnt/workspace)
-    session_storage: SessionStorageFs | None   # JSON null = disabled; never with outputs (see
-                                               # "session file storage is one choice of three")
+    session_storage: SessionStorageFs | None   # JSON null = disabled; independent of outputs (see
+                                               # "session file storage: two independent options")
     s3_files: list[ByoMount]  # ≤2, ARN must contain :s3files: …/access-point/
     efs: list[ByoMount]       # ≤2, ARN must match elasticfilesystem access-point
     byo: bool                 # property
@@ -359,7 +359,7 @@ by_arn = {r.access_point_arn: r for r in rows}
 # schemas/agent.py
 class OutputsFs: mount_path="/mnt/outputs"; bucket; project_key   # last two server-stamped
 FilesystemConfig.outputs: OutputsFs | None = None                 # counts as 1 of the 5 entries;
-                                                                  # mutually exclusive with session_storage
+                                                                  # independent of session_storage
 # services/agentcore/filesystem_kinds.py  (the ONE prefix formula)
 outputs_bucket_name(account, region) -> "launchpad-agent-files-<a>-<r>"
 outputs_agent_prefix(project_key, agent_id) -> "projects/<project|shared>/agents/<agent>/"
@@ -444,17 +444,22 @@ prefix = outputs_agent_prefix(p, agent_id)   # ".../agents/<id>/"
 # CORRECT: if outputs is None: return spec
 ```
 
-## Scenario: session file storage is one choice of three (managed / S3 bucket / none)
+## Scenario: session file storage — two independent options (managed + S3 bucket)
+
+History: #396 (2026-11-27) made the two mutually exclusive; task `11-27-session-fs-both` undid
+that the same day — AgentCore lets the mount types be combined (Runtime filesystem guide,
+"Combine file systems"). Pre-#396 shape = commit `57db555d`.
 
 ### 1. Scope / Trigger
 - Trigger: any change to how `filesystem.session_storage` and `filesystem.outputs` relate —
-  the `FilesystemConfig` validators, the V2 `FilesystemCard` choice, `lib/agent-spec.ts`
+  the `FilesystemConfig` validators, the V2 `FilesystemCard` toggles, `lib/agent-spec.ts`
   (`filesystemSpec` / `filesystemValid` / `formFromStoredSpec`), the classic console's session
-  chip, the mount budget (`maxMounts`), the storage card, or the re-publish switch between them.
-- The rule: an agent's session files live in **managed session storage** (AgentCore
-  `sessionStorage`, the default), the **S3 bucket** session output folder (`outputs`, an
-  `s3BucketMount` on the agent-files bucket), or **neither** — never both. The Harness has no
-  S3 bucket option.
+  chip, the mount budget (`maxMounts`), the storage card, the prompt note, or the re-publish
+  switch of either.
+- The rule: an agent's session files may live in **managed session storage** (AgentCore
+  `sessionStorage`, default ON), the **S3 bucket** session output folder (`outputs`, an
+  `s3BucketMount` on the agent-files bucket, default off), **both**, or **neither**. They are
+  independent. The Harness has no S3 bucket option.
 
 ### 2. Signatures
 ```python
@@ -462,55 +467,60 @@ prefix = outputs_agent_prefix(p, agent_id)   # ".../agents/<id>/"
 class FilesystemConfig:
     session_storage: SessionStorageFs | None = SessionStorageFs()   # default ON; null = off
     outputs: OutputsFs | None = None                                 # default off
-    @model_validator(mode="before")   # _outputs_replace_default_session_storage
-    #   dict with outputs is not None and NO "session_storage" key -> session_storage = None
+    # no before-validator, no "not both" rule
     @model_validator(mode="after")    # _check
-    #   outputs is not None and session_storage is not None -> ValueError (422)
-    #   budget: BYO + catalog + outputs <= 5 - (1 if session_storage) -> ≤ 4 with either option, 5 with none
+    #   budget: BYO + catalog + outputs <= 5 - (1 if session_storage) -> 3 mounts with both on,
+    #   4 with either, 5 with none; mount paths unique across both
+# deployer/mounts.py
+prompt_note(spec)   # the outputs line says "This agent has no managed session storage: files you
+                    # write outside this folder (including /tmp) are not kept ..." ONLY when
+                    # spec.filesystem.session_storage is None; silent about it when it is on
+                    # (the manifest does not list managed session storage on purpose)
 # templates/strands_agent/builder.py
-journal_root(spec) -> session_storage.mount_path if set else "/tmp"   # S3 bucket choice => /tmp
+journal_root(spec) -> session_storage.mount_path if set else "/tmp"
 ```
 
 ### 3. Contracts
-- Exclusivity is enforced server-side for every caller (console, API, scripts); the UI mirrors
-  it but is not the gate.
-- Omission is not a conflict: `{"outputs": {}}` alone resolves to `session_storage: None`
-  and is stored that way, so a caller that only adds `outputs` is not refused. An explicit
-  `session_storage` key (even the default object) together with `outputs` IS a conflict.
-  `outputs: null` triggers nothing (the before-validator tests `is not None`).
+- Omission never changes the other option: `{"outputs": {}}` alone keeps `session_storage` at
+  its default ON, so both are on; a caller wanting the S3 bucket only sends
+  `session_storage: null` too. `outputs: null` leaves session storage as sent.
 - The S3 bucket is not POSIX (Mountpoint for S3: append `EPERM`, in-place edit `EBADF`, rename
   `ENOSYS`; whole-file overwrite OK), is per session and downloadable from the chat for 30
-  days. Choosing it turns managed session storage off — the one POSIX space documented to survive a
-  stop/resume is gone (`/tmp`'s lifetime there was never probed — do not claim either way), and the
-  Strands journal root falls back to `/tmp`. Docs and UI say this plainly.
-- Switching is an ordinary re-publish: managed → S3 drops the live `sessionStorage` (spec has
-  none); S3 → managed detaches `/mnt/outputs` because it is in `published_mount_paths` (the
-  platform's, not an external mount). `canary_infra._candidate_mounts` uses the same
-  `manifest_paths(spec) | published_mount_paths(db, agent.id)`.
-- No stored spec had both when the rule shipped (dev and prod, 2026-11-27): no migration.
+  days. Managed session storage is the POSIX space. Do not claim anything about `/tmp`
+  surviving a stop/resume — it was never probed. Docs and UI say this plainly.
+- Live runtime with both on: `filesystemConfigurations` has a `sessionStorage` member AND an
+  `s3BucketMount` member (each one of the five entries).
+- Turning one off is an ordinary re-publish that touches only its own member: session storage
+  off drops the live `sessionStorage` (spec has none); output folder off detaches `/mnt/outputs`
+  because it is in `published_mount_paths` (the platform's, not an external mount).
+  `canary_infra._candidate_mounts` uses the same `manifest_paths(spec) |
+  published_mount_paths(db, agent.id)`.
 
 ### 4. Validation & Error Matrix
 | Input `filesystem` | Result |
 |---|---|
 | `{}` / absent | `session_storage` default ON, `outputs` None |
 | `{"session_storage": null}` | none (only `/tmp`) |
-| `{"outputs": {}}` (no `session_storage` key) | `session_storage` → `null`, outputs on (default `/mnt/outputs`) |
-| `{"outputs": {...}, "session_storage": null}` | S3 bucket |
-| `{"outputs": {...}, "session_storage": {...}}` | 422 `validation.invalid_request` — "choose either managed session storage or the session output folder (S3 bucket), not both" |
+| `{"outputs": {}}` (no `session_storage` key) | session storage stays ON, outputs on (default `/mnt/outputs`) — both |
+| `{"outputs": {...}, "session_storage": null}` | S3 bucket only |
+| `{"outputs": {...}, "session_storage": {...}}` | both — accepted |
 | `{"outputs": null}` | unchanged: `session_storage` default ON |
+| both on + more mounts than the budget | 422 `validation.invalid_request` ("at most N ... mounts per agent") |
 | outputs on the Harness / on platform V1 | `AgentSpec` validation error / 422 `storage.requires_v2` (previous scenario) |
 
 ### 5. Tests Required
-Backend: `test_agent_files.py` — both set → 422; only `outputs` → `session_storage is None`
-(stored spec too); only `session_storage` → unchanged. `test_agent_spec_filesystem.py` —
-the exclusivity and the budget (4 with either option, 5 with none). Switching both directions
-in `merge_live` / `runtime_update_mounts` / `environment_for_update` (the other side's live
-entry removed, its own kept) and `canary_infra._candidate_mounts` with an earlier-published
-`/mnt/outputs`. The 11 Strands golden fixtures (`tests/fixtures/strands_builder*/*_spec.json`)
-must stay byte-identical — any diff means a field was renamed or a default moved.
-Frontend: `agent-spec.test.ts` (three-way round trip, both-on invalid, S3 + V1 invalid, BYOC
-validated, `maxMounts`), `storage.test.tsx` (one session-storage row per choice),
-`files.test.tsx` (disabled-state link via `editPath`), the `FilesystemCard` choice.
+Backend: `test_agent_files.py` — default spec yields `sessionStorage` + the outputs
+`s3BucketMount`; session + outputs + 2 + 2 refused; `session_storage: null` + outputs works.
+`test_session_fs_choice.py` — both on accepted, 5-entry budget counts both, `merge_live` drops a
+live stale `sessionStorage` only when the spec turns it off, turning the folder off removes only
+the s3BucketMount, the prompt note's "no managed session storage" sentence only when it is off,
+switching either way through `merge_live` / `runtime_update_mounts` / `environment_for_update`
+and `canary_infra._candidate_mounts` with an earlier-published `/mnt/outputs`. The 11 Strands
+golden fixtures (`tests/fixtures/strands_builder*/*_spec.json`) must stay byte-identical — any
+diff means a field was renamed or a default moved.
+Frontend: `agent-spec.test.ts` (both-on round trip, S3 + V1 invalid, BYOC validated,
+`maxMounts` counting both), `storage.test.tsx` (one row per store), `files.test.tsx`
+(disabled-state link via `editPath`), the `FilesystemCard` toggles.
 
 ### 6. Wrong vs Correct
 ```python
@@ -520,14 +530,8 @@ class FilesystemConfig:
 # every stored spec still says {"session_storage": null} (= off); pydantic ignores the unknown
 # key, the new field takes its default, and managed session storage is SILENTLY turned back on.
 # Snapshots (`manifest_paths` reads the key) and the golden fixtures break too.
-# CORRECT: keep `session_storage` / `outputs` and their defaults; change behaviour in validators.
+# CORRECT: keep `session_storage` / `outputs` and their defaults.
 
-# WRONG: refuse a payload that only adds outputs (the default session storage "collides")
-if self.outputs is not None and self.session_storage is not None: raise ...   # alone
-# CORRECT: the before-validator first resolves a MISSING session_storage key to None,
-# then _check refuses only an explicit pair.
-
-# WRONG (frontend): two independent checkboxes that can both be on
-# CORRECT: one choice (managed / S3 bucket / none), serialised by filesystemSpec:
-#   S3 -> {session_storage: null, outputs}; managed -> outputs omitted; none -> session_storage: null
+# WRONG: tell the agent it has no managed session storage while it is on
+# CORRECT: add that sentence to the outputs line only when spec.filesystem.session_storage is None
 ```
