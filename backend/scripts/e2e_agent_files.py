@@ -19,9 +19,10 @@ Task 11-23-s3mount-p2-agent-files. Two modes:
    (InvokeAgentRuntimeCommand) → the Files API lists it, the presigned download returns the
    same bytes, a ``../`` path is refused
 4. a second session of the same agent lists nothing from the first
-5. re-publish keeps the mount
+5. re-publish keeps the mount; S3 → managed (live runtime: sessionStorage only), both set → 422,
+   managed → S3 (live: s3BucketMount only); a fresh session ends with report.md listed
 6. delete the agent → the agent's prefix is gone from the bucket
-7. cleanup (agent, log groups); ``--keep`` skips it
+7. cleanup (agent, log groups); ``--keep`` skips 6 and 7 (the agent stays as a demo)
 
 Run against a backend that serves this branch:
 
@@ -166,12 +167,25 @@ class E2E:
             keys += [o["Key"] for o in page.get("Contents", [])]
         return keys
 
+    def republish(self, filesystem: dict[str, Any]) -> dict[str, Any]:
+        """Re-publish with `filesystem` replaced (everything else as stored) and wait."""
+        spec = self.api("GET", f"/api/agents/{self.agent_id}")["spec"]
+        self.api("POST", f"/api/agents/{self.agent_id}/redeploy",
+                 json={**spec, "filesystem": {**(spec.get("filesystem") or {}), **filesystem}})
+        return self.wait_agent()
+
+    def live_kinds(self, agent: dict[str, Any]) -> list[str]:
+        """The member kinds of the live runtime's filesystemConfigurations."""
+        live = rt.get_runtime(self.control, agent["resource_id"])
+        return sorted(next(iter(fs)) for fs in live.get("filesystemConfigurations") or [])
+
     def run(self) -> None:
         if not check(bool(self.bucket),
                      "workspace has resources.agent_files_bucket (run --setup-bucket first)"):
             return
         spec = {
-            "name": f"e2e-files-{self.suffix}", "method": "zip_runtime", "model_id": MODEL,
+            "name": self.args.agent_name or f"e2e-files-{self.suffix}",
+            "method": "zip_runtime", "model_id": MODEL,
             "system_prompt": "You are a terse test agent. Answer in one short sentence.",
             "toolkits": [],
             "runtime_config": {"platform_version": "V2", "billing_model": "consumption"},
@@ -228,13 +242,53 @@ class E2E:
               and self.files(other["session_id"]).get("files") == [],
               "a second session of the same agent does not see the first session's file")
 
-        self.api("POST", f"/api/agents/{self.agent_id}/redeploy",
-                 json=self.api("GET", f"/api/agents/{self.agent_id}")["spec"])
-        agent = self.wait_agent()
-        live = rt.get_runtime(self.control, agent["resource_id"])
-        check(any("s3BucketMount" in fs for fs in live.get("filesystemConfigurations") or []),
-              "re-publish keeps the output-folder mount")
+        # ── the S3 bucket and managed session storage are one choice ────────────
+        agent = self.republish({})
+        check(self.live_kinds(agent) == ["s3BucketMount"],
+              f"re-publish keeps exactly the output-folder mount: {self.live_kinds(agent)}")
 
+        managed = {"session_storage": {"mount_path": "/mnt/workspace"}, "outputs": None}
+        agent = self.republish(managed)
+        check(self.live_kinds(agent) == ["sessionStorage"],
+              f"S3 -> managed: the live runtime has sessionStorage and NO s3BucketMount: "
+              f"{self.live_kinds(agent)}")
+        code, out = self.command(new_session(), "echo managed > /mnt/workspace/m.txt && "
+                                                "cat /mnt/workspace/m.txt")
+        check(code == 0 and "managed" in out,
+              f"managed session storage is writable: {out.strip()!r}")
+        off = self.files(chat_sse(self.client, str(self.agent_id), "Say hi.")["session_id"])
+        check(off.get("enabled") is False, f"Files API reports the folder off: {off}")
+
+        both = self.client.post(
+            f"/api/agents/{self.agent_id}/redeploy",
+            json={**self.api("GET", f"/api/agents/{self.agent_id}")["spec"],
+                  "filesystem": {"session_storage": {"mount_path": "/mnt/workspace"},
+                                 "outputs": {"mount_path": MOUNT}}})
+        check(both.status_code == 422 and "not both" in both.text,
+              f"both stores set -> 422 (HTTP {both.status_code}): {both.text[:160]}")
+
+        agent = self.republish({"session_storage": None, "outputs": {"mount_path": MOUNT}})
+        check(self.live_kinds(agent) == ["s3BucketMount"],
+              f"managed -> S3: the live runtime has s3BucketMount and NO sessionStorage: "
+              f"{self.live_kinds(agent)}")
+
+        # the end state a demo wants: a chat session whose Files tab lists a report
+        demo = chat_sse(self.client, str(self.agent_id), "Say hello again.")["session_id"]
+        token = uuid.uuid4().hex
+        code, out = self.command(demo, f"printf 'session output files demo %s\\n' {token} > "
+                                       f"{MOUNT}/report.md && cat {MOUNT}/report.md")
+        listing = {}
+        for _ in range(6):
+            listing = self.files(demo)
+            if listing.get("files"):
+                break
+            time.sleep(5)  # nosemgrep: arbitrary-sleep
+        check(code == 0 and [f["key_rel"] for f in listing.get("files") or []] == ["report.md"],
+              f"after switching back, the new session's Files tab lists report.md: {listing}")
+        log(f"demo agent {self.agent_id} · session {demo} · {self.args.base}")
+
+        if self.args.keep:
+            return
         check(len(self.agent_objects()) >= 1, "objects exist under the agent prefix before delete")
         self.client.delete(f"/api/agents/{self.agent_id}")
         self.wait_deleted()
@@ -287,7 +341,9 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", default="http://127.0.0.1:8011")
     parser.add_argument("--timeout", type=int, default=1200)
-    parser.add_argument("--keep", action="store_true")
+    parser.add_argument("--keep", action="store_true",
+                        help="keep the agent, its session and files (a demo)")
+    parser.add_argument("--agent-name", default=None, help="agent name (default e2e-files-<id>)")
     parser.add_argument("--setup-bucket", action="store_true")
     args = parser.parse_args()
     if args.setup_bucket:
