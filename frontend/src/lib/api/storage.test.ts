@@ -178,6 +178,7 @@ describe("S3 bucket entries", () => {
   });
 
   it("count every filesystem entry against AgentCore's five", () => {
+    // a session store (managed session storage or the S3 bucket folder) takes one entry
     expect(maxMounts(true)).toBe(4);
     expect(maxMounts(false)).toBe(5);
   });

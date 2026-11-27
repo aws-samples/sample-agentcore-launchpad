@@ -6813,8 +6813,7 @@
         "mcpJson": "MCP 服务器配置（JSON，可选）",
         "mcpJsonHint": "写入环境变量 LAUNCHPAD_MCP_SERVERS，由 SDK 在启动时加载。",
         "fsTitle": "文件系统",
-        "fsSession": "托管会话存储",
-        "fsSessionOn": "同一会话在停止和恢复之间保留 /mnt 下的文件",
+        "fsSession": "会话文件存储",
         "fsSessionMount": "会话挂载路径",
         "fsMounts": "{{kind}} 挂载",
         "fsMountsHint": "每种最多 {{max}} 个，挂载路径必须是 /mnt 下的一级目录。",
@@ -6826,8 +6825,7 @@
         "errDupPath": "挂载路径不能重复",
         "errTooManyMounts": "S3 Files / EFS 挂载合计最多 {{max}} 个（按 ARN 与来自目录的合计），请移除一个。",
         "errVpc": "自带挂载需要至少一个子网和一个安全组",
-        "fsSummary": "会话存储 {{session}} · S3 Files {{s3}} 个 · EFS {{efs}} 个",
-        "fsNoteSession": "托管会话存储让同一会话在停止和恢复之间保留挂载路径下的文件（每个会话最多 1 GB，闲置 14 天过期）。每次重新发布都会产生新版本并重置会话存储。S3 Files / EFS 挂载仅支持“其他 Agent SDK”方式。",
+        "fsSummary": "会话文件 {{session}} · S3 Files {{s3}} 个 · EFS {{efs}} 个",
         "skillsHintSources": "注册中心中已发布的 Skill，也可以上传 zip 或从 Git 仓库导入。",
         "skillUpload": "上传 .zip",
         "skillGit": "从 Git 导入",
@@ -6960,11 +6958,20 @@
           "reviewSub": "部署会创建 Runtime、Cognito 客户端、OAuth2 提供方和网关目标，然后列出服务器的工具。"
         },
         "networkProfile": "网络配置：{{id}}",
-        "fsOutputs": "会话输出文件",
-        "fsOutputsOn": "为 Agent 提供一个文件夹，存放用户可下载的文件",
         "fsOutputsMount": "输出文件夹路径",
-        "fsOutputsHint": "每个会话私有且可读写，只能整文件写入（不能追加、重命名或原地编辑）。可在对话的「文件」标签页下载，保留 {{days}} 天后删除。仅支持平台版本 V2 的 Runtime 方式，不支持 Harness。",
-        "fsOutputsNeedsV2": "会话输出文件需要 Runtime 平台版本 V2，请在该 Agent 的 Runtime 设置中切换到 V2。"
+        "fsOutputsNeedsV2": "S3 bucket 需要 Runtime 平台版本 V2：请在该 Agent 的 Runtime 设置中切换到 V2，或改选其他选项。",
+        "fsKindHint": "Agent 写入的文件保存在哪里。三选一：托管会话存储和 S3 bucket 不能同时使用。",
+        "fsKind": {
+          "managed": "托管会话存储",
+          "s3": "S3 bucket",
+          "none": "都不用"
+        },
+        "fsKindDesc": {
+          "managed": "完整的文件系统（默认 /mnt/workspace），同一会话在停止和恢复之间保留：最多 1 GB，闲置 14 天后过期。文件不能在对话中下载。",
+          "s3": "每个会话一个私有文件夹，用户可在对话的「文件」标签页下载，保留 {{days}} 天后删除。只能整文件读写（不能追加、重命名或原地编辑），Agent 的日志写到 /tmp。仅支持平台版本 V2 的 Runtime 方式，不支持 Harness。",
+          "none": "只有容器的 /tmp：停止和恢复之后不保留任何文件。"
+        },
+        "fsBoth": "同时选了托管会话存储和 S3 bucket，请只保留一个。"
       },
       "identity": {
         "open": "身份",
@@ -13400,7 +13407,7 @@
       "files": {
         "placeholder": "请先发送一条消息，Agent 为本会话保存的文件会显示在这里。",
         "disabled": "该 Agent 没有会话输出文件夹。",
-        "enable": "在 Agent 的存储设置中开启",
+        "enable": "在 Agent 设置中把会话文件存储选成 S3 bucket",
         "empty": "还没有文件。可以让 Agent 把文件保存到 {{path}}。",
         "retention": "文件写入后保留 {{days}} 天，之后自动删除。",
         "truncated": "仅显示最新的 {{count}} 个文件。",
@@ -16469,8 +16476,17 @@
         "externalHint": "从 AWS 回读：这些挂载是在 Launchpad 之外添加的（在 AWS 控制台里，或在导入 Agent 之前）。在 Launchpad 里重新发布会保留它们；如果要在这里管理，请先在存储页登记它的访问点，再通过编辑向导挂载。",
         "externalBucketHint": "S3 存储桶挂载在 PUBLIC 网络和 VPC 中均可使用。在 Launchpad 里重新发布会保留它；存储桶及其权限请在 AWS 中管理。",
         "liveUnavailable": "读取 AWS 上的挂载失败（{{error}}），在 Launchpad 之外添加的挂载没有列出。",
-        "outputs": "会话输出文件",
-        "outputsHint": "Agent 把要交给用户的文件保存在这里，可在对话中下载，保留 30 天。"
+        "session": "会话文件存储",
+        "kind": {
+          "managed": "托管",
+          "s3": "S3 bucket",
+          "none": "无"
+        },
+        "kindHint": {
+          "managed": "同一会话在停止和恢复之间保留，不能在对话中下载。",
+          "s3": "Agent 把要交给用户的文件保存在这里，可在对话中下载，保留 {{days}} 天。",
+          "none": "只有 /tmp：停止和恢复之后不保留任何文件。"
+        }
       },
       "picker": {
         "title": "从存储目录挂载",

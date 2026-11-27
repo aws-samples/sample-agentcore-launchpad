@@ -145,6 +145,25 @@ export const MOUNT_RE = /^\/mnt\/[a-zA-Z0-9._-]+$/;
 export const DEFAULT_SESSION_MOUNT = "/mnt/workspace";
 /** the per-session output folder the chat's Files tab serves (`filesystem.outputs`) */
 export const DEFAULT_OUTPUTS_MOUNT = "/mnt/outputs";
+/** how long the platform keeps files in the output folder (the Files tab reads the
+ *  server's own `retention_days`; this is the figure the form copy quotes) */
+export const OUTPUTS_RETENTION_DAYS = 30;
+
+/** The agent's session file storage — one choice of three, never two (the backend
+ *  answers a spec carrying both with 422): AgentCore's managed session storage, the
+ *  per-session S3 bucket folder (`filesystem.outputs`), or neither (`/tmp` only). */
+export type SessionKind = "managed" | "s3" | "none";
+
+/** The choice a form holds. Both flags on (a spec the server refuses, never one it
+ *  stores) reads as the S3 folder so the validity check, not this, reports it. */
+export const sessionKind = (form: Pick<AgentForm, "sessionFs" | "outputsFs" | "method">): SessionKind =>
+  form.outputsFs && form.method !== "harness" ? "s3" : form.sessionFs ? "managed" : "none";
+
+/** The two flags a choice sets — the radio's whole `onChange`. */
+export const sessionKindFlags = (kind: SessionKind): Pick<AgentForm, "sessionFs" | "outputsFs"> => ({
+  sessionFs: kind === "managed",
+  outputsFs: kind === "s3",
+});
 /** AgentCore allows at most two BYO mounts of each kind */
 export const MAX_MOUNTS_PER_KIND = 2;
 /** Methods whose spec carries `filesystem`: managed session storage on all three,
@@ -785,6 +804,8 @@ export function formFromStoredSpec(
     guardrail: spec.guardrail?.enabled ? (spec.guardrail.mode ?? "anonymize") : "off",
     memoryId: spec.memory?.memory_id ?? "",
     mcpServers: spec.env?.LAUNCHPAD_MCP_SERVERS ?? "",
+    // a stored spec holds one choice (the server enforces it); an `outputs` entry
+    // without a `session_storage` key reads as the S3 folder alone
     sessionFs: fs ? fs.session_storage != null : true,
     sessionMount: fs?.session_storage?.mount_path ?? DEFAULT_SESSION_MOUNT,
     outputsFs: Boolean(fs?.outputs),
@@ -964,13 +985,15 @@ const byocArtifact = (form: AgentForm) => {
 export function filesystemSpec(form: AgentForm): Pick<AgentSpecInput, "filesystem"> {
   return {
     filesystem: {
-      session_storage: form.sessionFs ? { mount_path: form.sessionMount } : null,
+      // an explicit null is "off" (an absent key means the default, on); the S3 folder
+      // and managed session storage exclude each other, so the S3 choice sends null
+      session_storage: sessionKind(form) === "managed" ? { mount_path: form.sessionMount } : null,
       s3_files: form.s3Mounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
       efs: form.efsMounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
       mounts: catalogMountsSpec(form.catalogMounts ?? []),
       // the Harness drops an S3 bucket mount, so it never carries the folder; omitted
       // when off (a re-publish replaces the stored spec, so absent = off)
-      ...(form.outputsFs && form.method !== "harness" ? { outputs: { mount_path: form.outputsMount } } : {}),
+      ...(sessionKind(form) === "s3" ? { outputs: { mount_path: form.outputsMount } } : {}),
     },
   };
 }
@@ -1256,10 +1279,14 @@ export function republishSpec(built: AgentSpecInput, stored: unknown): AgentSpec
 export interface FilesystemIssues {
   sessionMount: boolean;
   outputsMount: boolean;
+  /** managed session storage and the S3 folder both on — the server refuses it (422) */
+  bothStores: boolean;
+  /** the S3 folder needs platform V2 (a V1 Runtime would be refused after publishing) */
+  outputsNeedsV2: boolean;
   /** `s3:<i>` / `efs:<i>` → which half of the row is invalid */
   rows: Record<string, { arn: boolean; path: boolean }>;
   duplicatePaths: boolean;
-  /** inline + catalog mounts over `maxMounts(sessionFs)` (AgentCore's five entries, session storage included) */
+  /** inline + catalog mounts over `maxMounts` (AgentCore's five entries, the session store included) */
   tooMany: boolean;
   vpc: boolean;
 }
@@ -1270,6 +1297,8 @@ export function filesystemIssues(form: AgentForm): FilesystemIssues {
   const efsMounts = byo ? form.efsMounts : [];
   const catalogMounts = byo ? (form.catalogMounts ?? []) : [];
   const outputs = form.outputsFs && form.method !== "harness";
+  // the five entries hold at most one session store: managed storage or the S3 folder
+  const store = form.sessionFs || outputs;
   const paths = [
     ...(form.sessionFs ? [form.sessionMount] : []),
     ...(outputs ? [form.outputsMount] : []),
@@ -1288,10 +1317,11 @@ export function filesystemIssues(form: AgentForm): FilesystemIssues {
   return {
     sessionMount: form.sessionFs && !MOUNT_RE.test(form.sessionMount),
     outputsMount: outputs && !MOUNT_RE.test(form.outputsMount),
+    bothStores: form.sessionFs && outputs,
+    outputsNeedsV2: outputs && form.runtimeConfig?.platform_version === "V1",
     rows,
     duplicatePaths: new Set(paths).size !== paths.length,
-    tooMany:
-      s3Mounts.length + efsMounts.length + catalogMounts.length + (outputs ? 1 : 0) > maxMounts(form.sessionFs),
+    tooMany: s3Mounts.length + efsMounts.length + catalogMounts.length > maxMounts(store),
     vpc:
       hasNfsMounts({ s3Mounts, efsMounts, catalogMounts }) &&
       !form.networkProfileId &&
@@ -1307,6 +1337,8 @@ export const filesystemValid = (form: AgentForm) => {
   return (
     !issues.sessionMount &&
     !issues.outputsMount &&
+    !issues.bothStores &&
+    !issues.outputsNeedsV2 &&
     Object.keys(issues.rows).length === 0 &&
     !issues.duplicatePaths &&
     !issues.tooMany &&
@@ -1448,7 +1480,7 @@ export function agentFormValid(
   if (!contextLayerValid(form)) return false;
   if (runtimeConfigSupported(form.method) && !runtimeConfigValid(form.runtimeConfig)) return false;
   if (form.method === "byoc") {
-    return AGENT_NAME_RE.test(form.name) && byocValid(form) && !opts.byocUploading;
+    return AGENT_NAME_RE.test(form.name) && byocValid(form) && filesystemValid(form) && !opts.byocUploading;
   }
   return (
     AGENT_NAME_RE.test(form.name) &&

@@ -21,9 +21,12 @@ import {
   managedGatewayAttached,
   MAX_MOUNTS_PER_KIND,
   type MountRow,
+  OUTPUTS_RETENTION_DAYS,
   promptWithToolkit,
   pythonLabel,
   randomAgentSlug,
+  sessionKind,
+  sessionKindFlags,
   slugFromDisplayName,
   TOOLKITS,
   toggle,
@@ -517,7 +520,7 @@ function CatalogMountsField({ form, set, inlineCount }: Pick<SectionProps, "set"
     label: `${e.name} (${e.id})${e.kind === "s3bucket" ? ` · ${t("v3.storage.kind.s3bucket")}` : ""}`,
     disabled: harness && e.kind === "s3bucket",
   }));
-  const limit = maxMounts(form.sessionFs);
+  const limit = maxMounts(sessionKind(form) !== "none");
   const full = rows.length + inlineCount >= limit;
   const patch = (i: number, change: Partial<CatalogMountRow>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...change } : r)));
   return (
@@ -605,6 +608,8 @@ export function FilesystemCard({
   const { t } = useTranslation();
   const { isAdmin } = useAuth();
   const issues = filesystemIssues(form);
+  const harness = form.method === "harness";
+  const kind = sessionKind(form);
   const byoAllowed = byoMountsAllowed(form.method);
   const byo = byoAllowed && hasByoMounts(form);
   const rowsMode = byoAllowed ? byoRowsMode(form.method, isAdmin, byo) : "hidden";
@@ -622,54 +627,58 @@ export function FilesystemCard({
     <>
     <Card
       title={t("v2.agents.wizard.fsTitle")}
-      sub={t(byo ? "storage.mount.noteByo" : byoAllowed ? "storage.mount.note" : "v2.agents.wizard.fsNoteSession")}
+      sub={t(byo ? "storage.mount.noteByo" : "storage.mount.note")}
       testId="v2-agent-fs"
     >
       <div className="v2-form">
-        <div className="v2-form cols-2">
-          <Field label={t("v2.agents.wizard.fsSession")}>
-            <label className="v2-check">
-              <input type="checkbox" checked={form.sessionFs} onChange={(e) => set({ sessionFs: e.target.checked })} data-testid="v2-agent-fs-session" />
-              {t("v2.agents.wizard.fsSessionOn")}
-            </label>
-          </Field>
-          {form.sessionFs && (
-            <Field label={t("v2.agents.wizard.fsSessionMount")} error={show(issues.sessionMount, "v2.agents.wizard.errMount")}>
-              <input
-                className="v2-input mono"
-                value={form.sessionMount}
-                onChange={(e) => set({ sessionMount: e.target.value })}
-                placeholder={DEFAULT_SESSION_MOUNT}
-                data-testid="v2-agent-fs-session-mount"
+        <Field label={t("v2.agents.wizard.fsSession")} hint={t("v2.agents.wizard.fsKindHint")}>
+          <div className="v2-options" data-testid="v2-agent-fs-kind">
+            {(harness ? (["managed", "none"] as const) : (["managed", "s3", "none"] as const)).map((k) => (
+              <OptionCard
+                key={k}
+                title={t(`v2.agents.wizard.fsKind.${k}`)}
+                desc={t(`v2.agents.wizard.fsKindDesc.${k}`, { days: OUTPUTS_RETENTION_DAYS })}
+                // both flags on (a spec the server refuses) leaves every card unselected
+                on={!issues.bothStores && kind === k}
+                onClick={() => set(sessionKindFlags(k))}
+                testId={`v2-agent-fs-kind-${k}`}
               />
-            </Field>
-          )}
-        </div>
-        {form.method !== "harness" && (
-          <div className="v2-form cols-2" data-testid="v2-agent-fs-outputs-block">
-            <Field label={t("v2.agents.wizard.fsOutputs")} hint={t("v2.agents.wizard.fsOutputsHint", { days: 30 })}>
-              <label className="v2-check">
-                <input type="checkbox" checked={form.outputsFs} onChange={(e) => set({ outputsFs: e.target.checked })} data-testid="v2-agent-fs-outputs" />
-                {t("v2.agents.wizard.fsOutputsOn")}
-              </label>
-            </Field>
-            {form.outputsFs && (
-              <Field label={t("v2.agents.wizard.fsOutputsMount")} error={show(issues.outputsMount, "v2.agents.wizard.errMount")}>
-                <input
-                  className="v2-input mono"
-                  value={form.outputsMount}
-                  onChange={(e) => set({ outputsMount: e.target.value })}
-                  placeholder={DEFAULT_OUTPUTS_MOUNT}
-                  data-testid="v2-agent-fs-outputs-mount"
-                />
-              </Field>
-            )}
+            ))}
+          </div>
+        </Field>
+        {issues.bothStores && (
+          <div data-testid="v2-agent-fs-both">
+            <Alert tone="error">{t("v2.agents.wizard.fsBoth")}</Alert>
           </div>
         )}
-        {form.method !== "harness" && form.outputsFs && form.runtimeConfig?.platform_version === "V1" && (
-          <div data-testid="v2-agent-fs-outputs-v2">
-            <Alert tone="warn">{t("v2.agents.wizard.fsOutputsNeedsV2")}</Alert>
-          </div>
+        {!issues.bothStores && kind === "managed" && (
+          <Field label={t("v2.agents.wizard.fsSessionMount")} error={show(issues.sessionMount, "v2.agents.wizard.errMount")}>
+            <input
+              className="v2-input mono"
+              value={form.sessionMount}
+              onChange={(e) => set({ sessionMount: e.target.value })}
+              placeholder={DEFAULT_SESSION_MOUNT}
+              data-testid="v2-agent-fs-session-mount"
+            />
+          </Field>
+        )}
+        {!issues.bothStores && kind === "s3" && (
+          <>
+            <Field label={t("v2.agents.wizard.fsOutputsMount")} error={show(issues.outputsMount, "v2.agents.wizard.errMount")}>
+              <input
+                className="v2-input mono"
+                value={form.outputsMount}
+                onChange={(e) => set({ outputsMount: e.target.value })}
+                placeholder={DEFAULT_OUTPUTS_MOUNT}
+                data-testid="v2-agent-fs-outputs-mount"
+              />
+            </Field>
+            {issues.outputsNeedsV2 && (
+              <div data-testid="v2-agent-fs-outputs-v2">
+                <Alert tone="error">{t("v2.agents.wizard.fsOutputsNeedsV2")}</Alert>
+              </div>
+            )}
+          </>
         )}
         {rowsMode !== "hidden" && kinds.map(({ kind, field, label, ph }) => (
           <Field key={kind} label={t("v2.agents.wizard.fsMounts", { kind: label })} hint={t("v2.agents.wizard.fsMountsHint", { max: MAX_MOUNTS_PER_KIND })}>
@@ -740,7 +749,7 @@ export function FilesystemCard({
           <CatalogMountsField form={form} set={set} inlineCount={form.s3Mounts.length + form.efsMounts.length} />
         )}
         {touched && issues.duplicatePaths && <span className="v2-agents-err">{t("v2.agents.wizard.errDupPath")}</span>}
-        {issues.tooMany && <span className="v2-agents-err" data-testid="v2-agent-fs-too-many">{t("v2.agents.wizard.errTooManyMounts", { max: maxMounts(form.sessionFs) })}</span>}
+        {issues.tooMany && <span className="v2-agents-err" data-testid="v2-agent-fs-too-many">{t("v2.agents.wizard.errTooManyMounts", { max: maxMounts(kind !== "none") })}</span>}
         {needsProfile && (
           <div data-testid="v2-agent-fs-needs-profile">
             <Alert tone={touched ? "error" : "warn"}>{t("storage.mount.needsProfile")}</Alert>
