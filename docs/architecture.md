@@ -415,8 +415,9 @@ The two are **mutually exclusive** (`schemas/agent.FilesystemConfig`): a spec th
 both"). A payload that sets `outputs` and has **no** `session_storage` key resolves session
 storage to off rather than to the default on, so an API or script caller that only adds
 `outputs` is not refused; `outputs: null` changes nothing. Choosing the S3 bucket is therefore
-also choosing to give up managed session storage: the agent has no POSIX scratch space that
-outlives a stop/resume, and a Strands agent's journal falls back to `/tmp`. The field names
+also choosing to give up managed session storage: the agent loses the one POSIX space documented to
+survive a stop/resume, and a Strands agent's journal falls back to `/tmp` (not guaranteed to
+survive one). The field names
 and their defaults are frozen — stored specs, snapshots and the Strands golden fixtures all
 spell them this way, and renaming `session_storage` would read every stored
 `session_storage: null` (off) as the default on. No stored spec on dev or prod had both when

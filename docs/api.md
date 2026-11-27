@@ -2453,8 +2453,9 @@ an agent spec is stored (`POST /api/agents`, redeploy):
   agent only `/tmp`.
 - **Trade-off.** The S3 bucket is not POSIX: whole-file writes only (append `EPERM`, in-place
   edit `EBADF`, rename `ENOSYS`; overwriting a whole file works). Choosing it turns managed
-  session storage off, so the agent has no POSIX space that outlives a stop/resume and a
-  Strands agent's journal root falls back to `/tmp`.
+  session storage off, so the agent loses the one POSIX space documented to survive a
+  stop/resume, and a Strands agent's journal root falls back to `/tmp` (whose lifetime across
+  a stop/resume is not guaranteed).
 - The field names and their defaults are stable. Unknown keys under `filesystem` are
   ignored, so a misspelled or renamed key is dropped silently, and a spec without `outputs`
   that loses its `session_storage: null` (or sends it under another name) has managed session

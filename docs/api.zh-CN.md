@@ -1727,7 +1727,7 @@ Agent spec 以 `filesystem.mounts[{storage_id, mount_path?（默认 /mnt/<storag
 - `session_storage: {mount_path?（默认 /mnt/workspace）} | null`——托管的 AgentCore 会话存储（`sessionStorage`）。**默认开启**：没有该键即开启，`null` 即关闭。POSIX，按会话隔离，停止 / 恢复后仍在。
 - `outputs: {mount_path?（默认 /mnt/outputs，6–200 个字符）} | null`——按会话隔离的输出文件夹，是工作区 Agent 文件存储桶上一个始终可读写的 `s3BucketMount`，前缀为 `projects/<project|shared>/agents/<agent_id>/sessions/{runtimeSessionId}/`。**默认关闭**（没有该键或为 `null`）。用户在对话中下载其中的文件（`GET /api/chat/{agent_id}/sessions/{session_id}/files`）；对象写入 30 天后过期。`bucket` 和 `project_key` 由服务端写入（客户端发送的值会被替换）；其他键 → `422 validation.invalid_request`（`extra="forbid"`）。仅限 `runtime_config.platform_version` 为 `V2` 的 Runtime 方式（`422 storage.requires_v2`；Harness 返回 `422 validation.invalid_request`），工作区还没有 Agent 文件存储桶时返回 `422 storage.agent_files_unavailable`。
 - **不能两者都设。** 同时带 `outputs` 和非空 `session_storage` 的 spec → `422 validation.invalid_request`（“choose either managed session storage or the session output folder (S3 bucket), not both”）。发送了 `outputs`、**没有** `session_storage` 键的 spec 解析为 `session_storage: null` 并按此保存，因此只加 `outputs` 就够了；`outputs: null` 不改变 `session_storage`。两者都不用时 Agent 只有 `/tmp`。
-- **代价。** S3 bucket 不是 POSIX：只能整文件写入（追加 `EPERM`、原地修改 `EBADF`、重命名 `ENOSYS`；整文件覆盖可以）。选择它就关闭了托管会话存储，Agent 没有能跨越停止 / 恢复的 POSIX 空间，Strands Agent 的日志根目录退回到 `/tmp`。
+- **代价。** S3 bucket 不是 POSIX：只能整文件写入（追加 `EPERM`、原地修改 `EBADF`、重命名 `ENOSYS`；整文件覆盖可以）。选择它就关闭了托管会话存储，Agent 失去了文档中唯一能跨越停止 / 恢复的 POSIX 空间，Strands Agent 的日志根目录退回到 `/tmp`（`/tmp` 能否跨越停止 / 恢复没有保证）。
 - 两个字段名及其默认值保持不变。`filesystem` 下的未知键会被忽略，所以拼错或改名的键会被静默丢弃：没有 `outputs` 的 spec 如果丢了 `session_storage: null`（或换了名字发送），托管会话存储就会重新开启。
 
 ## 控制台系统更新 API / Console System Update API

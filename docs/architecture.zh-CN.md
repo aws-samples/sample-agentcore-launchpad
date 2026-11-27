@@ -274,8 +274,8 @@ spec 也能被无歧义地读回,将来新增第二个 SDK 无需迁移已存 sp
 两者**互斥**（`schemas/agent.FilesystemConfig`）：同时设置 `outputs` 和非空 `session_storage` 的 spec 返回
 `422 validation.invalid_request`（“choose either managed session storage or the session output folder (S3 bucket), not
 both”）。只设置了 `outputs`、**没有** `session_storage` 键的请求，会话存储解析为关闭而不是默认的开启，因此只加了 `outputs`
-的 API 或脚本调用方不会被拒；`outputs: null` 不改变任何东西。所以选择 S3 bucket 也就是放弃托管会话存储：Agent 没有能跨越
-停止 / 恢复的 POSIX 临时空间，Strands Agent 的日志退回到 `/tmp`。两个字段名及其默认值都已冻结——已存储的 spec、快照和 Strands
+的 API 或脚本调用方不会被拒；`outputs: null` 不改变任何东西。所以选择 S3 bucket 也就是放弃托管会话存储：Agent 失去了文档中唯一
+能跨越停止 / 恢复的 POSIX 空间，Strands Agent 的日志退回到 `/tmp`（`/tmp` 能否跨越停止 / 恢复没有保证）。两个字段名及其默认值都已冻结——已存储的 spec、快照和 Strands
 黄金夹具都按这个拼写，重命名 `session_storage` 会把每条已存储的 `session_storage: null`（关闭）读成默认的开启。引入该规则时
 （2026-11-27）dev 和 prod 上没有任何同时设置两者的 spec，因此不需要数据迁移。
 

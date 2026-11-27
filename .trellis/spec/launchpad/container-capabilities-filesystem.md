@@ -480,8 +480,9 @@ journal_root(spec) -> session_storage.mount_path if set else "/tmp"   # S3 bucke
   `outputs: null` triggers nothing (the before-validator tests `is not None`).
 - The S3 bucket is not POSIX (Mountpoint for S3: append `EPERM`, in-place edit `EBADF`, rename
   `ENOSYS`; whole-file overwrite OK), is per session and downloadable from the chat for 30
-  days. Choosing it turns managed session storage off — no POSIX space that outlives a
-  stop/resume, and the Strands journal root falls back to `/tmp`. Docs and UI say this plainly.
+  days. Choosing it turns managed session storage off — the one POSIX space documented to survive a
+  stop/resume is gone (`/tmp`'s lifetime there was never probed — do not claim either way), and the
+  Strands journal root falls back to `/tmp`. Docs and UI say this plainly.
 - Switching is an ordinary re-publish: managed → S3 drops the live `sessionStorage` (spec has
   none); S3 → managed detaches `/mnt/outputs` because it is in `published_mount_paths` (the
   platform's, not an external mount). `canary_infra._candidate_mounts` uses the same
