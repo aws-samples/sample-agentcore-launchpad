@@ -61,7 +61,8 @@ the container image. Introduced by task `07-12-agent-sdk-capabilities-fs`.
 ```python
 # schemas/agent.py
 class FilesystemConfig:   # AgentSpec.filesystem (default: session ON @ /mnt/workspace)
-    session_storage: SessionStorageFs | None   # JSON null = disabled
+    session_storage: SessionStorageFs | None   # JSON null = disabled; never with outputs (see
+                                               # "session file storage is one choice of three")
     s3_files: list[ByoMount]  # ≤2, ARN must contain :s3files: …/access-point/
     efs: list[ByoMount]       # ≤2, ARN must match elasticfilesystem access-point
     byo: bool                 # property
@@ -357,7 +358,8 @@ by_arn = {r.access_point_arn: r for r in rows}
 ```python
 # schemas/agent.py
 class OutputsFs: mount_path="/mnt/outputs"; bucket; project_key   # last two server-stamped
-FilesystemConfig.outputs: OutputsFs | None = None                 # counts as 1 of the 5 entries
+FilesystemConfig.outputs: OutputsFs | None = None                 # counts as 1 of the 5 entries;
+                                                                  # mutually exclusive with session_storage
 # services/agentcore/filesystem_kinds.py  (the ONE prefix formula)
 outputs_bucket_name(account, region) -> "launchpad-agent-files-<a>-<r>"
 outputs_agent_prefix(project_key, agent_id) -> "projects/<project|shared>/agents/<agent>/"
@@ -417,6 +419,7 @@ HTTP: `GET /api/chat/{agent_id}/sessions/{session_id}/files`,
 | Condition | Result |
 |---|---|
 | Harness + outputs | `AgentSpec` validation error (same `BUCKET_MOUNT_UNSUPPORTED` row as catalog buckets) |
+| outputs + non-null session_storage | 422 `validation.invalid_request` (next scenario) |
 | Runtime not on V2 (or existing agent without explicit V2) | 422 `storage.requires_v2` |
 | Workspace has no `agent_files_bucket` | 422 `storage.agent_files_unavailable` (promotion: unmapped, same code) |
 | Caller is neither the session's user nor admin / unknown session / other agent | 404 `chat.session_not_found` |
@@ -439,4 +442,91 @@ prefix = outputs_agent_prefix(p, agent_id)   # ".../agents/<id>/"
 
 # WRONG: if not outputs: return spec      ({} = on with defaults is falsy)
 # CORRECT: if outputs is None: return spec
+```
+
+## Scenario: session file storage is one choice of three (managed / S3 bucket / none)
+
+### 1. Scope / Trigger
+- Trigger: any change to how `filesystem.session_storage` and `filesystem.outputs` relate —
+  the `FilesystemConfig` validators, the V2 `FilesystemCard` choice, `lib/agent-spec.ts`
+  (`filesystemSpec` / `filesystemValid` / `formFromStoredSpec`), the classic console's session
+  chip, the mount budget (`maxMounts`), the storage card, or the re-publish switch between them.
+- The rule: an agent's session files live in **managed session storage** (AgentCore
+  `sessionStorage`, the default), the **S3 bucket** session output folder (`outputs`, an
+  `s3BucketMount` on the agent-files bucket), or **neither** — never both. The Harness has no
+  S3 bucket option.
+
+### 2. Signatures
+```python
+# schemas/agent.py — names and defaults are FROZEN (see Wrong vs Correct)
+class FilesystemConfig:
+    session_storage: SessionStorageFs | None = SessionStorageFs()   # default ON; null = off
+    outputs: OutputsFs | None = None                                 # default off
+    @model_validator(mode="before")   # _outputs_replace_default_session_storage
+    #   dict with outputs is not None and NO "session_storage" key -> session_storage = None
+    @model_validator(mode="after")    # _check
+    #   outputs is not None and session_storage is not None -> ValueError (422)
+    #   budget: BYO + catalog + outputs <= 5 - (1 if session_storage) -> ≤ 4 with either option, 5 with none
+# templates/strands_agent/builder.py
+journal_root(spec) -> session_storage.mount_path if set else "/tmp"   # S3 bucket choice => /tmp
+```
+
+### 3. Contracts
+- Exclusivity is enforced server-side for every caller (console, API, scripts); the UI mirrors
+  it but is not the gate.
+- Omission is not a conflict: `{"outputs": {}}` alone resolves to `session_storage: None`
+  and is stored that way, so a caller that only adds `outputs` is not refused. An explicit
+  `session_storage` key (even the default object) together with `outputs` IS a conflict.
+  `outputs: null` triggers nothing (the before-validator tests `is not None`).
+- The S3 bucket is not POSIX (Mountpoint for S3: append `EPERM`, in-place edit `EBADF`, rename
+  `ENOSYS`; whole-file overwrite OK), is per session and downloadable from the chat for 30
+  days. Choosing it turns managed session storage off — no POSIX space that outlives a
+  stop/resume, and the Strands journal root falls back to `/tmp`. Docs and UI say this plainly.
+- Switching is an ordinary re-publish: managed → S3 drops the live `sessionStorage` (spec has
+  none); S3 → managed detaches `/mnt/outputs` because it is in `published_mount_paths` (the
+  platform's, not an external mount). `canary_infra._candidate_mounts` uses the same
+  `manifest_paths(spec) | published_mount_paths(db, agent.id)`.
+- No stored spec had both when the rule shipped (dev and prod, 2026-11-27): no migration.
+
+### 4. Validation & Error Matrix
+| Input `filesystem` | Result |
+|---|---|
+| `{}` / absent | `session_storage` default ON, `outputs` None |
+| `{"session_storage": null}` | none (only `/tmp`) |
+| `{"outputs": {}}` (no `session_storage` key) | `session_storage` → `null`, outputs on (default `/mnt/outputs`) |
+| `{"outputs": {...}, "session_storage": null}` | S3 bucket |
+| `{"outputs": {...}, "session_storage": {...}}` | 422 `validation.invalid_request` — "choose either managed session storage or the session output folder (S3 bucket), not both" |
+| `{"outputs": null}` | unchanged: `session_storage` default ON |
+| outputs on the Harness / on platform V1 | `AgentSpec` validation error / 422 `storage.requires_v2` (previous scenario) |
+
+### 5. Tests Required
+Backend: `test_agent_files.py` — both set → 422; only `outputs` → `session_storage is None`
+(stored spec too); only `session_storage` → unchanged. `test_agent_spec_filesystem.py` —
+the exclusivity and the budget (4 with either option, 5 with none). Switching both directions
+in `merge_live` / `runtime_update_mounts` / `environment_for_update` (the other side's live
+entry removed, its own kept) and `canary_infra._candidate_mounts` with an earlier-published
+`/mnt/outputs`. The 11 Strands golden fixtures (`tests/fixtures/strands_builder*/*_spec.json`)
+must stay byte-identical — any diff means a field was renamed or a default moved.
+Frontend: `agent-spec.test.ts` (three-way round trip, both-on invalid, S3 + V1 invalid, BYOC
+validated, `maxMounts`), `storage.test.tsx` (one session-storage row per choice),
+`files.test.tsx` (disabled-state link via `editPath`), the `FilesystemCard` choice.
+
+### 6. Wrong vs Correct
+```python
+# WRONG: "clean up" the field names, e.g. session_storage -> session_fs
+class FilesystemConfig:
+    session_fs: SessionStorageFs | None = SessionStorageFs()
+# every stored spec still says {"session_storage": null} (= off); pydantic ignores the unknown
+# key, the new field takes its default, and managed session storage is SILENTLY turned back on.
+# Snapshots (`manifest_paths` reads the key) and the golden fixtures break too.
+# CORRECT: keep `session_storage` / `outputs` and their defaults; change behaviour in validators.
+
+# WRONG: refuse a payload that only adds outputs (the default session storage "collides")
+if self.outputs is not None and self.session_storage is not None: raise ...   # alone
+# CORRECT: the before-validator first resolves a MISSING session_storage key to None,
+# then _check refuses only an explicit pair.
+
+# WRONG (frontend): two independent checkboxes that can both be on
+# CORRECT: one choice (managed / S3 bucket / none), serialised by filesystemSpec:
+#   S3 -> {session_storage: null, outputs}; managed -> outputs omitted; none -> session_storage: null
 ```

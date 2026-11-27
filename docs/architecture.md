@@ -392,12 +392,49 @@ stop/resume with the same `runtimeSessionId`, holds up to 1 GB, expires after
 14 idle days and is reset by every new version. An explicit
 `session_storage: null` turns it off.
 
-| Method | Session storage | BYO S3 Files / EFS (+ VPC) | Where it is sent |
+**Session file storage: managed vs S3 bucket.** An agent's session files live in exactly one
+of three places, and the V2 wizard's file system card offers them as one choice: **managed
+session storage** (`filesystem.session_storage`, the default), the **S3 bucket** session
+output folder (`filesystem.outputs`, see *Session output files* below), or **none**. The
+managed Harness has no S3 bucket option (managed or none).
+
+| | Managed session storage (default) | S3 bucket (session output folder) | None |
 |---|---|---|---|
-| `harness` | yes | yes (probe P3/P4 pending) | `environment.agentCoreRuntimeEnvironment.filesystemConfigurations` |
-| `zip_runtime` / `studio` | yes | yes (probe P1/P2 pending) | `CreateAgentRuntime` / `UpdateAgentRuntime` |
-| `container` | yes | yes (probed live 2026-07-13) | `CreateAgentRuntime` / `UpdateAgentRuntime` |
-| `byoc` (code zip, image; agents and MCP servers) | yes | yes (probe P5 pending) | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| Spec | `session_storage: {mount_path}` (default `/mnt/workspace`) | `outputs: {mount_path}` (default `/mnt/outputs`); `session_storage` resolves to `null` | `session_storage: null`, no `outputs` |
+| AWS entry | `sessionStorage` | `s3BucketMount` on the workspace's agent-files bucket | — |
+| File semantics | a POSIX file system | **not POSIX**: whole-file writes only — append `EPERM`, in-place edit `EBADF`, rename `ENOSYS`; overwriting a whole file works | `/tmp` only |
+| Lifetime | per session; survives stop/resume, ≤ 1 GB, expires after 14 idle days, reset by every new version | per session; each object expires 30 days after it is written | the session's microVM |
+| The user can download it | no | yes, from the chat's **Files** tab, for 30 days | no |
+| Methods | all, Harness included | Runtime methods on platform V2 (not the Harness) | all |
+| Strands journal root (`templates/strands_agent/builder.py` `journal_root`) | the session mount | `/tmp` (no session mount) | `/tmp` |
+| `filesystemConfigurations` entries used | 1 of 5 | 1 of 5 | 0 |
+
+The two are **mutually exclusive** (`schemas/agent.FilesystemConfig`): a spec that sets both
+`outputs` and a non-null `session_storage` is refused with `422 validation.invalid_request`
+("choose either managed session storage or the session output folder (S3 bucket), not
+both"). A payload that sets `outputs` and has **no** `session_storage` key resolves session
+storage to off rather than to the default on, so an API or script caller that only adds
+`outputs` is not refused; `outputs: null` changes nothing. Choosing the S3 bucket is therefore
+also choosing to give up managed session storage: the agent has no POSIX scratch space that
+outlives a stop/resume, and a Strands agent's journal falls back to `/tmp`. The field names
+and their defaults are frozen — stored specs, snapshots and the Strands golden fixtures all
+spell them this way, and renaming `session_storage` would read every stored
+`session_storage: null` (off) as the default on. No stored spec on dev or prod had both when
+the rule was introduced (2026-11-27), so it needed no migration.
+
+Switching between them is an ordinary re-publish. Managed → S3 bucket: the live
+`sessionStorage` entry is dropped (the spec has none) and the `s3BucketMount` is added. S3
+bucket → managed: `/mnt/outputs` is a path an earlier publish of the agent set
+(`deployer/mounts.published_mount_paths`), so it counts as the platform's and is detached,
+not kept as an external mount; the canary candidate uses the same published paths
+(`optimization/canary_infra._candidate_mounts`).
+
+| Method | Managed session storage | S3 bucket session output folder | BYO S3 Files / EFS (+ VPC) | Where it is sent |
+|---|---|---|---|---|
+| `harness` | yes | no (`BUCKET_MOUNT_UNSUPPORTED`) | yes (probe P3/P4 pending) | `environment.agentCoreRuntimeEnvironment.filesystemConfigurations` |
+| `zip_runtime` / `studio` | yes | yes, platform V2 | yes (probe P1/P2 pending) | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `container` | yes | yes, platform V2 | yes (probed live 2026-07-13) | `CreateAgentRuntime` / `UpdateAgentRuntime` |
+| `byoc` (code zip, image; agents and MCP servers) | yes | yes, platform V2 | yes (probe P5 pending) | `CreateAgentRuntime` / `UpdateAgentRuntime` |
 
 `schemas/agent.BYO_MOUNT_METHODS` lists the methods that accept BYO mounts (design
 storage-mounts §3). The request shapes are in the `bedrock-agentcore-control`
@@ -575,9 +612,10 @@ re-publish merge, the canary candidate and the session-id guard.
   `EPERM`, in-place edit `EBADF`, rename `ENOSYS`) and "this session only" for a per-session
   mount.
 
-**Session output files** (`filesystem.outputs`, `services/agent_files.py`). A member can switch on
-one per-session, read-write output folder per agent (off by default; the V2 wizard's file
-system card). It is an `s3BucketMount` on the workspace's own **agent-files bucket**
+**Session output files** (`filesystem.outputs`, `services/agent_files.py`). A member can pick one
+per-session, read-write output folder per agent as its session file storage, **instead of**
+managed session storage (off by default; the S3 bucket option of the V2 wizard's file system
+card — see *Session file storage* above). It is an `s3BucketMount` on the workspace's own **agent-files bucket**
 (`launchpad-agent-files-<account>-<region>`, `resources.agent_files_bucket`) at
 `projects/<project|shared>/agents/<agent id>/sessions/{runtimeSessionId}/`, mounted at
 `/mnt/outputs`. It is not a catalog entry, so no allow list applies: the spec carries
@@ -596,7 +634,8 @@ own prefix), the files API and the delete hooks.
   stage (spoke template v3 for `s3:PutLifecycleConfiguration`); a spoke that is already `ready`
   (a re-bootstrap is refused) — `POST /api/workspaces/{id}/agent-files/repair`, which runs just
   that step. The folder counts as one of
-  AgentCore's five `filesystemConfigurations`.
+  AgentCore's five `filesystemConfigurations` — the one managed session storage would
+  otherwise take, since the two never coexist.
 - **Bucket.** Unversioned (the expiry must really delete), SSE-S3, Block Public Access, objects
   expire 30 days after creation and incomplete multipart uploads after a day, `RETAIN` in CDK
   (customer files outlive a stack teardown; `teardown.py` leaves it). The policy
@@ -665,13 +704,15 @@ The two update APIs behave differently on a re-publish (probed live 2026-10-04):
 
 Every stored spec already carries the default, because it is written with
 `model_dump()`. So an existing harness or Strands agent gains `/mnt/workspace`
-on its next re-publish unless the member turns it off. Session storage needs no
+on its next re-publish unless the member picks the S3 bucket or none. Session storage needs no
 IAM grant. In a VPC network profile (see *Agent network* below) the runtime reaches
 the `acr-storage-*` S3 buckets through the profile's S3 gateway endpoint, which the
 profile preflight requires of every agent. A Harness reaches its mounts through its
 native `shell` / `file_operations` tools. The V2 wizard (`FilesystemCard`) edits
-the setting; the BYO rows are editable by administrators only, and the classic
-console round-trips the stored value unchanged.
+the three-way choice (managed / S3 bucket / none; the Harness only managed or none);
+the BYO rows are editable by administrators only. The classic console offers managed
+session storage on or off only and round-trips the rest of the stored value, except that
+turning managed session storage on there clears a stored `outputs` (the two cannot coexist).
 
 ### Agent network (`AgentSpec.network`)
 
