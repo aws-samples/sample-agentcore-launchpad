@@ -6,6 +6,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { ErrorCallout } from "../../components/ErrorCallout";
 import { JumpToLatest } from "../../components/JumpToLatest";
 import { Markdown } from "../../components/Markdown";
+import { editPath } from "../../lib/agent-admin/edit";
 import { StructuredAnswer } from "../../components/chat/StructuredAnswer";
 import { ToolApprovalCard } from "../../components/chat/ToolApprovalCard";
 import {
@@ -802,6 +803,7 @@ export function V3Chat() {
           onTab={setInspect}
           onClose={() => setInspect(null)}
           agentId={agentId}
+          editTo={editPath(agent)}
           sessionId={sessionId}
           busy={busy || restoring}
           memoryState={agentMemoryState(agent)}

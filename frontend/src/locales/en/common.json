@@ -6813,8 +6813,7 @@
         "mcpJson": "MCP server config (JSON, optional)",
         "mcpJsonHint": "Written to the LAUNCHPAD_MCP_SERVERS environment variable and loaded by the SDK at start-up.",
         "fsTitle": "File system",
-        "fsSession": "Managed session storage",
-        "fsSessionOn": "Keep files under /mnt across stop/resume within a session",
+        "fsSession": "Session file storage",
         "fsSessionMount": "Session mount path",
         "fsMounts": "{{kind}} mounts",
         "fsMountsHint": "Up to {{max}} of each; the mount path must be one level under /mnt.",
@@ -6826,8 +6825,7 @@
         "errDupPath": "Mount paths must be unique",
         "errTooManyMounts": "At most {{max}} S3 Files / EFS mounts in total (by ARN and from the catalog) — remove one.",
         "errVpc": "BYO mounts need at least one subnet and one security group",
-        "fsSummary": "Session storage {{session}} · S3 Files {{s3}} · EFS {{efs}}",
-        "fsNoteSession": "Managed session storage keeps files under the mount path across stop/resume of the same session (up to 1 GB per session, 14-day idle expiry). Every re-publish creates a new version and resets it. S3 Files / EFS mounts are available on the Other Agent SDK method only.",
+        "fsSummary": "Session files {{session}} · S3 Files {{s3}} · EFS {{efs}}",
         "skillsHintSources": "Published Skills from the Registry; you can also upload a zip or import from a Git repository.",
         "skillUpload": "Upload .zip",
         "skillGit": "Import from Git",
@@ -6960,11 +6958,20 @@
           "reviewSub": "Deploying creates the runtime, a Cognito client, an OAuth2 provider and the Gateway target, then lists the server's tools."
         },
         "networkProfile": "Network profile: {{id}}",
-        "fsOutputs": "Session output files",
-        "fsOutputsOn": "Give the agent a folder for files the user can download",
         "fsOutputsMount": "Output folder path",
-        "fsOutputsHint": "Read-write and private to each session; whole files only (no append, rename or in-place edit). Downloadable from the chat's Files tab for {{days}} days, then deleted. Runtime methods on platform V2 only — not the Harness.",
-        "fsOutputsNeedsV2": "Session output files need Runtime platform version V2 — switch this agent to V2 in its Runtime settings."
+        "fsOutputsNeedsV2": "The S3 bucket needs Runtime platform version V2: switch this agent to V2 in its Runtime settings, or choose another option.",
+        "fsKindHint": "Where the agent keeps files it writes. Pick one: managed session storage and the S3 bucket cannot be combined.",
+        "fsKind": {
+          "managed": "Managed session storage",
+          "s3": "S3 bucket",
+          "none": "None"
+        },
+        "fsKindDesc": {
+          "managed": "A full file system (default /mnt/workspace) kept across stop/resume of the same session: up to 1 GB, expires after 14 idle days. Files cannot be downloaded from the chat.",
+          "s3": "A private folder per session that users can download from the chat's Files tab for {{days}} days, then it is deleted. Whole-file reads and writes only (no append, rename or in-place edit), and the agent's logs go to /tmp. Runtime methods on platform V2 only; not the Harness.",
+          "none": "Only the container's /tmp: nothing is kept across stop/resume."
+        },
+        "fsBoth": "Both managed session storage and the S3 bucket are set. Choose one."
       },
       "identity": {
         "open": "Identity",
@@ -13400,7 +13407,7 @@
       "files": {
         "placeholder": "Send a message first — files the agent saves for this session appear here.",
         "disabled": "This agent has no session output folder.",
-        "enable": "Turn it on in the agent's storage settings",
+        "enable": "Set session file storage to S3 bucket in the agent settings",
         "empty": "No files yet. Ask the agent to save a file to {{path}}.",
         "retention": "Files are kept for {{days}} days after they are written, then deleted.",
         "truncated": "Showing the newest {{count}} files.",
@@ -16469,8 +16476,17 @@
         "externalHint": "Read back from AWS: these mounts were added outside Launchpad (in the AWS console, or before the agent was imported). A re-publish from Launchpad keeps them; to manage one here, register its access point in Storage and mount it through the edit wizard.",
         "externalBucketHint": "An S3 bucket mount works on the PUBLIC network as well as in a VPC. A re-publish from Launchpad keeps it; manage the bucket and its permissions in AWS.",
         "liveUnavailable": "Could not read the mounts on AWS ({{error}}): mounts added outside Launchpad are not listed.",
-        "outputs": "Session output files",
-        "outputsHint": "The agent saves files for the user here; they are downloadable from the chat for 30 days."
+        "session": "Session file storage",
+        "kind": {
+          "managed": "managed",
+          "s3": "S3 bucket",
+          "none": "none"
+        },
+        "kindHint": {
+          "managed": "Kept across stop/resume of the same session; not downloadable from the chat.",
+          "s3": "The agent saves files for the user here; they are downloadable from the chat for {{days}} days.",
+          "none": "Only /tmp: nothing is kept across stop/resume."
+        }
       },
       "picker": {
         "title": "Storage from the catalog",

@@ -10,7 +10,7 @@ const read = (data: SessionFiles | null, busy = false) => ({ data, error: null, 
 const render = (data: SessionFiles | null, busy = false) =>
   renderToStaticMarkup(
     <MemoryRouter>
-      <FilesBody read={read(data, busy)} agentId="a1" sessionId={"s".repeat(40)} />
+      <FilesBody read={read(data, busy)} agentId="a1" editTo="/v2/agents?view=edit&id=a1" sessionId={"s".repeat(40)} />
     </MemoryRouter>,
   );
 

@@ -23,7 +23,7 @@ import {
   emptyAgentForm,
   entrypointAfterUpload,
   FILESYSTEM_METHODS,
-  filesystemIssues,
+  filesystemValid,
   formFromStoredSpec,
   gatewaySelectionsValid,
   inboundValid,
@@ -505,8 +505,7 @@ export function AgentWizard({ edit }: { edit?: AgentInfo } = {}) {
       for (const group of groupIssues(form)) out[`sb.${group}`] = "strands";
     }
     if (FILESYSTEM_METHODS.includes(method)) {
-      const fs = filesystemIssues(form);
-      if (fs.sessionMount || Object.keys(fs.rows).length || fs.duplicatePaths || fs.vpc) out.fs = "fs";
+      if (!filesystemValid(form)) out.fs = "fs";
     }
     return out;
     // specCatalogs is derived from cat
