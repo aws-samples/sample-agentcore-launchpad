@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { editPath } from "../../../lib/agent-admin/edit";
-import { OUTPUTS_RETENTION_DAYS, type SessionKind } from "../../../lib/agent-spec";
+import { OUTPUTS_RETENTION_DAYS } from "../../../lib/agent-spec";
 import type { AgentInfo } from "../../../lib/api";
 import { type AgentStorage, bucketUri as entryBucketUri, type LiveMount, storageApi } from "../../../lib/api/storage";
 import { useLoad } from "../../hooks";
@@ -48,9 +48,9 @@ export function StorageCardView({
   if (loading && !data) return <Panel title={title}><Skeleton rows={2} /></Panel>;
   if (error || !data) return <Panel title={title}><Notice s="act">{error ?? t("v3.storage.card.unavailable")}</Notice></Panel>;
   const external = (data.live?.entries ?? []).filter((m) => m.origin === "external");
-  // the session file storage is one choice of three (managed / S3 bucket / none), always shown
-  const sessionKind: SessionKind = data.outputs ? "s3" : data.session_storage ? "managed" : "none";
-  const sessionPath = data.outputs?.mount_path ?? data.session_storage ?? "/tmp";
+  // session storage is a row of its own, so the card stays when only that is mounted
+  if (!data.session_storage && data.mounts.length === 0 && data.inline.length === 0 && external.length === 0
+    && !data.outputs && data.live?.status !== "unavailable") return null;
   const change = <Link to={editPath(agent)} className="v3-inline-link">{t("v3.storage.card.change")}</Link>;
   return (
     <Panel title={title} end={change}>
@@ -64,16 +64,17 @@ export function StorageCardView({
           </tr>
         </thead>
         <tbody>
-          <tr data-testid="v3-agent-storage-session" data-kind={sessionKind}>
-            <td className="mono">{sessionPath}</td>
-            <td>
-              <b>{t("v3.storage.card.session")}</b> <Chip s="off">{t(`v3.storage.card.kind.${sessionKind}`)}</Chip>
-              {sessionKind === "s3" && <> <Chip s="off">{t("v3.storage.scope.per_session")}</Chip></>}
-              <div><small>{t(`v3.storage.card.kindHint.${sessionKind}`, { days: OUTPUTS_RETENTION_DAYS })}</small></div>
-            </td>
-            <td>{sessionKind === "none" ? "—" : <Chip s="wait">{t("v3.storage.mode.rw")}</Chip>}</td>
-            <td>—</td>
-          </tr>
+          {data.session_storage && (
+            <tr data-testid="v3-agent-storage-session">
+              <td className="mono">{data.session_storage}</td>
+              <td>
+                <b>{t("v3.storage.card.session")}</b>
+                <div><small>{t("v3.storage.card.sessionHint")}</small></div>
+              </td>
+              <td><Chip s="wait">{t("v3.storage.mode.rw")}</Chip></td>
+              <td>—</td>
+            </tr>
+          )}
           {data.mounts.map((m) => (
             <tr key={m.storage_id}>
               <td className="mono">{m.mount_path}</td>
@@ -102,6 +103,18 @@ export function StorageCardView({
               </td>
             </tr>
           ))}
+          {data.outputs && (
+            <tr data-testid="v3-agent-storage-outputs">
+              <td className="mono">{data.outputs.mount_path}</td>
+              <td>
+                <b>{t("v3.storage.card.outputs")}</b>{" "}
+                <Chip s="off">{t("v3.storage.scope.per_session")}</Chip>
+                <div><small>{t("v3.storage.card.outputsHint", { days: OUTPUTS_RETENTION_DAYS })}</small></div>
+              </td>
+              <td><Chip s="wait">{t("v3.storage.mode.rw")}</Chip></td>
+              <td>—</td>
+            </tr>
+          )}
           {data.inline.map((m, i) => (
             <tr key={`inline-${i}`}>
               <td className="mono">{m.mount_path ?? "—"}</td>

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import i18n from "../../../i18n";
-import { emptyAgentForm, sessionKindFlags } from "../../../lib/agent-spec";
+import { emptyAgentForm } from "../../../lib/agent-spec";
 
 vi.mock("../../../auth/auth-context", () => ({ useAuth: () => ({ isAdmin: false }) }));
 
@@ -26,44 +26,40 @@ describe("FilesystemCard network line", () => {
   });
 });
 
-describe("FilesystemCard session file storage choice", () => {
+describe("FilesystemCard session storage and output folder toggles", () => {
   const render = (form: ReturnType<typeof emptyAgentForm>) =>
     renderToStaticMarkup(<FilesystemCard form={form} set={() => undefined} touched={true} network={false} />);
-  const card = (html: string, kind: string) => html.match(new RegExp(`<button[^>]*data-testid="v2-agent-fs-kind-${kind}"`))?.[0] ?? "";
+  const checkbox = (html: string, id: string) => html.match(new RegExp(`<input[^>]*data-testid="${id}"[^>]*>`))?.[0] ?? "";
 
-  it("offers managed / S3 bucket / none on a Runtime method, one selected", () => {
+  it("has two independent checkboxes: session storage on, the folder off by default", () => {
     const html = render(emptyAgentForm("zip_runtime"));
-    for (const kind of ["managed", "s3", "none"]) expect(html).toContain(`v2-agent-fs-kind-${kind}`);
-    expect(card(html, "managed")).toContain('aria-pressed="true"');
-    expect(card(html, "s3")).toContain('aria-pressed="false"');
+    expect(checkbox(html, "v2-agent-fs-session")).toContain("checked");
+    expect(checkbox(html, "v2-agent-fs-outputs")).not.toContain("checked");
     expect(html).toContain('data-testid="v2-agent-fs-session-mount"');
     expect(html).not.toContain('data-testid="v2-agent-fs-outputs-mount"');
-    expect(html).not.toContain("v2-agent-fs-session\"");
+    expect(html).toContain("survives stop/resume");
+    expect(html).toContain("whole files only");
   });
 
-  it("shows the output folder input for the S3 bucket and none for neither", () => {
-    const s3 = render({ ...emptyAgentForm("zip_runtime"), ...sessionKindFlags("s3") });
-    expect(card(s3, "s3")).toContain('aria-pressed="true"');
-    expect(s3).toContain('data-testid="v2-agent-fs-outputs-mount"');
-    expect(s3).not.toContain('data-testid="v2-agent-fs-session-mount"');
-    const none = render({ ...emptyAgentForm("zip_runtime"), ...sessionKindFlags("none") });
-    expect(card(none, "none")).toContain('aria-pressed="true"');
-    expect(none).not.toContain("fs-session-mount");
-    expect(none).not.toContain("fs-outputs-mount");
+  it("shows both mount paths when both are on, with no conflict message", () => {
+    const html = render({ ...emptyAgentForm("zip_runtime"), outputsFs: true });
+    expect(checkbox(html, "v2-agent-fs-session")).toContain("checked");
+    expect(checkbox(html, "v2-agent-fs-outputs")).toContain("checked");
+    expect(html).toContain('data-testid="v2-agent-fs-session-mount"');
+    expect(html).toContain('data-testid="v2-agent-fs-outputs-mount"');
+    expect(html).not.toContain("v2-agent-fs-both");
   });
 
-  it("leaves the S3 bucket out for the Harness", () => {
+  it("leaves the output folder out for the Harness", () => {
     const html = render(emptyAgentForm("harness"));
-    expect(html).toContain("v2-agent-fs-kind-managed");
-    expect(html).toContain("v2-agent-fs-kind-none");
-    expect(html).not.toContain("v2-agent-fs-kind-s3");
+    expect(html).toContain('data-testid="v2-agent-fs-session"');
+    expect(html).not.toContain('data-testid="v2-agent-fs-outputs"');
   });
 
-  it("flags both stores, and the S3 bucket on a V1 Runtime", () => {
-    const both = render({ ...emptyAgentForm("zip_runtime"), outputsFs: true });
-    expect(both).toContain('data-testid="v2-agent-fs-both"');
-    expect(card(both, "managed")).toContain('aria-pressed="false"');
-    const v1 = render({ ...emptyAgentForm("zip_runtime"), ...sessionKindFlags("s3"), runtimeConfig: { platform_version: "V1" } as never });
+  it("flags the folder on a V1 Runtime", () => {
+    const form = emptyAgentForm("zip_runtime");
+    const v1 = render({ ...form, outputsFs: true, runtimeConfig: { ...form.runtimeConfig!, platform_version: "V1" } });
     expect(v1).toContain('data-testid="v2-agent-fs-outputs-v2"');
+    expect(render({ ...form, outputsFs: true })).not.toContain("v2-agent-fs-outputs-v2");
   });
 });

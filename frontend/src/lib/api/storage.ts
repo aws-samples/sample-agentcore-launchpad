@@ -29,9 +29,9 @@ export const MAX_BYO_MOUNTS = 4;
 /** AgentCore's limit on `filesystemConfigurations` entries, session storage included */
 export const MAX_FILESYSTEM_ENTRIES = 5;
 
-/** How many S3 Files / EFS / catalog mounts fit next to (or without) the agent's session
- *  store — managed session storage or the S3 bucket folder, either takes one entry. */
-export const maxMounts = (sessionStore: boolean) => MAX_FILESYSTEM_ENTRIES - (sessionStore ? 1 : 0);
+/** How many S3 Files / EFS / S3 bucket mounts fit next to `stores` session stores
+ *  (managed session storage and the S3 output folder each take one of the five). */
+export const maxMounts = (stores: number) => MAX_FILESYSTEM_ENTRIES - stores;
 
 /** `models/storage` prefix rules: no wildcard, placeholder or leading slash. */
 const BUCKET_RE = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;

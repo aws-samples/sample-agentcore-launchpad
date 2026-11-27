@@ -3358,12 +3358,7 @@ const deployLock = !canDeploy
                     type="button"
                     className={`selchip${sessionFs ? " on" : ""}`}
                     style={{ cursor: "pointer" }}
-                    onClick={() => {
-                      // managed session storage and the S3 folder (kept from a stored
-                      // spec; this page has no control for it) exclude each other
-                      if (!sessionFs) setOutputsFs(false);
-                      setSessionFs((v) => !v);
-                    }}
+                    onClick={() => setSessionFs((v) => !v)}
                   >
                     {t("create.configure.fsSession")} {sessionFs ? "✓" : "+"}
                   </button>

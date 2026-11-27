@@ -57,6 +57,7 @@ import {
   useChatTurn,
   waitForRetry,
 } from "../../lib/chat";
+import { editPath } from "../../lib/agent-admin/edit";
 import { livePolicyDeny, restoredPolicyDeny } from "../../lib/policy-deny";
 import {
   approvalActionable,
@@ -146,7 +147,7 @@ export function V2Chat() {
   const [memory, setMemory] = useState<ChatMemorySummary | null>(null);
   const [trace, setTrace] = useState<ChatTraceInfo | null>(null);
   const [traceBusy, setTraceBusy] = useState(false);
-  const [tab, setTab] = useState<InspectorTab>(() => (params.get("tab") === "api" ? "api" : "trace"));
+  const [tab, setTab] = useState<InspectorTab>(() => (params.get("tab") === "api" ? "api" : params.get("tab") === "files" ? "files" : "trace"));
   const [sharing, setSharing] = useState(false);
   // chat-streaming S2: what the running turn is doing, its timer and its stop
   const turn = useChatTurn();
@@ -847,6 +848,8 @@ export function V2Chat() {
               tab={tab}
               onTab={setTab}
               agentId={agentId}
+              editTo={agent ? editPath(agent) : ""}
+              busy={busy}
               sessionId={sessionId}
               trace={trace}
               traceBusy={traceBusy}
