@@ -12,7 +12,6 @@ import {
   managedGatewayAttached,
   pythonLabel,
   resolveKb,
-  sessionKind,
   skillNameFromPath,
   toolkitToolNames,
 } from "../../../lib/agent-spec";
@@ -221,19 +220,16 @@ export function WizardReview({
       ...context,
       memory,
     ];
-    // the session file storage: managed, the S3 bucket folder, or neither (one choice)
-    const kind = sessionKind(form);
-    const sessionValue =
-      kind === "managed" ? (
-        mono(form.sessionMount)
-      ) : kind === "s3" ? (
-        <>
-          {t("v2.agents.wizard.fsKind.s3")} {mono(form.outputsMount)}
-        </>
-      ) : (
-        none
-      );
-    const sessionFs = { label: t("v2.agents.wizard.fsSession"), value: sessionValue };
+    // harness / Strands: managed session storage is their only mount
+    const sessionFs = {
+      label: t("v2.agents.wizard.fsSession"),
+      value: form.sessionFs ? mono(form.sessionMount) : none,
+    };
+    // the per-session output folder (Runtime methods only; the Harness never carries it)
+    const outputsFs = {
+      label: t("v2.agents.wizard.fsOutputs"),
+      value: form.outputsFs ? mono(form.outputsMount) : none,
+    };
     if (method === "harness") {
       items = [
         ...head,
@@ -280,6 +276,7 @@ export function WizardReview({
           : [{ label: t("v2.agents.wizard.toolkits"), value: list(form.toolkits) }]),
         ...common,
         sessionFs,
+        outputsFs,
       ];
     } else {
       items = [
@@ -292,11 +289,12 @@ export function WizardReview({
         {
           label: t("v2.agents.wizard.fsTitle"),
           value: t("v2.agents.wizard.fsSummary", {
-            session: kind === "managed" ? form.sessionMount : kind === "s3" ? `${t("v2.agents.wizard.fsKind.s3")} ${form.outputsMount}` : none,
+            session: form.sessionFs ? form.sessionMount : none,
             s3: form.s3Mounts.length,
             efs: form.efsMounts.length,
           }),
         },
+        outputsFs,
       ];
     }
   }

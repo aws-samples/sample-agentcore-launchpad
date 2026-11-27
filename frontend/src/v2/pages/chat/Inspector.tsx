@@ -16,8 +16,9 @@ import { Alert, Button, Confirm, Kpi, LinkButton, SubTabs, Tag } from "../../ui"
 import { classicMemoryToV2 } from "../memory/classicUrl";
 import { classicObservabilityToV2 } from "../observability/classicUrl";
 import { apiKeyMeta, apiKeyOffboardedNote } from "./apiKeys";
+import { FilesPanel } from "./FilesPanel";
 
-export type InspectorTab = "trace" | "memory" | "api";
+export type InspectorTab = "trace" | "memory" | "api" | "files";
 
 const SPAN_COLOR: Record<string, string> = {
   model: "#1664ff",
@@ -37,11 +38,13 @@ async function copy(text: string, toast: ReturnType<typeof useV2Toast>, done: st
   }
 }
 
-/** Right-hand debug rail: session trace, session memory, API equivalent + keys. */
+/** Right-hand debug rail: session trace, session memory, the session's files, API equivalent + keys. */
 export function Inspector({
   tab,
   onTab,
   agentId,
+  editTo,
+  busy,
   sessionId,
   trace,
   traceBusy,
@@ -52,6 +55,10 @@ export function Inspector({
   tab: InspectorTab;
   onTab: (tab: InspectorTab) => void;
   agentId: string;
+  /** where the agent's settings open (`editPath`), for a Files tab with no output folder */
+  editTo: string;
+  /** a turn is running: the Files tab re-reads when it ends */
+  busy: boolean;
   sessionId: string | null;
   trace: ChatTraceInfo | null;
   traceBusy: boolean;
@@ -69,6 +76,7 @@ export function Inspector({
           tabs={[
             { value: "trace", label: t("v2.chat.tabTrace") },
             { value: "memory", label: t("v2.chat.tabMemory") },
+            { value: "files", label: t("v2.chat.tabFiles") },
             { value: "api", label: t("v2.chat.tabApi") },
           ]}
         />
@@ -78,6 +86,7 @@ export function Inspector({
           <TracePanel sessionId={sessionId} trace={trace} busy={traceBusy} onLoad={onLoadTrace} />
         )}
         {tab === "memory" && <MemoryPanel sessionId={sessionId} memory={memory} memoryState={memoryState} />}
+        {tab === "files" && <FilesPanel agentId={agentId} sessionId={sessionId} busy={busy} editTo={editTo} />}
         {tab === "api" && <ApiPanel agentId={agentId} sessionId={sessionId} />}
       </div>
     </>
