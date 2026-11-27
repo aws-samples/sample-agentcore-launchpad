@@ -67,12 +67,6 @@ Launchpad 由 React 控制台、FastAPI 后端和一套 CDK 共享基础设施�
 
 ### 前置条件
 
-> [!IMPORTANT]
-> **部署前请先提升一项 AgentCore 服务配额。** 在 AWS 控制台打开
-> **Service Quotas → Amazon Bedrock AgentCore**，把
-> **Maximum tool-call/tool-list/tool-search payload size**（工具调用/工具列表/工具搜索
-> 载荷大小上限）从默认的 **6 MB** 提升到 **10 MB**。请在你部署的区域提交申请（默认为 `us-west-2`）。
-
 - AWS 账号已在 `us-west-2` 开启 Bedrock AgentCore 预览（Runtime、Harness、
   Gateway、Policy、Evaluation）；Agent Registry 已 GA（自 2026-08-06 起使用
   `agent-registry` 命名空间，见 [docs/registry-ga-migration.md](docs/registry-ga-migration.md)），

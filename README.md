@@ -93,12 +93,6 @@ For how these map onto AgentCore services, see [docs/architecture.md](docs/archi
 
 ### Prerequisites
 
-> [!IMPORTANT]
-> **Raise an AgentCore service quota before you deploy.** In the AWS console, open
-> **Service Quotas → Amazon Bedrock AgentCore** and raise
-> **Maximum tool-call/tool-list/tool-search payload size** from the default **6 MB**
-> to **10 MB**. Request the increase in the region you deploy to (`us-west-2` by default).
-
 - AWS account with Bedrock AgentCore previews enabled (Runtime, Harness,
   Gateway, Policy, Evaluation) in `us-west-2`; Agent Registry is GA
   (`agent-registry` namespace since 2026-08-06, see
